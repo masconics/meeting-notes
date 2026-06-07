@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react"
+import { motion } from "framer-motion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -23,11 +24,18 @@ import {
   Settings02Icon,
   ShieldIcon,
   LockIcon,
+  FileCheckIcon,
+  AiBrain01Icon,
+  ArrowDown01Icon,
+  ArrowUp01Icon,
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { useMicrophonePermission } from "@/lib/use-permissions"
 import { WhisperModal } from "@/components/whisper-modal"
-import type { Meeting, AppSettings } from "@/types"
+import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
+import { NoteEnhancer } from "@/components/note-enhancer"
+import { TemplateIcon } from "@/components/template-icon"
+import type { Meeting, AppSettings, MeetingTemplate, MeetingSection } from "@/types"
 
 function createWav(audioBuffer: AudioBuffer): ArrayBuffer {
   const numChannels = 1
@@ -117,6 +125,13 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const [showSetupHelp, setShowSetupHelp] = useState(false)
   const [isProcessingChunk, setIsProcessingChunk] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
+  const [selectedTemplate, setSelectedTemplate] = useState<MeetingTemplate | undefined>(undefined)
+  const [showTemplatePicker, setShowTemplatePicker] = useState(false)
+  const [reviewStructuredNotes, setReviewStructuredNotes] = useState<MeetingSection[] | null>(null)
+  const [reviewEnhancedNotes, setReviewEnhancedNotes] = useState<string | null>(null)
+  const [brief, setBrief] = useState<string | null>(null)
+  const [isBriefLoading, setIsBriefLoading] = useState(false)
+  const [showBrief, setShowBrief] = useState(false)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -386,6 +401,28 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     setRecorderState("reviewing")
   }, [cleanupRecording])
 
+  const handleGenerateBrief = useCallback(async () => {
+    setIsBriefLoading(true)
+    setError(null)
+    try {
+      const { generateBrief, isAIConfigured } = await import("@/lib/ai-service")
+      if (!isAIConfigured()) {
+        setError("AI is not configured. Set your API key in Settings.")
+        return
+      }
+      const { loadMeetings } = await import("@/lib/storage")
+      const pastMeetings = loadMeetings()
+      const sections = selectedTemplate?.sections ?? []
+      const result = await generateBrief(title, sections, pastMeetings)
+      setBrief(result)
+      setShowBrief(true)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setIsBriefLoading(false)
+    }
+  }, [title, selectedTemplate])
+
   const handleSave = useCallback(() => {
     const meeting: Meeting = {
       id: crypto.randomUUID(),
@@ -394,9 +431,13 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       duration,
       transcript: transcript.trim(),
       notes: notes.trim(),
+      templateId: selectedTemplate?.id,
+      structuredNotes: reviewStructuredNotes ?? undefined,
+      enhancedNotes: reviewEnhancedNotes ?? undefined,
+      brief: brief ?? undefined,
     }
     onSave(meeting)
-  }, [title, duration, transcript, notes, onSave])
+  }, [title, duration, transcript, notes, selectedTemplate, reviewStructuredNotes, reviewEnhancedNotes, brief, onSave])
 
   useEffect(() => {
     return () => {
@@ -414,9 +455,14 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             <CardTitle className="text-lg">New Meeting</CardTitle>
             <div className="flex items-center gap-2">
               {recorderState === "recording" && (
-                <Badge variant="destructive" className="animate-pulse">
-                  {formatDuration(duration)}
-                </Badge>
+                <motion.div
+                  animate={{ opacity: [1, 0.6, 1] }}
+                  transition={{ repeat: Infinity, duration: 1 }}
+                >
+                  <Badge variant="destructive">
+                    {formatDuration(duration)}
+                  </Badge>
+                </motion.div>
               )}
               <Button variant="ghost" size="icon-sm" onClick={onSettings}>
                 <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
@@ -467,6 +513,70 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             placeholder="Meeting title..."
             disabled={recorderState === "recording"}
           />
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Template
+            </label>
+            <button
+              className="flex items-center gap-2 w-full rounded-2xl border border-dashed px-3 py-2 text-sm hover:bg-muted/50 transition-colors disabled:opacity-50"
+              onClick={() => setShowTemplatePicker(true)}
+              disabled={recorderState === "recording"}
+            >
+              {selectedTemplate ? (
+                <>
+                  <TemplateIcon name={selectedTemplate.icon} className="size-4" />
+                  <span>{selectedTemplate.name}</span>
+                  <span className="text-xs text-muted-foreground ml-auto">{selectedTemplate.sections.length} sections</span>
+                </>
+              ) : (
+                <>
+                  <HugeiconsIcon icon={FileCheckIcon} strokeWidth={2} className="size-4 text-muted-foreground" />
+                  <span className="text-muted-foreground">No template</span>
+                  <span className="text-xs text-muted-foreground ml-auto">Choose a format</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          <MeetingTemplateSelector
+            selectedId={selectedTemplate?.id}
+            onSelect={(tpl) => setSelectedTemplate(tpl)}
+            open={showTemplatePicker}
+            onOpenChange={setShowTemplatePicker}
+          />
+
+          {(brief || isBriefLoading) && (
+            <Card className="border-primary/30">
+              <CardHeader
+                className="cursor-pointer select-none py-3"
+                onClick={() => setShowBrief(!showBrief)}
+              >
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <HugeiconsIcon icon={AiBrain01Icon} strokeWidth={2} className="size-4 text-primary" />
+                    Pre-Meeting Brief
+                    {isBriefLoading && (
+                      <span className="inline-flex items-center gap-1 text-muted-foreground text-xs font-normal">
+                        <div className="size-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                        generating...
+                      </span>
+                    )}
+                  </CardTitle>
+                  <Button variant="ghost" size="icon-sm" className="size-6" type="button">
+                    <HugeiconsIcon icon={showBrief ? ArrowUp01Icon : ArrowDown01Icon} strokeWidth={2} className="size-3.5" />
+                  </Button>
+                </div>
+              </CardHeader>
+              {showBrief && brief && (
+                <CardContent className="pt-0">
+                  <div className="text-sm whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                    {brief}
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+          )}
 
           <div className="flex flex-col gap-2">
             <label className="text-xs font-medium text-muted-foreground">
@@ -619,20 +729,31 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
           )}
 
           {recorderState === "idle" && (
-            <div className="flex justify-center">
+            <div className="flex justify-center gap-2">
+              <Button variant="outline" size="lg" onClick={handleGenerateBrief} disabled={isBriefLoading}>
+                <HugeiconsIcon icon={AiBrain01Icon} strokeWidth={2} data-icon="inline-start" />
+                {isBriefLoading ? "Generating..." : "Brief"}
+              </Button>
+              <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
               <Button size="lg" onClick={startRecording}>
                 <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
                 Start Recording
               </Button>
+              </motion.div>
             </div>
           )}
 
           {recorderState === "recording" && (
             <div className="flex justify-center">
+              <motion.div
+                animate={recorderState === "recording" ? { scale: [1, 1.03, 1] } : {}}
+                transition={{ repeat: Infinity, duration: 1.5 }}
+              >
               <Button size="lg" variant="destructive" onClick={stopRecording}>
                 <HugeiconsIcon icon={StopIcon} strokeWidth={2} data-icon="inline-start" />
                 Stop Recording
               </Button>
+              </motion.div>
             </div>
           )}
 
@@ -648,7 +769,11 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
                 )}
                 {recorderState === "recording" && !isProcessingChunk && isSpeaking && (
                   <span className="text-primary inline-flex items-center gap-1">
-                    <span className="size-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <motion.span
+                      className="size-1.5 rounded-full bg-emerald-500"
+                      animate={{ opacity: [1, 0.4, 1] }}
+                      transition={{ repeat: Infinity, duration: 0.8 }}
+                    />
                     speaking
                   </span>
                 )}
@@ -694,23 +819,47 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       </Card>
 
       {recorderState === "reviewing" && (
-        <div className="flex justify-end gap-2">
-          <Button
-            variant="outline"
-            onClick={() => {
-              setTranscript("")
-              setDuration(0)
-              startRecording()
-            }}
-          >
-            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
-            Record Again
-          </Button>
-          <Button onClick={handleSave}>
-            <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
-            Save Meeting
-          </Button>
-        </div>
+        <>
+          {selectedTemplate && (
+            <Card>
+              <CardContent className="pt-4">
+                <NoteEnhancer
+                  meeting={{
+                    id: "preview",
+                    title,
+                    date: new Date().toISOString(),
+                    duration,
+                    transcript: transcript.trim(),
+                    notes: notes.trim(),
+                    templateId: selectedTemplate?.id,
+                    structuredNotes: reviewStructuredNotes ?? undefined,
+                  }}
+                  onUpdate={(updated) => {
+                    if (updated.structuredNotes) setReviewStructuredNotes(updated.structuredNotes)
+                    if (updated.enhancedNotes) setReviewEnhancedNotes(updated.enhancedNotes)
+                  }}
+                />
+              </CardContent>
+            </Card>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setTranscript("")
+                setDuration(0)
+                startRecording()
+              }}
+            >
+              <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
+              Record Again
+            </Button>
+            <Button onClick={handleSave}>
+              <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
+              Save Meeting
+            </Button>
+          </div>
+        </>
       )}
     </div>
   )

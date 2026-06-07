@@ -2,6 +2,11 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
+  InputGroup,
+  InputGroupInput,
+  InputGroupButton,
+} from "@/components/ui/input-group"
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -10,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { HugeiconsIcon } from "@hugeicons/react"
+import { motion } from "framer-motion"
 import {
   PlayListAddIcon,
   Cancel01Icon,
@@ -18,9 +24,14 @@ import {
   Calendar01Icon,
   Clock01Icon,
   Settings02Icon,
+  AiChat02Icon,
+  AiMagicIcon,
+  Search01Icon,
 } from "@hugeicons/core-free-icons"
 import type { Meeting } from "@/types"
-import { useState } from "react"
+import { useState, useMemo } from "react"
+import { TemplateIcon } from "@/components/template-icon"
+import { getTemplateById } from "@/lib/templates"
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", {
@@ -44,10 +55,48 @@ function formatDuration(seconds: number): string {
   return `${m}m ${s}s`
 }
 
+function getSearchableText(meeting: Meeting): string {
+  const parts = [
+    meeting.title,
+    meeting.transcript,
+    meeting.notes,
+    meeting.enhancedNotes,
+    ...(meeting.structuredNotes?.map((s) => `${s.title} ${s.content}`) ?? []),
+  ]
+  return parts.filter(Boolean).join(" ")
+}
+
+function highlightMatches(text: string | null | undefined, query: string): React.ReactNode {
+  if (!text || !query) return text ?? ""
+
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  const regex = new RegExp(escaped, "gi")
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = regex.exec(text)) !== null) {
+    const offset = match.index
+    if (offset > lastIndex) {
+      parts.push(text.slice(lastIndex, offset))
+    }
+    parts.push(<mark key={offset}>{match[0]}</mark>)
+    lastIndex = offset + match[0].length
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+
+  return parts.length > 0 ? <>{parts}</> : text
+}
+
 interface MeetingDashboardProps {
   meetings: Meeting[]
   onNewMeeting: () => void
   onDeleteMeeting: (id: string) => void
+  onUpdateMeeting: (id: string, patch: Partial<Meeting>) => void
+  onChatMeeting: (meeting: Meeting) => void
   onViewMeeting: (meeting: Meeting) => void
   onSettings: () => void
 }
@@ -56,11 +105,21 @@ export function MeetingDashboard({
   meetings,
   onNewMeeting,
   onDeleteMeeting,
+  onUpdateMeeting: _onUpdateMeeting,
+  onChatMeeting,
   onViewMeeting,
   onSettings,
 }: MeetingDashboardProps) {
-  const [viewing, setViewing] = useState<Meeting | null>(null)
+  const [searchQuery, setSearchQuery] = useState("")
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+
+  const filteredMeetings = useMemo(() => {
+    if (!searchQuery.trim()) return meetings
+    const q = searchQuery.toLowerCase()
+    return meetings.filter((m) => getSearchableText(m).toLowerCase().includes(q))
+  }, [meetings, searchQuery])
+
+  const hasQuery = searchQuery.trim().length > 0
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-2xl mx-auto">
@@ -70,7 +129,9 @@ export function MeetingDashboard({
           <p className="text-muted-foreground text-sm mt-1">
             {meetings.length === 0
               ? "Record your first meeting"
-              : `${meetings.length} meeting${meetings.length === 1 ? "" : "s"} saved`}
+              : hasQuery
+                ? `${filteredMeetings.length} of ${meetings.length} meeting${meetings.length === 1 ? "" : "s"} match`
+                : `${meetings.length} meeting${meetings.length === 1 ? "" : "s"} saved`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -84,6 +145,28 @@ export function MeetingDashboard({
         </div>
       </div>
 
+      <InputGroup className="h-9">
+        <InputGroupInput
+          type="search"
+          placeholder="Search meetings..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+        {hasQuery ? (
+          <InputGroupButton
+            size="icon-sm"
+            onClick={() => setSearchQuery("")}
+            aria-label="Clear search"
+          >
+            <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+          </InputGroupButton>
+        ) : (
+          <InputGroupButton size="icon-sm" tabIndex={-1} className="pointer-events-none">
+            <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
+          </InputGroupButton>
+        )}
+      </InputGroup>
+
       {meetings.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center gap-3 py-12">
@@ -96,21 +179,57 @@ export function MeetingDashboard({
             </Button>
           </CardContent>
         </Card>
+      ) : filteredMeetings.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="flex flex-col items-center gap-3 py-12">
+            <p className="text-muted-foreground text-sm">No meetings match "{searchQuery}"</p>
+            <Button variant="outline" onClick={() => setSearchQuery("")}>
+              Clear search
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
         <div className="flex flex-col gap-3">
-          {meetings.map((meeting) => (
-            <Card
+          {filteredMeetings.map((meeting) => {
+            const template = meeting.templateId ? getTemplateById(meeting.templateId) : undefined
+            const previewText = meeting.structuredNotes?.[0]?.content
+              ? meeting.structuredNotes[0].content.replace(/^[•\-\s]+/, "")
+              : meeting.notes
+                ? meeting.notes.replace(/\n/g, " · ")
+                : meeting.transcript.replace(/\n/g, " ")
+            return (
+            <motion.div
               key={meeting.id}
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
-              onClick={() => {
-                setViewing(meeting)
-                onViewMeeting(meeting)
-              }}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: "easeOut" }}
+              whileHover={{ scale: 1.01, y: -1 }}
+              whileTap={{ scale: 0.99 }}
             >
-              <CardHeader>
+            <Card
+              className="cursor-pointer hover:bg-muted/50 hover:shadow-sm transition-colors"
+              onClick={() => onViewMeeting(meeting)}
+            >
+              <CardHeader className="pb-3">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex flex-col gap-1">
-                    <CardTitle className="text-base">{meeting.title}</CardTitle>
+                  <div className="flex flex-col gap-1 min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <CardTitle className="text-base">
+                        {highlightMatches(meeting.title, searchQuery)}
+                      </CardTitle>
+                      {template && (
+                        <Badge variant="outline" className="text-[10px] py-0 gap-1">
+                          <TemplateIcon name={template.icon} className="size-3" inline />
+                          {template.name}
+                        </Badge>
+                      )}
+                      {meeting.structuredNotes && meeting.structuredNotes.length > 0 && (
+                        <Badge variant="secondary" className="text-[10px] py-0 gap-1">
+                          <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} className="size-3" />
+                          Enhanced
+                        </Badge>
+                      )}
+                    </div>
                     <CardDescription className="flex items-center gap-3">
                       <span className="inline-flex items-center gap-1">
                         <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
@@ -125,7 +244,24 @@ export function MeetingDashboard({
                   <Badge variant="secondary">{formatDuration(meeting.duration)}</Badge>
                 </div>
               </CardHeader>
-              <CardFooter className="justify-end gap-2">
+              {previewText && (
+                <CardContent className="pt-0 pb-0">
+                  <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                    {highlightMatches(previewText, searchQuery)}
+                  </p>
+                </CardContent>
+              )}
+              <CardFooter className="justify-end gap-2 pt-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onChatMeeting(meeting)
+                  }}
+                >
+                  <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-4" />
+                </Button>
                 <Button
                   variant="ghost"
                   size="sm"
@@ -138,53 +274,10 @@ export function MeetingDashboard({
                 </Button>
               </CardFooter>
             </Card>
-          ))}
+            </motion.div>
+          )})}
         </div>
       )}
-
-      <Dialog open={!!viewing} onOpenChange={() => setViewing(null)}>
-        <DialogContent className="sm:max-w-lg max-h-[80vh] overflow-y-auto" showCloseButton={false}>
-          {viewing && (
-            <>
-              <DialogHeader>
-                <DialogTitle>{viewing.title}</DialogTitle>
-                <DialogDescription>
-                  {formatDate(viewing.date)} at {formatTime(viewing.date)} &middot; {formatDuration(viewing.duration)}
-                </DialogDescription>
-              </DialogHeader>
-              {viewing.transcript && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="text-xs font-medium text-muted-foreground">Transcription</div>
-                  <div className="text-sm text-foreground bg-muted rounded-2xl p-3 whitespace-pre-wrap">
-                    {viewing.transcript}
-                  </div>
-                </div>
-              )}
-              {viewing.notes && (
-                <div className="flex flex-col gap-1.5">
-                  <div className="text-xs font-medium text-muted-foreground">Notes</div>
-                  <div className="text-sm text-foreground bg-muted rounded-2xl p-3 whitespace-pre-wrap">
-                    {viewing.notes}
-                  </div>
-                </div>
-              )}
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setViewing(null)}>Close</Button>
-                <Button
-                  variant="destructive"
-                  onClick={() => {
-                    onDeleteMeeting(viewing.id)
-                    setViewing(null)
-                  }}
-                >
-                  <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} data-icon="inline-start" />
-                  Delete
-                </Button>
-              </DialogFooter>
-            </>
-          )}
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
         <DialogContent showCloseButton={false}>

@@ -37,12 +37,16 @@ import {
   LockIcon,
   Settings02Icon,
   AiVoiceIcon,
+  AiMagicIcon,
+  CheckmarkBadge01Icon,
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { useMicrophonePermission } from "@/lib/use-permissions"
-import { loadSettings, saveSettings, clearAllMeetings, loadMeetings } from "@/lib/storage"
-import type { AppSettings } from "@/types"
-import { SPEECH_LANGS } from "@/types"
+import { loadSettings, saveSettings, clearAllMeetings, loadMeetings, loadAISettings, saveAISettings } from "@/lib/storage"
+import { testConnection } from "@/lib/ai-service"
+import type { AppSettings, AISettings } from "@/types"
+import { SPEECH_LANGS, AI_MODELS } from "@/types"
+import { TemplateEditor } from "@/components/template-editor"
 
 interface SettingsPageProps {
   onBack: () => void
@@ -58,6 +62,7 @@ export function SettingsPage({
   onThemeChange,
 }: SettingsPageProps) {
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
+  const [aiSettings, setAiSettings] = useState<AISettings>(() => loadAISettings())
   const [meetingCount, setMeetingCount] = useState(0)
   const { devices } = useAudioDevices()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
@@ -65,6 +70,8 @@ export function SettingsPage({
   const [whisperStatus, setWhisperStatus] = useState<{ binary: boolean; model: boolean; ready: boolean } | null>(null)
   const [whisperLoading, setWhisperLoading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null)
+  const [testingConnection, setTestingConnection] = useState(false)
+  const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
 
   useEffect(() => {
     setMeetingCount(loadMeetings().length)
@@ -132,6 +139,30 @@ export function SettingsPage({
     },
     []
   )
+
+  const updateAI = useCallback(
+    (patch: Partial<AISettings>) => {
+      setAiSettings((prev) => {
+        const next = { ...prev, ...patch }
+        saveAISettings(next)
+        return next
+      })
+    },
+    []
+  )
+
+  const handleTestConnection = useCallback(async () => {
+    setTestingConnection(true)
+    setConnectionStatus(null)
+    try {
+      const ok = await testConnection()
+      setConnectionStatus(ok ? "success" : "failed")
+    } catch {
+      setConnectionStatus("failed")
+    } finally {
+      setTestingConnection(false)
+    }
+  }, [])
 
   const handleClearData = useCallback(() => {
     clearAllMeetings()
@@ -369,6 +400,110 @@ export function SettingsPage({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={AiMagicIcon} strokeWidth={2} className="size-5" />
+            AI Enhancement
+          </CardTitle>
+          <CardDescription>
+            Configure DeepSeek AI for note enhancement, quick actions, and meeting chat
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium">API Key</label>
+            <input
+              type="password"
+              value={aiSettings.apiKey}
+              onChange={(e) => updateAI({ apiKey: e.target.value })}
+              placeholder="sk-..."
+              className="h-8 w-full min-w-0 rounded-2xl border border-transparent bg-input/50 px-2.5 py-1 text-sm transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+            />
+            <p className="text-xs text-muted-foreground">
+              Get your key at{" "}
+              <a
+                href="https://platform.deepseek.com/api_keys"
+                target="_blank"
+                rel="noreferrer"
+                className="text-primary underline underline-offset-3"
+              >
+                platform.deepseek.com
+              </a>
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium">Model</label>
+            <Select
+              value={aiSettings.model}
+              onValueChange={(v) => updateAI({ model: v })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select model..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {Object.entries(AI_MODELS).map(([code, name]) => (
+                    <SelectItem key={code} value={code}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">Enable AI Features</span>
+              <span className="text-xs text-muted-foreground">Toggle note enhancement, chat, and quick actions</span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={aiSettings.enabled}
+              onClick={() => updateAI({ enabled: !aiSettings.enabled })}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full transition-colors ${
+                aiSettings.enabled ? "bg-primary" : "bg-muted border border-border"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-full bg-background shadow-sm transition-transform ${
+                  aiSettings.enabled ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleTestConnection}
+              disabled={testingConnection || !aiSettings.apiKey}
+            >
+              {testingConnection ? (
+                <>
+                  <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                  Testing...
+                </>
+              ) : (
+                "Test Connection"
+              )}
+            </Button>
+            {connectionStatus === "success" && (
+              <Badge variant="secondary" className="gap-1">
+                <span className="size-1.5 rounded-full bg-emerald-500" />
+                Connected
+              </Badge>
+            )}
+            {connectionStatus === "failed" && (
+              <Badge variant="destructive">Connection failed</Badge>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AccountSetting01Icon} strokeWidth={2} className="size-5" />
             Meeting
           </CardTitle>
@@ -388,6 +523,21 @@ export function SettingsPage({
               New meetings will use this as the default title if left blank.
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={CheckmarkBadge01Icon} strokeWidth={2} className="size-5" />
+            Templates
+          </CardTitle>
+          <CardDescription>
+            Create and manage meeting note templates with custom sections and quick actions
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <TemplateEditor />
         </CardContent>
       </Card>
 

@@ -1,3 +1,38 @@
+export interface MeetingSection {
+  title: string
+  content: string
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant"
+  content: string
+  timestamp: string
+}
+
+export interface QuickAction {
+  label: string
+  icon: string
+  prompt: string
+}
+
+export interface MeetingTemplate {
+  id: string
+  name: string
+  icon: string
+  sections: string[]
+  quickActions: QuickAction[]
+}
+
+export interface SpeakerLabel {
+  name: string
+  color: string
+}
+
+export interface TranscriptSegment {
+  speakerIndex: number
+  text: string
+}
+
 export interface Meeting {
   id: string
   title: string
@@ -5,6 +40,19 @@ export interface Meeting {
   duration: number
   transcript: string
   notes: string
+  templateId?: string
+  structuredNotes?: MeetingSection[]
+  enhancedNotes?: string
+  chatHistory?: ChatMessage[]
+  speakerLabels?: SpeakerLabel[]
+  transcriptSegments?: TranscriptSegment[]
+  brief?: string
+}
+
+export interface AISettings {
+  apiKey: string
+  model: string
+  enabled: boolean
 }
 
 export interface AppSettings {
@@ -15,12 +63,23 @@ export interface AppSettings {
   theme: "light" | "dark" | "system"
 }
 
+export const DEFAULT_AI_SETTINGS: AISettings = {
+  apiKey: "",
+  model: "deepseek-v4-pro",
+  enabled: true,
+}
+
 export const DEFAULT_SETTINGS: AppSettings = {
   audioSource: "mic",
   preferredDeviceId: "default",
   speechLang: "en-US",
   titlePrefix: "",
   theme: "system",
+}
+
+export const AI_MODELS: Record<string, string> = {
+  "deepseek-v4-flash": "DeepSeek V4 Flash — fast, great for chat",
+  "deepseek-v4-pro": "DeepSeek V4 Pro — powerful, best for enhancement",
 }
 
 export const SPEECH_LANGS: Record<string, string> = {
