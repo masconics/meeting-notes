@@ -1,34 +1,28 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { MeetingDashboard } from "@/components/meeting-dashboard"
-import { MeetingRecorder } from "@/components/meeting-recorder"
+import { NoteEditor } from "@/components/note-editor"
 import { SettingsPage } from "@/components/settings-page"
-import { ChatPage } from "@/components/chat-page"
-import { MeetingDetailPage } from "@/components/meeting-detail-page"
-import { loadMeetings, saveMeetings, deleteMeeting, loadSettings, saveSettings, updateMeeting } from "@/lib/storage"
+import { loadMeetings, saveMeetings, loadSettings, saveSettings, updateMeeting } from "@/lib/storage"
 import { useTheme } from "@/lib/use-theme"
 import type { Meeting, AppSettings } from "@/types"
 
-type View = "dashboard" | "recorder" | "settings" | "chat" | "detail"
+type View = "dashboard" | "editor" | "settings"
 
 function parseHash(): { view: View; meetingId?: string } {
   const hash = window.location.hash.replace(/^#/, "")
   if (!hash || hash === "dashboard") return { view: "dashboard" }
-  if (hash === "recorder") return { view: "recorder" }
+  if (hash === "editor") return { view: "editor" }
+  if (hash.startsWith("editor/")) return { view: "editor", meetingId: hash.slice(7) }
   if (hash === "settings") return { view: "settings" }
-  const detailMatch = hash.match(/^detail\/(.+)$/)
-  if (detailMatch) return { view: "detail", meetingId: detailMatch[1] }
-  const chatMatch = hash.match(/^chat\/(.+)$/)
-  if (chatMatch) return { view: "chat", meetingId: chatMatch[1] }
   return { view: "dashboard" }
 }
 
 function buildHash(view: View, meetingId?: string): string {
   if (view === "dashboard") return "dashboard"
-  if (view === "recorder") return "recorder"
+  if (view === "editor" && meetingId) return `editor/${meetingId}`
+  if (view === "editor") return "editor"
   if (view === "settings") return "settings"
-  if (view === "detail" && meetingId) return `detail/${meetingId}`
-  if (view === "chat" && meetingId) return `chat/${meetingId}`
   return "dashboard"
 }
 
@@ -45,52 +39,53 @@ export function App() {
   const [view, setView] = useState<View>(initialHash.view)
   const [meetings, setMeetings] = useState<Meeting[]>(loadedMeetings)
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
-  const [chatMeeting, setChatMeeting] = useState<Meeting | null>(() => {
-    if (initialHash.view === "chat" && initialHash.meetingId) {
-      return loadedMeetings.find((m) => m.id === initialHash.meetingId) ?? null
+  const [editorNote, setEditorNote] = useState<Meeting | undefined>(() => {
+    if (initialHash.view === "editor" && initialHash.meetingId) {
+      return loadedMeetings.find(m => m.id === initialHash.meetingId)
     }
-    return null
+    return undefined
   })
-  const [detailMeeting, setDetailMeeting] = useState<Meeting | null>(() => {
-    if (initialHash.view === "detail" && initialHash.meetingId) {
-      return loadedMeetings.find((m) => m.id === initialHash.meetingId) ?? null
-    }
-    return null
-  })
+  const [pendingDelete, setPendingDelete] = useState<Meeting | null>(null)
 
   const viewRef = useRef(view)
-  viewRef.current = view
   const meetingsRef = useRef(meetings)
-  meetingsRef.current = meetings
   const isNavigatingRef = useRef(false)
+  const recorderDirtyRef = useRef(false)
+  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useTheme(settings.theme)
 
+  useEffect(() => {
+    viewRef.current = view
+  }, [view])
+
+  useEffect(() => {
+    meetingsRef.current = meetings
+  }, [meetings])
+
   const navigate = useCallback((nextView: View, meetingId?: string) => {
+    if (viewRef.current === "editor" && nextView !== "editor" && recorderDirtyRef.current) {
+      if (!window.confirm("You have unsaved changes. Leave anyway?")) return
+      recorderDirtyRef.current = false
+    }
     isNavigatingRef.current = true
     window.location.hash = "#" + buildHash(nextView, meetingId)
     setView(nextView)
     setTimeout(() => { isNavigatingRef.current = false }, 0)
   }, [])
 
-  const goBack = useCallback(() => {
-    navigate("dashboard")
-  }, [navigate])
+  const goBack = useCallback(() => navigate("dashboard"), [navigate])
 
   useEffect(() => {
     const handler = () => {
       if (isNavigatingRef.current) return
       const { view: hashView, meetingId } = parseHash()
       if (hashView !== viewRef.current) {
-        if ((hashView === "detail" || hashView === "chat") && meetingId) {
-          const m = meetingsRef.current.find((m) => m.id === meetingId)
-          if (!m) {
-            navigate("dashboard")
-            return
-          }
-          if (hashView === "detail") setDetailMeeting(m)
-          if (hashView === "chat") setChatMeeting(m)
+        if (hashView === "editor" && meetingId) {
+          const m = meetingsRef.current.find(m => m.id === meetingId)
+          if (m) setEditorNote(m)
         }
+        if (hashView === "editor" && !meetingId) setEditorNote(undefined)
         setView(hashView)
       }
     }
@@ -103,138 +98,105 @@ export function App() {
       const mod = e.metaKey || e.ctrlKey
       const target = e.target as HTMLElement
       const isInput = ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable
-
-      if (mod && e.key === "n" && !isInput) {
-        e.preventDefault()
-        navigate("recorder")
-        return
-      }
-      if (mod && e.shiftKey && e.key === "R" && viewRef.current === "recorder") {
-        e.preventDefault()
-        window.dispatchEvent(new CustomEvent("toggle-recording"))
-        return
-      }
+      if (mod && e.key === "n" && !isInput) { e.preventDefault(); navigate("editor"); return }
+      if (mod && e.shiftKey && e.key === "R" && viewRef.current === "editor") { e.preventDefault(); window.dispatchEvent(new CustomEvent("toggle-recording")); return }
       if (e.key === "Escape" && viewRef.current !== "dashboard" && !isInput) {
-        e.preventDefault()
-        navigate("dashboard")
-        return
+        if (viewRef.current === "editor" && recorderDirtyRef.current) { if (!window.confirm("You have unsaved changes. Leave anyway?")) return; recorderDirtyRef.current = false }
+        e.preventDefault(); navigate("dashboard"); return
       }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
   }, [navigate])
 
-  const handleSettingsChange = useCallback((patch: Partial<AppSettings>) => {
-    setSettings((prev) => {
-      const next = { ...prev, ...patch }
-      saveSettings(next)
-      return next
-    })
+  useEffect(() => {
+    const handler = (e: Event) => { const detail = (e as CustomEvent).detail; if (detail.dirty !== undefined) recorderDirtyRef.current = detail.dirty }
+    window.addEventListener("recorder-dirty", handler)
+    return () => window.removeEventListener("recorder-dirty", handler)
   }, [])
 
-  const handleThemeChange = useCallback((theme: AppSettings["theme"]) => {
-    handleSettingsChange({ theme })
-  }, [handleSettingsChange])
+  const handleSettingsChange = useCallback((patch: Partial<AppSettings>) => {
+    setSettings(prev => { const next = { ...prev, ...patch }; saveSettings(next); return next })
+  }, [])
+
+  const handleThemeChange = useCallback((theme: AppSettings["theme"]) => handleSettingsChange({ theme }), [handleSettingsChange])
 
   const handleSave = useCallback((meeting: Meeting) => {
-    const updated = [meeting, ...meetings]
-    setMeetings(updated)
-    saveMeetings(updated)
-    navigate("dashboard")
-  }, [meetings, navigate])
+    recorderDirtyRef.current = false
+    const isNew = !meetingsRef.current.find(m => m.id === meeting.id)
+    const updated = isNew ? [meeting, ...meetingsRef.current] : meetingsRef.current.map(m => m.id === meeting.id ? meeting : m)
+    saveMeetings(updated); setMeetings(updated)
+    if (isNew) navigate("dashboard")
+  }, [navigate])
 
   const handleDelete = useCallback((id: string) => {
-    const updated = deleteMeeting(id)
-    setMeetings(updated)
+    const meeting = meetingsRef.current.find(m => m.id === id); if (!meeting) return
+    const updated = meetingsRef.current.filter(m => m.id !== id)
+    saveMeetings(updated); setMeetings(updated); setPendingDelete(meeting)
+    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current)
+    deleteTimerRef.current = setTimeout(() => setPendingDelete(null), 5000)
   }, [])
+
+  const handleUndoDelete = useCallback(() => {
+    if (!pendingDelete) return
+    const restored = [pendingDelete, ...meetingsRef.current]
+    saveMeetings(restored); setMeetings(restored); setPendingDelete(null)
+    if (deleteTimerRef.current) { clearTimeout(deleteTimerRef.current); deleteTimerRef.current = null }
+  }, [pendingDelete])
 
   const handleUpdateMeeting = useCallback((id: string, patch: Partial<Meeting>) => {
-    const updated = updateMeeting(id, patch)
-    setMeetings(updated)
+    const updated = updateMeeting(id, patch); setMeetings(updated)
   }, [])
 
-  const handleChatMeeting = useCallback((meeting: Meeting) => {
-    setChatMeeting(meeting)
-    navigate("chat", meeting.id)
+  const handleOpenNote = useCallback((note: Meeting) => {
+    setEditorNote(note); navigate("editor", note.id)
   }, [navigate])
 
-  const handleViewMeeting = useCallback((meeting: Meeting) => {
-    setDetailMeeting(meeting)
-    navigate("detail", meeting.id)
-  }, [navigate])
-
-  const handleClearData = useCallback(() => {
-    setMeetings([])
-  }, [])
+  const handleClearData = useCallback(() => setMeetings([]), [])
 
   return (
-    <div className="bg-background min-h-screen">
-      <div className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
-        <AnimatePresence mode="wait">
-          {view === "dashboard" && (
-            <motion.div key="dashboard" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
+    <div className="bg-background h-screen overflow-hidden">
+      <AnimatePresence mode="wait">
+        {view === "dashboard" && (
+          <motion.div key="dashboard" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
+            <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8 h-screen overflow-y-auto">
               <MeetingDashboard
                 meetings={meetings}
-                onNewMeeting={() => navigate("recorder")}
+                pendingDelete={pendingDelete}
+                onUndoDelete={handleUndoDelete}
+                onNewMeeting={() => { setEditorNote(undefined); navigate("editor") }}
                 onDeleteMeeting={handleDelete}
                 onUpdateMeeting={handleUpdateMeeting}
-                onChatMeeting={handleChatMeeting}
-                onViewMeeting={handleViewMeeting}
+                onViewMeeting={handleOpenNote}
                 onSettings={() => navigate("settings")}
               />
-            </motion.div>
-          )}
-          {view === "recorder" && (
-            <motion.div key="recorder" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-              <MeetingRecorder
-                onSave={handleSave}
-                onCancel={goBack}
-                onSettings={() => navigate("settings")}
-                settings={settings}
-              />
-            </motion.div>
-          )}
-          {view === "settings" && (
-            <motion.div key="settings" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
+            </main>
+          </motion.div>
+        )}
+        {view === "editor" && (
+          <motion.div key={editorNote?.id || "new"} variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }} className="h-full">
+            <NoteEditor
+              note={editorNote}
+              onSave={handleSave}
+              onCancel={goBack}
+              onSettings={() => navigate("settings")}
+              settings={settings}
+            />
+          </motion.div>
+        )}
+        {view === "settings" && (
+          <motion.div key="settings" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
+            <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8 h-screen overflow-y-auto">
               <SettingsPage
                 onBack={goBack}
                 onClearData={handleClearData}
                 theme={settings.theme}
                 onThemeChange={handleThemeChange}
               />
-            </motion.div>
-          )}
-          {view === "chat" && chatMeeting && (
-            <motion.div key="chat" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-              <ChatPage
-                meeting={chatMeeting}
-                onBack={goBack}
-                onSettings={() => navigate("settings")}
-                onUpdate={(updated) => {
-                  setChatMeeting(updated)
-                  handleUpdateMeeting(updated.id, { chatHistory: updated.chatHistory })
-                }}
-              />
-            </motion.div>
-          )}
-          {view === "detail" && detailMeeting && (
-            <motion.div key="detail" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-              <MeetingDetailPage
-                key={detailMeeting.id}
-                meeting={detailMeeting}
-                onBack={goBack}
-                onSettings={() => navigate("settings")}
-                onChat={(m) => {
-                  setChatMeeting(m)
-                  navigate("chat", m.id)
-                }}
-                onDelete={handleDelete}
-                onUpdate={handleUpdateMeeting}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+            </main>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

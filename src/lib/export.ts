@@ -87,7 +87,7 @@ export function toPlainText(meeting: Meeting): string {
 export async function saveToFile(meeting: Meeting, format: "md" | "txt"): Promise<boolean> {
   const content = format === "md" ? toMarkdown(meeting) : toPlainText(meeting)
   const ext = format === "md" ? ".md" : ".txt"
-  const filename = `${meeting.title.replace(/[^a-zA-Z0-9\s-]/g, "").slice(0, 50)}${ext}`
+  const filename = `${meeting.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").slice(0, 50)}${ext}`
 
   try {
     const { save } = await import("@tauri-apps/plugin-dialog")

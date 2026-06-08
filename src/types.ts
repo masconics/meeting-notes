@@ -56,6 +56,7 @@ export interface AISettings {
 }
 
 export type AsrEngine = "fluid"
+export type AsrModel = "parakeet" | "sensevoice"
 
 export interface AppSettings {
   audioSource: "mic" | "system"
@@ -63,13 +64,17 @@ export interface AppSettings {
   speechLang: string
   titlePrefix: string
   theme: "light" | "dark" | "system"
-  // On-device transcription engine. whisper = whisper.cpp small.en (accurate);
-  // moonshine = Moonshine tiny (lower latency, better for live segments).
   asrEngine: AsrEngine
+  asrModel: AsrModel
 }
 
 export const ASR_ENGINES: Record<AsrEngine, string> = {
-  fluid: "Fluid — Parakeet v3 on Apple Neural Engine (Core ML)",
+  fluid: "On-device transcription",
+}
+
+export const ASR_MODELS: Record<AsrModel, string> = {
+  parakeet: "Standard — 25 European languages, best accuracy",
+  sensevoice: "Multilingual — 50+ languages, faster",
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
@@ -81,10 +86,11 @@ export const DEFAULT_AI_SETTINGS: AISettings = {
 export const DEFAULT_SETTINGS: AppSettings = {
   audioSource: "mic",
   preferredDeviceId: "default",
-  speechLang: "en-US",
+  speechLang: "auto",
   titlePrefix: "",
   theme: "system",
   asrEngine: "fluid",
+  asrModel: "parakeet",
 }
 
 export const AI_MODELS: Record<string, string> = {
@@ -93,17 +99,37 @@ export const AI_MODELS: Record<string, string> = {
 }
 
 export const SPEECH_LANGS: Record<string, string> = {
-  "en-US": "English (US)",
-  "en-GB": "English (UK)",
-  "es-ES": "Spanish",
-  "fr-FR": "French",
-  "de-DE": "German",
-  "ja-JP": "Japanese",
-  "ko-KR": "Korean",
-  "zh-CN": "Chinese (Mandarin)",
-  "pt-BR": "Portuguese (Brazil)",
-  "it-IT": "Italian",
-  "nl-NL": "Dutch",
-  "ar-SA": "Arabic",
-  "hi-IN": "Hindi",
+  "auto": "Auto-detect",
+  "en": "English",
+  "zh": "Chinese (Mandarin)",
+  "yue": "Cantonese",
+  "ja": "Japanese",
+  "ko": "Korean",
+  "es": "Spanish",
+  "fr": "French",
+  "de": "German",
+  "it": "Italian",
+  "pt": "Portuguese",
+  "ro": "Romanian",
+  "nl": "Dutch",
+  "da": "Danish",
+  "sv": "Swedish",
+  "fi": "Finnish",
+  "hu": "Hungarian",
+  "et": "Estonian",
+  "lv": "Latvian",
+  "lt": "Lithuanian",
+  "mt": "Maltese",
+  "pl": "Polish",
+  "cs": "Czech",
+  "sk": "Slovak",
+  "sl": "Slovenian",
+  "hr": "Croatian",
+  "bs": "Bosnian",
+  "ru": "Russian",
+  "uk": "Ukrainian",
+  "be": "Belarusian",
+  "bg": "Bulgarian",
+  "sr": "Serbian",
+  "el": "Greek",
 }

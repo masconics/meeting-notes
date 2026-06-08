@@ -1,8 +1,10 @@
+mod capture;
 mod fluid;
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Listener, Manager};
+use log;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -11,8 +13,14 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .level_for("meeting_notes", log::LevelFilter::Debug)
+                .build(),
+        )
         .setup(|app| {
-            let show = MenuItemBuilder::with_id("show", "Show Meeting Notes").build(app)?;
+            let show = MenuItemBuilder::with_id("show", "Show Notes").build(app)?;
             let recording = MenuItemBuilder::with_id("recording", "Not Recording").build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -22,7 +30,7 @@ pub fn run() {
 
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
-                .tooltip("Meeting Notes")
+                .tooltip("Notes")
                 .on_menu_event(|app, event| {
                     match event.id().as_ref() {
                         "show" => {
@@ -49,12 +57,17 @@ pub fn run() {
 
                 if let Some(tray) = handle.tray_by_id("main-tray") {
                     let tooltip = if recording {
-                        "Meeting Notes — Recording"
+                        "Notes — Recording"
                     } else {
-                        "Meeting Notes"
+                        "Notes"
                     };
                     let _ = tray.set_tooltip(Some(tooltip));
                 }
+            });
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = fluid::setup_fluid(handle).await;
             });
 
             Ok(())
@@ -65,6 +78,8 @@ pub fn run() {
             fluid::setup_fluid,
             fluid::unload_fluid,
             fluid::fluid_loaded,
+            capture::start_continuous,
+            capture::stop_continuous,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

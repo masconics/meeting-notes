@@ -14,7 +14,15 @@ import {
   Calendar01Icon,
   Clock01Icon,
   AiMagicIcon,
+  ArrowDown01Icon,
 } from "@hugeicons/core-free-icons"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { MarkdownView } from "@/components/markdown-view"
 import { useChat } from "@/lib/use-chat"
 import { isAIConfigured } from "@/lib/ai-service"
 import type { Meeting } from "@/types"
@@ -45,12 +53,14 @@ function formatTime(iso: string): string {
 
 interface ChatPageProps {
   meeting: Meeting
+  allMeetings?: Meeting[]
   onBack: () => void
   onSettings: () => void
+  onSwitchMeeting?: (meeting: Meeting) => void
   onUpdate: (meeting: Meeting) => void
 }
 
-export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProps) {
+export function ChatPage({ meeting, allMeetings, onBack, onSettings, onSwitchMeeting, onUpdate }: ChatPageProps) {
   const {
     messages,
     input,
@@ -87,7 +97,26 @@ export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProp
             Chat
           </h1>
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground truncate">{meeting.title}</span>
+            {allMeetings && allMeetings.length > 1 && onSwitchMeeting ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger className="font-medium text-foreground truncate hover:text-primary transition-colors inline-flex items-center gap-0.5 cursor-pointer">
+                  {meeting.title}
+                  <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-3" />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="max-h-60 overflow-y-auto">
+                  {allMeetings.map((m) => (
+                    <DropdownMenuItem key={m.id} onClick={() => onSwitchMeeting(m)}>
+                      {m.title}
+                      {m.id === meeting.id && (
+                        <span className="text-[10px] text-muted-foreground ml-2">current</span>
+                      )}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <span className="font-medium text-foreground truncate">{meeting.title}</span>
+            )}
             <span className="inline-flex items-center gap-1">
               <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
               {formatDate(meeting.date)}
@@ -124,13 +153,13 @@ export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProp
               {meeting.transcript && (
                 <div className="flex flex-col gap-1 pt-2">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Transcript</div>
-                  <div className="text-sm text-foreground whitespace-pre-wrap">{meeting.transcript}</div>
+                  <div className="text-sm text-foreground whitespace-pre-wrap transcript-text">{meeting.transcript}</div>
                 </div>
               )}
               {meeting.notes && (
                 <div className="flex flex-col gap-1">
                   <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Notes</div>
-                  <div className="text-sm text-foreground whitespace-pre-wrap">{meeting.notes}</div>
+                  <MarkdownView markdown={meeting.notes} className="text-sm" />
                 </div>
               )}
               {meeting.structuredNotes && meeting.structuredNotes.length > 0 && (

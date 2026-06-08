@@ -48,11 +48,11 @@ export function WhisperModal({ onTranscription, onOpenSettings }: WhisperModalPr
         <DialogHeader>
           <DialogTitle>Vibe Voice</DialogTitle>
           <DialogDescription>
-            {whisper.engine.status === "checking" && "Checking Whisper engine..."}
-            {whisper.engine.status === "unavailable" && "Local transcription engine is not ready"}
-            {whisper.engine.status === "ready" && whisper.state === "idle" && "Record a voice memo and transcribe it locally with Whisper."}
+            {whisper.engine.status === "checking" && "Checking transcription engine..."}
+            {whisper.engine.status === "unavailable" && "On-device transcription is not ready"}
+            {whisper.engine.status === "ready" && whisper.state === "idle" && "Record a voice memo and transcribe it locally."}
             {whisper.state === "recording" && "Listening..."}
-            {whisper.state === "transcribing" && "Transcribing with Whisper..."}
+            {whisper.state === "transcribing" && "Transcribing..."}
             {whisper.state === "done" && "Transcription complete."}
           </DialogDescription>
         </DialogHeader>
@@ -61,9 +61,7 @@ export function WhisperModal({ onTranscription, onOpenSettings }: WhisperModalPr
           {whisper.engine.status === "checking" && (
             <div className="flex flex-col items-center gap-3 py-4">
               <div className="size-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-              <p className="text-xs text-muted-foreground">
-                Checking engine and model...
-              </p>
+              <p className="text-xs text-muted-foreground">Checking engine...</p>
             </div>
           )}
 
@@ -73,9 +71,9 @@ export function WhisperModal({ onTranscription, onOpenSettings }: WhisperModalPr
                 <HugeiconsIcon icon={ShieldIcon} strokeWidth={2} className="size-6 text-destructive" />
               </div>
               <div className="flex flex-col gap-1">
-                <p className="text-sm font-medium">Engine not installed</p>
+                <p className="text-sm font-medium">Transcription not available</p>
                 <p className="text-xs text-muted-foreground">
-                  {whisper.engine.error || "The Whisper transcription engine needs to be installed first."}
+                  {whisper.engine.error || "The on-device transcription engine needs to be installed first."}
                 </p>
               </div>
               <div className="flex gap-2">

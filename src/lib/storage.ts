@@ -70,7 +70,7 @@ const SECURE_API_KEY_KEY = "deepseek-api-key"
 
 async function getSecureStore() {
   const { load } = await import("@tauri-apps/plugin-store")
-  return await load("meeting-notes-secure.json", { autoSave: true })
+  return await load("meeting-notes-secure.json", { defaults: {}, autoSave: true })
 }
 
 export async function saveApiKey(apiKey: string): Promise<void> {
@@ -108,4 +108,3 @@ export function saveTemplates(templates: MeetingTemplate[]): void {
 export function saveChatHistory(meetingId: string, messages: ChatMessage[]): void {
   updateMeeting(meetingId, { chatHistory: messages })
 }
-

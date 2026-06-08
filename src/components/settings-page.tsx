@@ -43,9 +43,10 @@ import {
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { useMicrophonePermission } from "@/lib/use-permissions"
 import { loadSettings, saveSettings, clearAllMeetings, loadMeetings, loadAISettings, saveAISettings, loadApiKey, saveApiKey } from "@/lib/storage"
+import { invoke } from "@tauri-apps/api/core"
 import { testConnection } from "@/lib/ai-service"
 import type { AppSettings, AISettings } from "@/types"
-import { SPEECH_LANGS, AI_MODELS } from "@/types"
+import { SPEECH_LANGS, AI_MODELS, ASR_MODELS } from "@/types"
 import { TemplateEditor } from "@/components/template-editor"
 
 interface SettingsPageProps {
@@ -68,7 +69,6 @@ export function SettingsPage({
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const mic = useMicrophonePermission()
   const [fluidReady, setFluidReady] = useState<boolean | null>(null)
-  const [fluidLoading, setFluidLoading] = useState(false)
   const [fluidLoaded, setFluidLoaded] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
@@ -82,9 +82,9 @@ export function SettingsPage({
     })
     const id = setInterval(async () => {
       try {
-        const { invoke } = await import("@tauri-apps/api/core")
         setFluidLoaded(await invoke<boolean>("fluid_loaded"))
       } catch {
+        setFluidLoaded(false)
       }
     }, 3000)
     return () => clearInterval(id)
@@ -92,25 +92,10 @@ export function SettingsPage({
 
   async function checkFluid() {
     try {
-      const { invoke } = await import("@tauri-apps/api/core")
       setFluidReady(await invoke<boolean>("check_fluid_ready"))
       setFluidLoaded(await invoke<boolean>("fluid_loaded"))
     } catch {
       setFluidReady(null)
-    }
-  }
-
-  async function handleSetupFluid() {
-    setFluidLoading(true)
-    try {
-      const { invoke } = await import("@tauri-apps/api/core")
-      const ready = await invoke<boolean>("setup_fluid")
-      setFluidReady(ready)
-      setFluidLoaded(true)
-    } catch {
-      setFluidReady(false)
-    } finally {
-      setFluidLoading(false)
     }
   }
 
@@ -258,9 +243,54 @@ export function SettingsPage({
               </Select>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
+            Transcription
+            {fluidLoaded ? (
+              <Badge variant="default" className="ml-auto gap-1"><span className="size-1.5 rounded-full bg-emerald-500" />Ready</Badge>
+            ) : fluidReady ? (
+              <Badge variant="outline" className="ml-auto gap-1"><span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />Setting up&hellip;</Badge>
+            ) : fluidReady === false ? (
+              <Badge variant="destructive" className="ml-auto">Not installed</Badge>
+            ) : (
+              <Badge variant="outline" className="ml-auto gap-1"><span className="size-1.5 rounded-full bg-muted-foreground animate-pulse" />Checking&hellip;</Badge>
+            )}
+          </CardTitle>
+          <CardDescription>
+            On-device transcription via Apple Neural Engine &mdash; nothing leaves your computer
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium">Speech Language</label>
+            <label className="text-xs font-medium">Model</label>
+            <Select
+              value={settings.asrModel || "parakeet"}
+              onValueChange={(v) => update({ asrModel: v as "parakeet" | "sensevoice" })}
+            >
+              <SelectTrigger>
+                <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
+                <SelectValue placeholder="Select model..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {Object.entries(ASR_MODELS).map(([key, name]) => (
+                    <SelectItem key={key} value={key}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium">Language</label>
             <Select
               value={settings.speechLang}
               onValueChange={(v) => update({ speechLang: v })}
@@ -281,74 +311,15 @@ export function SettingsPage({
             </Select>
           </div>
 
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">Transcription Engine</span>
-            <Badge variant="secondary">Fluid — Apple Neural Engine</Badge>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
-            Fluid Engine
-            <Badge variant="default" className="ml-auto">Active</Badge>
-          </CardTitle>
-          <CardDescription>
-            Parakeet v3 on the Apple Neural Engine via FluidAudio (Core ML sid), fastest on-device option
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <div className="flex items-center justify-between">
-            <span className="text-sm">Sidecar binary</span>
-            {fluidReady === null ? (
-              <Badge variant="outline">Unknown</Badge>
-            ) : fluidReady ? (
-              <Badge variant="secondary">Installed</Badge>
-            ) : (
-              <Badge variant="outline">Not found</Badge>
-            )}
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-sm">Memory</span>
-            {fluidLoaded ? (
-              <Badge variant="secondary" className="gap-1.5">
-                <span className="size-1.5 rounded-full bg-emerald-500" />
-                Loaded
-              </Badge>
-            ) : (
-              <Badge variant="outline">Idle (not running)</Badge>
-            )}
-          </div>
-          {fluidReady ? (
-            <div className="flex items-center gap-2 pt-1">
-              <div className="size-2 rounded-full bg-emerald-500" />
-              <span className="text-xs text-muted-foreground">
-                Fluid sidecar is ready. Models are auto-downloaded by FluidAudio on first launch.
-              </span>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-2 pt-1">
-              <p className="text-xs text-muted-foreground">
-                Build the fluidasr sidecar (Swift) and deploy it to the app data directory.
-              </p>
-              <div className="bg-muted rounded-2xl p-3 text-xs font-mono text-muted-foreground">
-                cd fluid-sidecar &amp;&amp; swift build -c release
+          {!fluidReady && fluidReady !== null && (
+            <div className="bg-muted rounded-2xl p-4 text-sm">
+              <p className="font-medium mb-2">Transcription engine not installed</p>
+              <p className="text-muted-foreground mb-3">Build the engine from the source and place it in the app bundle:</p>
+              <div className="bg-background rounded-xl p-3 font-mono text-xs">
+                cd fluid-sidecar<br />
+                swift build -c release<br />
+                cp .build/release/fluidasr ../src-tauri/binaries/fluidasr-aarch64-apple-darwin
               </div>
-              <Button size="sm" onClick={handleSetupFluid} disabled={fluidLoading}>
-                {fluidLoading ? (
-                  <>
-                    <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
-                    Starting engine…
-                  </>
-                ) : (
-                  <>
-                    <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
-                    Load Engine
-                  </>
-                )}
-              </Button>
             </div>
           )}
         </CardContent>

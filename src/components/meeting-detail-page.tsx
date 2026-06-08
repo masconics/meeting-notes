@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from "react"
+import { useState, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
 import { Textarea } from "@/components/ui/textarea"
@@ -22,10 +22,12 @@ import {
   UserAdd02Icon,
   Cancel01Icon,
   Add01Icon,
+  ArrowDown01Icon,
 } from "@hugeicons/core-free-icons"
-import type { Meeting, TranscriptSegment } from "@/types"
+import type { Meeting } from "@/types"
 import { cn } from "@/lib/utils"
 import { NoteEnhancer } from "@/components/note-enhancer"
+import { MarkdownView } from "@/components/markdown-view"
 import { QuickActions } from "@/components/quick-actions"
 import { StructuredNoteView } from "@/components/structured-note-view"
 import { Input } from "@/components/ui/input"
@@ -57,8 +59,10 @@ function formatDuration(seconds: number): string {
 
 interface MeetingDetailPageProps {
   meeting: Meeting
+  allMeetings?: Meeting[]
   onBack: () => void
   onSettings: () => void
+  onSwitchMeeting?: (meeting: Meeting) => void
   onChat: (meeting: Meeting) => void
   onDelete: (id: string) => void
   onUpdate: (id: string, patch: Partial<Meeting>) => void
@@ -66,8 +70,10 @@ interface MeetingDetailPageProps {
 
 export function MeetingDetailPage({
   meeting,
+  allMeetings,
   onBack,
   onSettings,
+  onSwitchMeeting,
   onChat,
   onDelete,
   onUpdate,
@@ -208,7 +214,26 @@ export function MeetingDetailPage({
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
         </Button>
         <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-          <h1 className="font-heading text-xl font-medium truncate">{viewing.title}</h1>
+          {allMeetings && allMeetings.length > 1 && onSwitchMeeting ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger className="font-heading text-xl font-medium truncate hover:text-primary transition-colors inline-flex items-center gap-0.5 cursor-pointer">
+                {viewing.title}
+                <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="max-h-60 overflow-y-auto">
+                {allMeetings.map((m) => (
+                  <DropdownMenuItem key={m.id} onClick={() => onSwitchMeeting(m)}>
+                    {m.title}
+                    {m.id === viewing.id && (
+                      <span className="text-[10px] text-muted-foreground ml-2">current</span>
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : (
+            <h1 className="font-heading text-xl font-medium truncate">{viewing.title}</h1>
+          )}
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1">
               <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
@@ -436,7 +461,7 @@ export function MeetingDetailPage({
                                 {speaker.name}
                               </span>
                             )}
-                            <span>{seg.text}</span>
+                            <span className="transcript-text">{seg.text}</span>
                           </div>
                         )}
                       </div>
@@ -464,11 +489,6 @@ export function MeetingDetailPage({
                     onChange={(e) => setEditNotesText(e.target.value)}
                     className="min-h-28 text-sm"
                     autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") {
-                        setEditingNotes(false)
-                      }
-                    }}
                   />
                   <div className="flex items-center gap-2">
                     <Button size="sm" onClick={handleNotesSave}>Save</Button>
@@ -476,9 +496,10 @@ export function MeetingDetailPage({
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-foreground bg-muted rounded-2xl p-4 whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
-                  {viewing.notes}
-                </div>
+                <MarkdownView
+                  markdown={viewing.notes}
+                  className="text-sm max-h-60 overflow-y-auto leading-relaxed bg-muted rounded-2xl p-4"
+                />
               )}
             </section>
           )}
@@ -505,9 +526,10 @@ export function MeetingDetailPage({
                 <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} className="size-3.5" />
                 AI Enhanced Notes
               </h3>
-              <div className="text-sm text-foreground bg-primary/5 rounded-2xl p-4 whitespace-pre-wrap leading-relaxed border border-primary/10">
-                {viewing.enhancedNotes}
-              </div>
+              <MarkdownView
+                markdown={viewing.enhancedNotes}
+                className="text-sm leading-relaxed bg-primary/5 rounded-2xl p-4 border border-primary/10"
+              />
             </section>
           )}
 

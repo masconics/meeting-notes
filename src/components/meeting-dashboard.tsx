@@ -19,7 +19,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -33,11 +32,11 @@ import {
   Calendar01Icon,
   Clock01Icon,
   Settings02Icon,
-  AiChat02Icon,
   AiMagicIcon,
   Search01Icon,
   SortingAZIcon,
   ArrowDown01Icon,
+  AiBrain01Icon,
 } from "@hugeicons/core-free-icons"
 import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback } from "react"
@@ -141,20 +140,22 @@ function highlightMatches(text: string | null | undefined, query: string): React
 
 interface MeetingDashboardProps {
   meetings: Meeting[]
+  pendingDelete?: Meeting | null
+  onUndoDelete?: () => void
   onNewMeeting: () => void
   onDeleteMeeting: (id: string) => void
   onUpdateMeeting: (id: string, patch: Partial<Meeting>) => void
-  onChatMeeting: (meeting: Meeting) => void
   onViewMeeting: (meeting: Meeting) => void
   onSettings: () => void
 }
 
 export function MeetingDashboard({
   meetings,
+  pendingDelete,
+  onUndoDelete,
   onNewMeeting,
   onDeleteMeeting,
   onUpdateMeeting,
-  onChatMeeting,
   onViewMeeting,
   onSettings,
 }: MeetingDashboardProps) {
@@ -166,6 +167,9 @@ export function MeetingDashboard({
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
   const [editTitleText, setEditTitleText] = useState("")
+  const [briefLoadingId, setBriefLoadingId] = useState<string | null>(null)
+  const [briefResult, setBriefResult] = useState<string | null>(null)
+  const [briefMeetingId, setBriefMeetingId] = useState<string | null>(null)
 
   const sorted = useMemo(() => sortMeetings(meetings, sortKey), [meetings, sortKey])
 
@@ -217,17 +221,39 @@ export function MeetingDashboard({
     setEditTitleText("")
   }, [editingTitleId, editTitleText, onUpdateMeeting])
 
+  const handleGenerateBrief = useCallback(async (meeting: Meeting) => {
+    setBriefLoadingId(meeting.id)
+    setBriefResult(null)
+    try {
+      const { generateBrief, isAIConfigured } = await import("@/lib/ai-service")
+      if (!isAIConfigured()) {
+        setBriefResult("AI is not configured. Set your API key in Settings.")
+        return
+      }
+      const { loadMeetings } = await import("@/lib/storage")
+      const template = meeting.templateId ? getTemplateById(meeting.templateId) : undefined
+      const sections = template?.sections ?? []
+      const result = await generateBrief(meeting.title, sections, loadMeetings())
+      setBriefResult(result)
+      setBriefMeetingId(meeting.id)
+    } catch (e) {
+      setBriefResult((e as Error).message)
+    } finally {
+      setBriefLoadingId(null)
+    }
+  }, [])
+
   return (
     <div className="flex flex-col gap-6 w-full max-w-3xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-heading text-2xl font-medium">Meeting Notes</h1>
+          <h1 className="font-heading text-2xl font-medium">Notes</h1>
           <p className="text-muted-foreground text-sm mt-1">
             {meetings.length === 0
-              ? "Record your first meeting"
+              ? "Create your first note"
               : hasQuery
-                ? `${filteredMeetings.length} of ${meetings.length} meeting${meetings.length === 1 ? "" : "s"} match`
-                : `${meetings.length} meeting${meetings.length === 1 ? "" : "s"} saved`}
+                ? `${filteredMeetings.length} of ${meetings.length} note${meetings.length === 1 ? "" : "s"} match`
+                : `${meetings.length} note${meetings.length === 1 ? "" : "s"}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -236,7 +262,7 @@ export function MeetingDashboard({
           </Button>
           <Button onClick={onNewMeeting}>
             <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
-            New Meeting
+            New Note
           </Button>
         </div>
       </div>
@@ -283,6 +309,21 @@ export function MeetingDashboard({
         </DropdownMenu>
       </div>
 
+      {pendingDelete && onUndoDelete && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="flex items-center justify-between gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-2.5"
+        >
+          <p className="text-sm text-destructive">
+            <span className="font-medium">"{pendingDelete.title}"</span> deleted.
+          </p>
+          <Button variant="destructive" size="sm" onClick={onUndoDelete}>
+            Undo
+          </Button>
+        </motion.div>
+      )}
+
       {meetings.length > 0 && filteredMeetings.length > 0 && (
         <div className="flex items-center justify-between">
           <Button
@@ -317,16 +358,16 @@ export function MeetingDashboard({
             <div className="bg-muted inline-flex size-12 items-center justify-center rounded-full">
               <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={2} className="size-6 text-muted-foreground" />
             </div>
-            <p className="text-muted-foreground text-sm">No meetings yet</p>
+            <p className="text-muted-foreground text-sm">No notes yet</p>
             <Button variant="outline" onClick={onNewMeeting}>
-              Start your first meeting
+              Create your first note
             </Button>
           </CardContent>
         </Card>
       ) : filteredMeetings.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="flex flex-col items-center gap-3 py-12">
-            <p className="text-muted-foreground text-sm">No meetings match "{searchQuery}"</p>
+            <p className="text-muted-foreground text-sm">No notes match "{searchQuery}"</p>
             <Button variant="outline" onClick={() => setSearchQuery("")}>
               Clear search
             </Button>
@@ -454,30 +495,51 @@ export function MeetingDashboard({
                 <Button
                   variant="ghost"
                   size="sm"
-                  title="Chat about this meeting"
-                  aria-label="Chat about meeting"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onChatMeeting(meeting)
-                  }}
+                  title="Generate brief"
+                  aria-label="Generate brief"
+                  onClick={(e) => { e.stopPropagation(); handleGenerateBrief(meeting) }}
+                  disabled={briefLoadingId === meeting.id}
                 >
-                  <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-4" />
+                  <HugeiconsIcon icon={AiBrain01Icon} strokeWidth={2} className="size-4" />
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  title="Delete meeting"
-                  aria-label="Delete meeting"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setDeleteConfirm(meeting.id)
-                  }}
+                  title="Delete note"
+                  aria-label="Delete note"
+                  onClick={(e) => { e.stopPropagation(); setDeleteConfirm(meeting.id) }}
                 >
                   <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-4" />
                 </Button>
               </CardFooter>
               )}
             </Card>
+            {briefMeetingId === meeting.id && briefResult && (
+              <Card className="border-primary/30 mt-2">
+                <CardHeader className="py-2.5 cursor-pointer" onClick={() => { setBriefMeetingId(null); setBriefResult(null) }}>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-xs flex items-center gap-1.5">
+                      <HugeiconsIcon icon={AiBrain01Icon} strokeWidth={2} className="size-3.5 text-primary" />
+                      Pre-Meeting Brief
+                    </CardTitle>
+                    <Button variant="ghost" size="icon-sm" className="size-5" type="button" onClick={(e) => { e.stopPropagation(); setBriefMeetingId(null); setBriefResult(null) }}>
+                      <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-3" />
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  <div className="text-xs whitespace-pre-wrap leading-relaxed text-muted-foreground max-h-48 overflow-y-auto">
+                    {briefResult}
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            {briefLoadingId === meeting.id && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground px-1 py-1.5">
+                <div className="size-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                Generating brief...
+              </div>
+            )}
             </motion.div>
           )})}
         </div>
@@ -486,9 +548,9 @@ export function MeetingDashboard({
       <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
         <DialogContent showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>Delete Meeting</DialogTitle>
+            <DialogTitle>Delete Note</DialogTitle>
             <DialogDescription>
-              This action cannot be undone. The transcript and notes will be permanently removed.
+              This action cannot be undone. This note will be permanently removed.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -512,9 +574,9 @@ export function MeetingDashboard({
       <Dialog open={batchDeleteConfirm} onOpenChange={setBatchDeleteConfirm}>
         <DialogContent showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>Delete {selected.size} Meeting{selected.size !== 1 ? "s" : ""}</DialogTitle>
+            <DialogTitle>Delete {selected.size} Note{selected.size !== 1 ? "s" : ""}</DialogTitle>
             <DialogDescription>
-              This action cannot be undone. The selected transcripts and notes will be permanently removed.
+              This action cannot be undone. The selected notes will be permanently removed.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -529,4 +591,3 @@ export function MeetingDashboard({
     </div>
   )
 }
-

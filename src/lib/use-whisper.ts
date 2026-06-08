@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from "react"
+import { invoke } from "@tauri-apps/api/core"
 
 type WhisperState = "idle" | "recording" | "transcribing" | "done"
 type EngineStatus = { status: "checking" | "ready" | "unavailable"; error?: string }
@@ -39,8 +40,8 @@ function createWav(audioBuffer: AudioBuffer): ArrayBuffer {
   view.setUint32(40, dataSize, true)
 
   let offset = 44
-  for (let i = 0; i < data.length; i++) {
-    const s = Math.max(-1, Math.min(1, data[i]))
+  for (const element of data) {
+    const s = Math.max(-1, Math.min(1, element))
     view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
     offset += 2
   }
@@ -59,7 +60,6 @@ export function useWhisper() {
   const checkEngine = useCallback(async () => {
     setEngine({ status: "checking" })
     try {
-      const { invoke } = await import("@tauri-apps/api/core")
       const ready: boolean = await invoke(CHECK)
       setEngine({ status: ready ? "ready" : "unavailable", error: ready ? undefined : "Transcription engine not installed. Go to Settings to download it." })
     } catch {
@@ -140,7 +140,6 @@ export function useWhisper() {
       const wavBytes = Array.from(new Uint8Array(wavBuffer))
       await audioCtx.close()
 
-      const { invoke } = await import("@tauri-apps/api/core")
       const text: string = await invoke(TRANSCRIBE, {
         audioData: wavBytes,
       })

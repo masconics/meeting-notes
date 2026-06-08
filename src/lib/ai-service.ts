@@ -35,7 +35,7 @@ async function callDeepSeek(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${settings.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
   })
@@ -82,6 +82,26 @@ export function isAIConfigured(): boolean {
   return s.enabled
 }
 
+export async function generateTitle(
+  transcript: string,
+  notes: string
+): Promise<string> {
+  const content = [transcript, notes].filter(Boolean).join("\n\n")
+  if (!content.trim()) return ""
+
+  const prompt = `Generate a short, descriptive title (max 8 words) for this meeting based on the content below. Return ONLY the title, no quotes, no extra text, no punctuation at the end.
+
+CONTENT:
+${content.slice(0, 3000)}`
+
+  const response = await callDeepSeek([
+    { role: "system", content: "You generate short meeting titles. Respond with only the title text." },
+    { role: "user", content: prompt },
+  ], { thinking: false })
+
+  return response.trim().replace(/^["']|["']$/g, "").replace(/[.!?,;:]$/, "")
+}
+
 export async function testConnection(): Promise<boolean> {
   try {
     await callDeepSeek([{ role: "user", content: "hi" }], { thinking: false })
@@ -89,6 +109,43 @@ export async function testConnection(): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+export async function generateNotes(
+  rawNotes: string,
+  transcript: string,
+  templateSections?: string[]
+): Promise<string> {
+  const hasTemplate = templateSections && templateSections.length > 0
+  const prompt = hasTemplate
+    ? `You are a professional meeting assistant. Take the raw notes and transcript below, and create clean, organized meeting notes.
+
+Return the notes directly in markdown format using the section headers below. Use bullet points (•) within each section. Be concise. Extract key facts, decisions, numbers, and action items. Do NOT invent information not present.
+
+SECTIONS:
+${templateSections!.map((s) => `## ${s}`).join("\n")}
+
+TRANSCRIPT:
+${transcript || "(none)"}
+
+RAW NOTES:
+${rawNotes || "(none)"}`
+    : `You are a professional meeting assistant. Take the raw notes and transcript below, and create clean, organized meeting notes.
+
+Return the notes directly in markdown format with appropriate section headers (## Key Points, ## Decisions Made, ## Action Items, ## Next Steps, etc.). Use bullet points (•) within each section. Be concise. Extract key facts, decisions, numbers, and action items. Do NOT invent information not present. If there's very little content, just organize what is there clearly.
+
+TRANSCRIPT:
+${transcript || "(none)"}
+
+RAW NOTES:
+${rawNotes || "(none)"}`
+
+  const response = await callDeepSeek([
+    { role: "system", content: "You are a professional meeting notes organizer. You produce clean, well-formatted meeting notes in markdown." },
+    { role: "user", content: prompt },
+  ], { thinking: true })
+
+  return response.trim().replace(/^```(?:markdown)?\s*\n?/i, "").replace(/\n?```\s*$/, "")
 }
 
 export async function enhanceNotes(

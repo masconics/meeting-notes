@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Textarea } from "@/components/ui/textarea"
+import { MarkdownView } from "@/components/markdown-view"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
 import type { MeetingSection } from "@/types"
@@ -71,9 +72,10 @@ export function StructuredNoteView({
                 className="min-h-20 text-sm"
               />
             ) : (
-              <div className="text-sm text-foreground bg-muted/60 rounded-2xl p-3 whitespace-pre-wrap">
-                {section.content || <span className="text-muted-foreground italic">No content</span>}
-              </div>
+              <MarkdownView
+                markdown={section.content}
+                className="text-sm bg-muted/60 rounded-2xl p-3"
+              />
             )}
             </motion.div>
           )}
