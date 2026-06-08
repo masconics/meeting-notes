@@ -45,7 +45,7 @@ import { useMicrophonePermission } from "@/lib/use-permissions"
 import { loadSettings, saveSettings, clearAllMeetings, loadMeetings, loadAISettings, saveAISettings } from "@/lib/storage"
 import { testConnection } from "@/lib/ai-service"
 import type { AppSettings, AISettings } from "@/types"
-import { SPEECH_LANGS, AI_MODELS, ASR_ENGINES } from "@/types"
+import { SPEECH_LANGS, AI_MODELS } from "@/types"
 import { TemplateEditor } from "@/components/template-editor"
 
 interface SettingsPageProps {
@@ -67,27 +67,20 @@ export function SettingsPage({
   const { devices } = useAudioDevices()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const mic = useMicrophonePermission()
-  const [whisperStatus, setWhisperStatus] = useState<{ binary: boolean; model: boolean; ready: boolean } | null>(null)
-  const [whisperLoading, setWhisperLoading] = useState(false)
-  const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null)
-  const [moonshineReady, setMoonshineReady] = useState<boolean | null>(null)
-  const [moonshineLoading, setMoonshineLoading] = useState(false)
-  const [moonshineProgress, setMoonshineProgress] = useState<{ downloaded: number; total: number } | null>(null)
-  const [moonshineLoaded, setMoonshineLoaded] = useState(false)
+  const [fluidReady, setFluidReady] = useState<boolean | null>(null)
+  const [fluidLoading, setFluidLoading] = useState(false)
+  const [fluidLoaded, setFluidLoaded] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
 
   useEffect(() => {
     setMeetingCount(loadMeetings().length)
     mic.check()
-    checkWhisper()
-    checkMoonshine()
-    // Poll the live in-memory state so the badge reflects load/unload that
-    // happens during recording elsewhere in the app.
+    checkFluid()
     const id = setInterval(async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core")
-        setMoonshineLoaded(await invoke<boolean>("moonshine_loaded"))
+        setFluidLoaded(await invoke<boolean>("fluid_loaded"))
       } catch {
         // not under Tauri
       }
@@ -95,95 +88,27 @@ export function SettingsPage({
     return () => clearInterval(id)
   }, [])
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined
-    ;(async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event")
-        unlisten = await listen<{ downloaded: number; total: number }>(
-          "model-download-progress",
-          (e) => {
-            setDownloadProgress(e.payload)
-            // Download finished: refresh status and clear the bar.
-            if (e.payload.total > 0 && e.payload.downloaded >= e.payload.total) {
-              setTimeout(() => {
-                checkWhisper()
-                setDownloadProgress(null)
-              }, 800)
-            }
-          }
-        )
-      } catch {
-        // Not running under Tauri — no events.
-      }
-    })()
-    return () => {
-      if (unlisten) unlisten()
-    }
-  }, [])
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined
-    ;(async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event")
-        unlisten = await listen<{ downloaded: number; total: number }>(
-          "moonshine-download-progress",
-          (e) => setMoonshineProgress(e.payload)
-        )
-      } catch {
-        // Not running under Tauri — no events.
-      }
-    })()
-    return () => {
-      if (unlisten) unlisten()
-    }
-  }, [])
-
-  async function checkMoonshine() {
+  async function checkFluid() {
     try {
       const { invoke } = await import("@tauri-apps/api/core")
-      setMoonshineReady(await invoke<boolean>("check_moonshine_ready"))
-      setMoonshineLoaded(await invoke<boolean>("moonshine_loaded"))
+      setFluidReady(await invoke<boolean>("check_fluid_ready"))
+      setFluidLoaded(await invoke<boolean>("fluid_loaded"))
     } catch {
-      setMoonshineReady(null)
+      setFluidReady(null)
     }
   }
 
-  async function handleSetupMoonshine() {
-    setMoonshineLoading(true)
+  async function handleSetupFluid() {
+    setFluidLoading(true)
     try {
       const { invoke } = await import("@tauri-apps/api/core")
-      const ready = await invoke<boolean>("setup_moonshine")
-      setMoonshineReady(ready)
+      const ready = await invoke<boolean>("setup_fluid")
+      setFluidReady(ready)
+      setFluidLoaded(true)
     } catch {
-      setMoonshineReady(false)
+      setFluidReady(false)
     } finally {
-      setMoonshineLoading(false)
-      setMoonshineProgress(null)
-    }
-  }
-
-  async function checkWhisper() {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core")
-      const status = await invoke<{ binary: boolean; model: boolean; ready: boolean }>("get_whisper_status")
-      setWhisperStatus(status)
-    } catch {
-      setWhisperStatus(null)
-    }
-  }
-
-  async function handleSetupWhisper() {
-    setWhisperLoading(true)
-    try {
-      const { invoke } = await import("@tauri-apps/api/core")
-      const status = await invoke<{ binary: boolean; model: boolean; ready: boolean }>("setup_whisper")
-      setWhisperStatus(status)
-    } catch {
-      setWhisperStatus(null)
-    } finally {
-      setWhisperLoading(false)
+      setFluidLoading(false)
     }
   }
 
@@ -192,14 +117,6 @@ export function SettingsPage({
       setSettings((prev) => {
         const next = { ...prev, ...patch }
         saveSettings(next)
-        // Free the Moonshine sessions (~186MB) when switching off it, so only
-        // the active engine ever stays resident.
-        if (prev.asrEngine === "moonshine" && next.asrEngine !== "moonshine") {
-          import("@tauri-apps/api/core")
-            .then(({ invoke }) => invoke("unload_moonshine"))
-            .then(() => setMoonshineLoaded(false))
-            .catch(() => {})
-        }
         return next
       })
     },
@@ -361,29 +278,9 @@ export function SettingsPage({
             </Select>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium">Transcription Engine</label>
-            <Select
-              value={settings.asrEngine}
-              onValueChange={(v) => update({ asrEngine: v as AppSettings["asrEngine"] })}
-            >
-              <SelectTrigger>
-                <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
-                <SelectValue placeholder="Select engine..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {Object.entries(ASR_ENGINES).map(([key, name]) => (
-                    <SelectItem key={key} value={key}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <p className="text-[11px] text-muted-foreground">
-              Moonshine is lower-latency for live segments; Whisper is more accurate.
-            </p>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Transcription Engine</span>
+            <Badge variant="secondary">Fluid — Apple Neural Engine</Badge>
           </div>
         </CardContent>
       </Card>
@@ -392,186 +289,60 @@ export function SettingsPage({
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
-            Whisper Engine
-            {settings.asrEngine === "whisper" && (
-              <Badge variant="default" className="ml-auto">Active</Badge>
-            )}
+            Fluid Engine
+            <Badge variant="default" className="ml-auto">Active</Badge>
           </CardTitle>
           <CardDescription>
-            Local voice-to-text transcription powered by whisper.cpp. Runs per
-            segment as a subprocess — no model stays resident in memory.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {whisperStatus === null ? (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <div className="size-4 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin" />
-              Checking engine status...
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center justify-between">
-                <span className="text-sm">Engine binary</span>
-                {whisperStatus.binary ? (
-                  <Badge variant="secondary">Installed</Badge>
-                ) : (
-                  <Badge variant="outline">Needs download</Badge>
-                )}
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm">Language model (small.en ~466MB)</span>
-                {whisperStatus.model ? (
-                  <Badge variant="secondary">Installed</Badge>
-                ) : (
-                  <Badge variant="outline">Needs download</Badge>
-                )}
-              </div>
-              {downloadProgress && (
-                <div className="flex flex-col gap-1.5 pt-1">
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
-                    <span>Downloading language model…</span>
-                    <span>
-                      {downloadProgress.total > 0
-                        ? `${Math.round((downloadProgress.downloaded / downloadProgress.total) * 100)}% · ${(downloadProgress.downloaded / 1048576).toFixed(0)} / ${(downloadProgress.total / 1048576).toFixed(0)} MB`
-                        : `${(downloadProgress.downloaded / 1048576).toFixed(0)} MB`}
-                    </span>
-                  </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="bg-primary h-full rounded-full transition-all duration-300"
-                      style={{
-                        width:
-                          downloadProgress.total > 0
-                            ? `${Math.min(100, Math.round((downloadProgress.downloaded / downloadProgress.total) * 100))}%`
-                            : "100%",
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
-              {!whisperStatus.ready && (
-                <div className="flex flex-col gap-2 pt-2">
-                  <p className="text-xs text-muted-foreground">
-                    Install whisper-cpp to enable local voice-to-text transcription.
-                  </p>
-                  <div className="bg-muted rounded-2xl p-3 text-xs font-mono text-muted-foreground">
-                    brew install whisper-cpp
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    After installation, restart the app and the engine will be detected automatically.
-                  </p>
-                  <Button
-                    size="sm"
-                    onClick={handleSetupWhisper}
-                    disabled={whisperLoading}
-                  >
-                    {whisperLoading ? (
-                      <>
-                        <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
-                        {downloadProgress ? "Downloading model…" : "Checking…"}
-                      </>
-                    ) : (
-                      <>
-                        <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
-                        {whisperStatus?.binary ? "Download Model" : "Check Again"}
-                      </>
-                    )}
-                  </Button>
-                </div>
-              )}
-              {whisperStatus.ready && (
-                <div className="flex items-center gap-2 pt-1">
-                  <div className="size-2 rounded-full bg-emerald-500" />
-                  <span className="text-xs text-muted-foreground">
-                    Whisper engine is ready. Transcription will use local processing.
-                  </span>
-                </div>
-              )}
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
-            Moonshine Engine
-            {settings.asrEngine === "moonshine" && (
-              <Badge variant="default" className="ml-auto">Active</Badge>
-            )}
-          </CardTitle>
-          <CardDescription>
-            Low-latency on-device transcription (Moonshine tiny, ONNX)
+            Parakeet v3 on the Apple Neural Engine via FluidAudio (Core ML sid), fastest on-device option
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <span className="text-sm">Model (tiny ~186MB)</span>
-            {moonshineReady === null ? (
+            <span className="text-sm">Sidecar binary</span>
+            {fluidReady === null ? (
               <Badge variant="outline">Unknown</Badge>
-            ) : moonshineReady ? (
+            ) : fluidReady ? (
               <Badge variant="secondary">Installed</Badge>
             ) : (
-              <Badge variant="outline">Needs download</Badge>
+              <Badge variant="outline">Not found</Badge>
             )}
           </div>
           <div className="flex items-center justify-between">
             <span className="text-sm">Memory</span>
-            {moonshineLoaded ? (
+            {fluidLoaded ? (
               <Badge variant="secondary" className="gap-1.5">
                 <span className="size-1.5 rounded-full bg-emerald-500" />
-                Loaded (~186MB)
+                Loaded
               </Badge>
             ) : (
-              <Badge variant="outline">Idle (not in memory)</Badge>
+              <Badge variant="outline">Idle (not running)</Badge>
             )}
           </div>
-          {moonshineProgress && (
-            <div className="flex flex-col gap-1.5 pt-1">
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>Downloading model…</span>
-                <span>
-                  {moonshineProgress.total > 0
-                    ? `${Math.round((moonshineProgress.downloaded / moonshineProgress.total) * 100)}% · ${(moonshineProgress.downloaded / 1048576).toFixed(0)} / ${(moonshineProgress.total / 1048576).toFixed(0)} MB`
-                    : `${(moonshineProgress.downloaded / 1048576).toFixed(0)} MB`}
-                </span>
-              </div>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="bg-primary h-full rounded-full transition-all duration-300"
-                  style={{
-                    width:
-                      moonshineProgress.total > 0
-                        ? `${Math.min(100, Math.round((moonshineProgress.downloaded / moonshineProgress.total) * 100))}%`
-                        : "100%",
-                  }}
-                />
-              </div>
-            </div>
-          )}
-          {moonshineReady ? (
+          {fluidReady ? (
             <div className="flex items-center gap-2 pt-1">
               <div className="size-2 rounded-full bg-emerald-500" />
               <span className="text-xs text-muted-foreground">
-                Moonshine model is ready for on-device transcription.
+                Fluid sidecar is ready. Models are auto-downloaded by FluidAudio on first launch.
               </span>
             </div>
           ) : (
             <div className="flex flex-col gap-2 pt-1">
               <p className="text-xs text-muted-foreground">
-                Download the Moonshine tiny model to use it for transcription.
+                Build the fluidasr sidecar (Swift) and deploy it to the app data directory.
               </p>
-              <Button size="sm" onClick={handleSetupMoonshine} disabled={moonshineLoading}>
-                {moonshineLoading ? (
+              <div className="bg-muted rounded-2xl p-3 text-xs font-mono text-muted-foreground">
+                cd fluid-sidecar &amp;&amp; swift build -c release
+              </div>
+              <Button size="sm" onClick={handleSetupFluid} disabled={fluidLoading}>
+                {fluidLoading ? (
                   <>
                     <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
-                    {moonshineProgress ? "Downloading model…" : "Working…"}
+                    Starting engine…
                   </>
                 ) : (
                   <>
                     <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
-                    Download Model
+                    Load Engine
                   </>
                 )}
               </Button>

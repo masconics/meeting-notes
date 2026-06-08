@@ -1,5 +1,4 @@
-mod moonshine;
-mod transcribe;
+mod fluid;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -12,15 +11,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
-            transcribe::transcribe_audio,
-            transcribe::check_whisper_ready,
-            transcribe::get_whisper_status,
-            transcribe::setup_whisper,
-            moonshine::transcribe_audio_moonshine,
-            moonshine::check_moonshine_ready,
-            moonshine::setup_moonshine,
-            moonshine::unload_moonshine,
-            moonshine::moonshine_loaded,
+            fluid::transcribe_audio_fluid,
+            fluid::check_fluid_ready,
+            fluid::setup_fluid,
+            fluid::unload_fluid,
+            fluid::fluid_loaded,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

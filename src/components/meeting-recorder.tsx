@@ -161,7 +161,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const [duration, setDuration] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [showSetupHelp, setShowSetupHelp] = useState(false)
-  const [isProcessingChunk, setIsProcessingChunk] = useState(false)
+  const [isTranscribing, setIsTranscribing] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<MeetingTemplate | undefined>(undefined)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
@@ -173,18 +173,10 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const vadRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const transcriptAccRef = useRef("")
-  const pendingChunksRef = useRef<Blob[]>([])
-  const activeRef = useRef(false)
-  const silenceCountRef = useRef(0)
-  const mimeTypeRef = useRef("")
-  const processingRef = useRef(false)
-  const hasSpeechRef = useRef(false)
-  const segmentTicksRef = useRef(0)
-  const vadCtxRef = useRef<AudioContext | null>(null)
-  const recordStreamRef = useRef<MediaStream | null>(null)
+  const allChunksRef = useRef<Blob[]>([])
+  const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
+  const analyserPollerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const mic = useMicrophonePermission()
 
@@ -204,25 +196,19 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   }, [])
 
   const cleanupRecording = useCallback(() => {
-    // Stop while still "active" is false so onstop transcribes the final
-    // segment but does not start a new one.
-    activeRef.current = false
-    silenceCountRef.current = 0
-    segmentTicksRef.current = 0
-    if (vadRef.current) {
-      clearInterval(vadRef.current)
-      vadRef.current = null
-    }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop()
     }
     mediaRecorderRef.current = null
     analyserRef.current = null
-    if (vadCtxRef.current && vadCtxRef.current.state !== "closed") {
-      vadCtxRef.current.close()
+    if (analyserPollerRef.current) {
+      clearInterval(analyserPollerRef.current)
+      analyserPollerRef.current = null
     }
-    vadCtxRef.current = null
-    recordStreamRef.current = null
+    if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+      audioCtxRef.current.close()
+    }
+    audioCtxRef.current = null
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop())
     }
@@ -232,43 +218,6 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       timerRef.current = null
     }
   }, [])
-
-  // Transcribe one complete WebM segment. Each segment is a self-contained
-  // recording (with its own header) so decodeAudioData always succeeds —
-  // unlike slicing a single recorder's timeslice chunks, where only the first
-  // chunk carries the WebM header.
-  const transcribeBlob = useCallback(async (blob: Blob) => {
-    processingRef.current = true
-    setIsProcessingChunk(true)
-    try {
-      const arrayBuffer = await blob.arrayBuffer()
-      const audioCtx = new AudioContext({ sampleRate: 16000 })
-      const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer)
-      const wavBuffer = createWav(audioBuffer)
-      const wavBytes = Array.from(new Uint8Array(wavBuffer))
-      await audioCtx.close()
-
-      const { invoke } = await import("@tauri-apps/api/core")
-      const cmd = settings.asrEngine === "moonshine" ? "transcribe_audio_moonshine" : "transcribe_audio"
-      const text: string = await invoke(cmd, {
-        audioData: wavBytes,
-      })
-
-      if (text.trim()) {
-        transcriptAccRef.current += " " + text.trim()
-        setTranscript(transcriptAccRef.current.trim())
-      }
-    } catch (err) {
-      // Surface the failure instead of silently dropping the segment — a missing
-      // model or unregistered command otherwise looks like "nothing happens".
-      const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "Transcription failed"
-      console.error("transcribeBlob failed:", err)
-      setError(msg)
-    } finally {
-      processingRef.current = false
-      setIsProcessingChunk(false)
-    }
-  }, [settings.asrEngine])
 
   const startRecording = useCallback(async () => {
     const permResult = await mic.request()
@@ -282,19 +231,9 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     setError(null)
     setTranscript("")
     setDuration(0)
-    transcriptAccRef.current = ""
-    pendingChunksRef.current = []
-    activeRef.current = true
-    silenceCountRef.current = 0
-    segmentTicksRef.current = 0
-    hasSpeechRef.current = false
     setIsSpeaking(false)
 
     try {
-      // Capture constraints. For mic, enable the browser's built-in DSP
-      // (noise suppression / echo cancel / auto gain) — big accuracy win for
-      // Whisper. For system audio (loopback via BlackHole etc.) leave DSP off
-      // so we don't distort an already-clean signal.
       const deviceConstraint: MediaTrackConstraints =
         selectedDevice && selectedDevice !== "default"
           ? { deviceId: { exact: selectedDevice } }
@@ -312,116 +251,95 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
         : "audio/webm"
-      mimeTypeRef.current = mimeType
 
-      // Start a fresh, self-contained recorder for one speech segment. When it
-      // stops (on silence / max length / final stop) onstop transcribes the
-      // complete WebM blob and, while still active, starts the next segment.
-      const startSegment = () => {
-        const recordStream = recordStreamRef.current
-        if (!recordStream || !activeRef.current) return
-        pendingChunksRef.current = []
-        hasSpeechRef.current = false
-        segmentTicksRef.current = 0
-        const recorder = new MediaRecorder(recordStream, { mimeType })
-
-        recorder.ondataavailable = (e) => {
-          if (e.data.size > 0) pendingChunksRef.current.push(e.data)
-        }
-
-        recorder.onstop = async () => {
-          const chunks = pendingChunksRef.current
-          pendingChunksRef.current = []
-          if (chunks.length > 0 && hasSpeechRef.current) {
-            await transcribeBlob(new Blob(chunks, { type: mimeType }))
-          }
-          // Restart for the next segment unless recording was stopped.
-          if (activeRef.current) startSegment()
-        }
-
-        recorder.onerror = () => {
-          setError("Recording error occurred")
-        }
-
-        recorder.start()
-        mediaRecorderRef.current = recorder
-      }
-
-      // Build a cleanup graph that feeds BOTH the VAD analyser and the
-      // recorder. The context lives for the whole recording, across segment
-      // restarts. Chain: source -> high-pass (cut rumble/hum < 85Hz)
-      // -> low-shelf de-emphasis -> analyser + recorder destination.
       const audioCtx = new AudioContext()
-      vadCtxRef.current = audioCtx
+      audioCtxRef.current = audioCtx
       const source = audioCtx.createMediaStreamSource(stream)
 
       const highpass = audioCtx.createBiquadFilter()
       highpass.type = "highpass"
-      highpass.frequency.value = 85 // remove HVAC hum, desk thumps, DC offset
+      highpass.frequency.value = 85
 
       const analyser = audioCtx.createAnalyser()
       analyser.fftSize = 512
       analyser.smoothingTimeConstant = 0.3
-      analyserRef.current = analyser // drives the real-time level meter
+      analyserRef.current = analyser
 
       const dest = audioCtx.createMediaStreamDestination()
 
-      // Keep the chain minimal — just a rumble high-pass. The previous low-shelf
-      // de-emphasis attenuated speech formants and hurt ASR accuracy.
       source.connect(highpass)
       highpass.connect(analyser)
       highpass.connect(dest)
 
-      // Recorder records the filtered output, not the raw mic stream.
-      recordStreamRef.current = dest.stream
-
       const dataArray = new Float32Array(analyser.fftSize)
-
-      // VAD: RMS volume check every 150ms.
-      // Speech > 0.01 RMS; silence < 0.01 for 10 ticks (1.5s) closes a segment.
-      const SPEECH_THRESHOLD = 0.01
-      const SILENCE_TICKS = 10
-      const MAX_SEGMENT_TICKS = 100 // ~15s cap so long speech still flushes
-
-      const endSegment = () => {
-        if (mediaRecorderRef.current?.state === "recording") {
-          // Triggers onstop -> transcribe + restart.
-          mediaRecorderRef.current.stop()
-        }
-      }
-
-      vadRef.current = setInterval(() => {
-        if (!activeRef.current) return
+      analyserPollerRef.current = setInterval(() => {
         analyser.getFloatTimeDomainData(dataArray)
-
         let sum = 0
         for (let i = 0; i < dataArray.length; i++) {
           sum += dataArray[i] * dataArray[i]
         }
         const rms = Math.sqrt(sum / dataArray.length)
-        segmentTicksRef.current++
-
-        if (rms > SPEECH_THRESHOLD) {
-          silenceCountRef.current = 0
-          hasSpeechRef.current = true
-          setIsSpeaking(true)
-        } else {
-          silenceCountRef.current++
-          setIsSpeaking(false)
-          if (hasSpeechRef.current && silenceCountRef.current >= SILENCE_TICKS) {
-            endSegment()
-            return
-          }
-        }
-
-        // Force a flush on long continuous speech so the transcript updates
-        // incrementally instead of only at the next pause.
-        if (hasSpeechRef.current && segmentTicksRef.current >= MAX_SEGMENT_TICKS) {
-          endSegment()
-        }
+        setIsSpeaking(rms > 0.01)
       }, 150)
 
-      startSegment()
+      allChunksRef.current = []
+      const recorder = new MediaRecorder(dest.stream, { mimeType })
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) allChunksRef.current.push(e.data)
+      }
+
+      recorder.onstop = async () => {
+        const chunks = [...allChunksRef.current]
+        allChunksRef.current = []
+        if (chunks.length > 0) {
+          setIsTranscribing(true)
+          try {
+            const blob = new Blob(chunks, { type: mimeType })
+            const arrayBuffer = await blob.arrayBuffer()
+            const decCtx = new AudioContext({ sampleRate: 16000 })
+            const audioBuffer = await decCtx.decodeAudioData(arrayBuffer)
+            const wavBuffer = createWav(audioBuffer)
+            await decCtx.close()
+
+            const { invoke } = await import("@tauri-apps/api/core")
+            const text: string = await invoke("transcribe_audio_fluid", {
+              audioData: Array.from(new Uint8Array(wavBuffer)),
+            })
+            setTranscript(text.trim())
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "Transcription failed"
+            setError(msg)
+          } finally {
+            setIsTranscribing(false)
+          }
+        }
+        analyserRef.current = null
+        if (analyserPollerRef.current) {
+          clearInterval(analyserPollerRef.current)
+          analyserPollerRef.current = null
+        }
+        if (audioCtxRef.current && audioCtxRef.current.state !== "closed") {
+          audioCtxRef.current.close()
+        }
+        audioCtxRef.current = null
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop())
+        }
+        streamRef.current = null
+        if (timerRef.current) {
+          clearInterval(timerRef.current)
+          timerRef.current = null
+        }
+        setRecorderState("reviewing")
+      }
+
+      recorder.onerror = () => {
+        setError("Recording error occurred")
+      }
+
+      recorder.start()
+      mediaRecorderRef.current = recorder
 
       timerRef.current = setInterval(() => {
         setDuration((d) => d + 1)
@@ -435,13 +353,13 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
           : "Failed to start recording"
       )
     }
-  }, [audioSource, selectedDevice, mic, transcribeBlob])
+  }, [audioSource, selectedDevice, mic])
 
   const stopRecording = useCallback(() => {
-    activeRef.current = false
-    cleanupRecording()
-    setRecorderState("reviewing")
-  }, [cleanupRecording])
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop()
+    }
+  }, [])
 
   const handleGenerateBrief = useCallback(async () => {
     setIsBriefLoading(true)
@@ -803,13 +721,13 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             <div className="flex flex-col gap-2">
               <label className="text-xs font-medium text-muted-foreground flex items-center gap-2">
                 Transcription
-                {recorderState === "recording" && isProcessingChunk && (
+                {isTranscribing && (
                   <span className="inline-flex items-center gap-1 text-primary">
                     <div className="size-2 border border-primary border-t-transparent rounded-full animate-spin" />
-                    processing...
+                    Transcribing...
                   </span>
                 )}
-                {recorderState === "recording" && !isProcessingChunk && isSpeaking && (
+                {!isTranscribing && recorderState === "recording" && isSpeaking && (
                   <span className="text-primary inline-flex items-center gap-1">
                     <motion.span
                       className="size-1.5 rounded-full bg-emerald-500"
@@ -819,7 +737,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
                     speaking
                   </span>
                 )}
-                {recorderState === "recording" && !isProcessingChunk && !isSpeaking && (
+                {!isTranscribing && recorderState === "recording" && !isSpeaking && (
                   <span className="text-muted-foreground inline-flex items-center gap-1">
                     <span className="size-1.5 rounded-full bg-muted-foreground" />
                     listening
@@ -846,7 +764,6 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
                   setNotes((prev) => (prev ? prev + "\n" + text : text))
                 }
                 onOpenSettings={onSettings}
-                engine={settings.asrEngine}
               />
             </div>
             <Textarea

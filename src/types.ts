@@ -55,7 +55,7 @@ export interface AISettings {
   enabled: boolean
 }
 
-export type AsrEngine = "whisper" | "moonshine"
+export type AsrEngine = "fluid"
 
 export interface AppSettings {
   audioSource: "mic" | "system"
@@ -69,8 +69,7 @@ export interface AppSettings {
 }
 
 export const ASR_ENGINES: Record<AsrEngine, string> = {
-  whisper: "Whisper small.en — most accurate",
-  moonshine: "Moonshine tiny — fastest, low latency",
+  fluid: "Fluid — Parakeet v3 on Apple Neural Engine (Core ML)",
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
@@ -85,7 +84,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   speechLang: "en-US",
   titlePrefix: "",
   theme: "system",
-  asrEngine: "moonshine",
+  asrEngine: "fluid",
 }
 
 export const AI_MODELS: Record<string, string> = {

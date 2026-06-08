@@ -1,14 +1,11 @@
 import { useState, useRef, useCallback } from "react"
-import type { AsrEngine } from "@/types"
 
 type WhisperState = "idle" | "recording" | "transcribing" | "done"
 type EngineStatus = { status: "checking" | "ready" | "unavailable"; error?: string }
 
-// Tauri command names per ASR engine.
-const CMD = {
-  whisper: { check: "check_whisper_ready", setup: "setup_whisper", transcribe: "transcribe_audio" },
-  moonshine: { check: "check_moonshine_ready", setup: "setup_moonshine", transcribe: "transcribe_audio_moonshine" },
-} as const
+const CHECK = "check_fluid_ready"
+const SETUP = "setup_fluid"
+const TRANSCRIBE = "transcribe_audio_fluid"
 
 function createWav(audioBuffer: AudioBuffer): ArrayBuffer {
   const numChannels = 1
@@ -51,8 +48,7 @@ function createWav(audioBuffer: AudioBuffer): ArrayBuffer {
   return buffer
 }
 
-export function useWhisper(asrEngine: AsrEngine = "whisper") {
-  const cmd = CMD[asrEngine]
+export function useWhisper() {
   const [state, setState] = useState<WhisperState>("idle")
   const [result, setResult] = useState("")
   const [error, setError] = useState<string | null>(null)
@@ -64,19 +60,19 @@ export function useWhisper(asrEngine: AsrEngine = "whisper") {
     setEngine({ status: "checking" })
     try {
       const { invoke } = await import("@tauri-apps/api/core")
-      const ready: boolean = await invoke(cmd.check)
+      const ready: boolean = await invoke(CHECK)
       setEngine({ status: ready ? "ready" : "unavailable", error: ready ? undefined : "Transcription engine not installed. Go to Settings to download it." })
     } catch {
       setEngine({ status: "unavailable", error: "Cannot connect to transcription engine. Is this running as a Tauri app?" })
     }
-  }, [cmd])
+  }, [])
 
   const setupEngine = useCallback(async () => {
     setEngine({ status: "checking" })
     try {
       const { invoke } = await import("@tauri-apps/api/core")
-      await invoke(cmd.setup)
-      const ready: boolean = await invoke(cmd.check)
+      await invoke(SETUP)
+      const ready: boolean = await invoke(CHECK)
       setEngine({ status: ready ? "ready" : "unavailable", error: ready ? undefined : "Installation completed but engine reports not ready." })
     } catch (err: unknown) {
       setEngine({
@@ -84,7 +80,7 @@ export function useWhisper(asrEngine: AsrEngine = "whisper") {
         error: err instanceof Error ? err.message : typeof err === "string" ? err : "Installation failed",
       })
     }
-  }, [cmd])
+  }, [])
 
   const startRecording = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -145,7 +141,7 @@ export function useWhisper(asrEngine: AsrEngine = "whisper") {
       await audioCtx.close()
 
       const { invoke } = await import("@tauri-apps/api/core")
-      const text: string = await invoke(cmd.transcribe, {
+      const text: string = await invoke(TRANSCRIBE, {
         audioData: wavBytes,
       })
       setResult(text)
@@ -160,7 +156,7 @@ export function useWhisper(asrEngine: AsrEngine = "whisper") {
       )
       setState("idle")
     }
-  }, [cmd])
+  }, [])
 
   const reset = useCallback(() => {
     setState("idle")

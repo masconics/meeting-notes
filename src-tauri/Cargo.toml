@@ -13,15 +13,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", features = ["stream"] }
 tokio = { version = "1", features = ["full"] }
-flate2 = "1"
-tar = "0.4"
 tempfile = "3"
-# Moonshine streaming ASR (ONNX). ort pulls a prebuilt ONNX Runtime on build.
-ort = { version = "=2.0.0-rc.10", default-features = false, features = ["std", "download-binaries", "copy-dylibs"] }
-tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
-hound = "3"
 
 [features]
 default = ["custom-protocol"]
