@@ -16,14 +16,15 @@
         "title": "Notes",
         "width": 1024,
         "height": 768,
-        "resizable": false,
+        "resizable": true,
+        "maximizable": true,
         "fullscreen": false,
         "center": true,
         "hiddenTitle": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self' https://images.unsplash.com; img-src 'self' https: blob: data:; font-src 'self'"
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self' https:; img-src 'self' https: blob: data:; font-src 'self'"
     }
   },
   "bundle": {

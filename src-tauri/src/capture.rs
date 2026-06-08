@@ -29,10 +29,13 @@ const SILENCE_FLUSH_SECS: f32 = 0.6; // trailing silence that ends a segment
 const MAX_SEGMENT_SECS: f32 = 8.0; // force a flush so output stays live during long speech
 const MIN_SEGMENT_SECS: f32 = 0.4; // ignore blips shorter than this
 const LEADING_SILENCE_CAP_SECS: f32 = 2.0; // drop buffered silence before speech
+const PARAGRAPH_SILENCE_SECS: f32 = 2.5; // silence gap that triggers a paragraph break
 
 #[derive(Clone, Serialize)]
 struct TranscriptSegment {
     text: String,
+    #[serde(rename = "hasBreak")]
+    has_break: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -188,7 +191,7 @@ fn run_capture(
 
     match build() {
         Err(e) => {
-            let _ = app.emit("capture-error", TranscriptSegment { text: e.clone() });
+            let _ = app.emit("capture-error", TranscriptSegment { text: e.clone(), has_break: false });
             Err(e)
         }
         Ok(stream) => {
@@ -236,21 +239,21 @@ async fn run_processor(
     model: String,
 ) {
     log::debug!("run_processor started");
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, String, String)>(4);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, String, String, bool)>(4);
 
     let consumer_app = app.clone();
     let consumer = tauri::async_runtime::spawn(async move {
         let mut seg_idx: usize = 0;
-        while let Some((wav, lang, mdl)) = rx.recv().await {
+        while let Some((wav, lang, mdl, has_break)) = rx.recv().await {
             seg_idx += 1;
-            log::debug!("consumer got segment #{}, {} bytes, lang={}, model={}", seg_idx, wav.len(), if lang.is_empty() { "auto" } else { &lang }, if mdl.is_empty() { "default" } else { &mdl });
+            log::debug!("consumer got segment #{}, {} bytes, lang={}, model={}, has_break={}", seg_idx, wav.len(), if lang.is_empty() { "auto" } else { &lang }, if mdl.is_empty() { "default" } else { &mdl }, has_break);
             let mdl_opt = if mdl.is_empty() { None } else { Some(mdl.clone()) };
             match fluid::transcribe_audio_fluid(consumer_app.clone(), wav, Some(lang), mdl_opt).await {
                 Ok(t) => {
                     let t = t.trim().to_string();
                     log::debug!("transcript #{}: {:?} ({} chars)", seg_idx, t, t.len());
                     if !t.is_empty() {
-                        match consumer_app.emit("transcript-segment", TranscriptSegment { text: t.clone() }) {
+                        match consumer_app.emit("transcript-segment", TranscriptSegment { text: t.clone(), has_break }) {
                             Ok(()) => log::debug!("emitted transcript-segment #{}", seg_idx),
                             Err(e) => log::error!("FAILED to emit transcript-segment #{}: {e}", seg_idx),
                         }
@@ -260,7 +263,7 @@ async fn run_processor(
                 }
                 Err(e) => {
                     log::error!("transcribe error #{seg_idx}: {e}");
-                    let _ = consumer_app.emit("capture-error", TranscriptSegment { text: e });
+                    let _ = consumer_app.emit("capture-error", TranscriptSegment { text: e, has_break: false });
                 }
             }
         }
@@ -272,6 +275,8 @@ async fn run_processor(
     let mut had_speech = false;
     let mut flush_count: usize = 0;
     let mut loop_iter: usize = 0;
+    let mut post_flush_silence_samples: usize = 0;
+    let mut pending_break = false;
 
     loop {
         loop_iter += 1;
@@ -314,10 +319,18 @@ async fn run_processor(
                 let _ = app.emit("audio-level", AudioLevel { rms: r });
 
                 if r > RMS_SPEECH_THRESHOLD {
+                    if !had_speech {
+                        let gap_secs = post_flush_silence_samples as f32 / rate as f32;
+                        if gap_secs >= PARAGRAPH_SILENCE_SECS {
+                            pending_break = true;
+                        }
+                    }
                     had_speech = true;
                     silence_samples = 0;
+                    post_flush_silence_samples = 0;
                 } else {
                     silence_samples += window.len();
+                    post_flush_silence_samples += window.len();
                 }
                 seg.extend_from_slice(window);
             }
@@ -339,6 +352,8 @@ async fn run_processor(
 
         if should_flush || (stopping && had_speech && seg_secs >= MIN_SEGMENT_SECS) {
             let wav = to_wav_16k(&seg, rate);
+            let has_break = pending_break;
+            pending_break = false;
             log::debug!(
                 "flush segment #{}: {:.1}s ({} bytes wav){}",
                 flush_count + 1,
@@ -351,7 +366,7 @@ async fn run_processor(
             had_speech = false;
             flush_count += 1;
 
-            match tx.send((wav, language.clone(), model.clone())).await {
+            match tx.send((wav, language.clone(), model.clone(), has_break)).await {
                 Ok(()) => log::debug!("sent segment #{flush_count} to consumer channel"),
                 Err(e) => log::error!("FAILED to send segment #{flush_count} to channel: {e}"),
             }

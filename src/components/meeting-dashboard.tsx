@@ -42,6 +42,7 @@ import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback } from "react"
 import { TemplateIcon } from "@/components/template-icon"
 import { getTemplateById } from "@/lib/templates"
+import { renderMarkdown } from "@/components/markdown-view"
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", {
@@ -76,6 +77,22 @@ function relativeDate(iso: string): string {
   if (diffDays < 7) return `${diffDays}d ago`
   if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`
   return formatDate(iso)
+}
+
+function stripMarkdown(md: string): string {
+  return md
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/(\*{1,3}|_{1,3})(.*?)\1/g, "$2")
+    .replace(/`{1,3}[^`]*`{1,3}/g, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^>\s*/gm, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+\.\s+/gm, "")
+    .replace(/^-{3,}|_{3,}|\*{3,}/gm, "")
+    .replace(/\n{2,}/g, " · ")
+    .replace(/\n/g, " ")
+    .trim()
 }
 
 type SortKey = "date-desc" | "date-asc" | "duration-desc" | "duration-asc" | "title-asc" | "title-desc"
@@ -244,11 +261,11 @@ export function MeetingDashboard({
   }, [])
 
   return (
-    <div className="flex flex-col gap-6 w-full max-w-3xl mx-auto">
-      <div className="flex items-center justify-between">
+    <div className="app-page">
+      <div className="app-page-header">
         <div>
-          <h1 className="font-heading text-2xl font-medium">Notes</h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <h1 className="app-page-title">Notes</h1>
+          <p className="app-page-description">
             {meetings.length === 0
               ? "Create your first note"
               : hasQuery
@@ -256,7 +273,7 @@ export function MeetingDashboard({
                 : `${meetings.length} note${meetings.length === 1 ? "" : "s"}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="app-toolbar shrink-0">
           <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
             <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
           </Button>
@@ -267,11 +284,12 @@ export function MeetingDashboard({
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
-        <InputGroup className="h-9 flex-1">
+      <div className="app-toolbar">
+        <InputGroup className="h-8 flex-1 bg-transparent shadow-none ring-0">
           <InputGroupInput
             type="search"
-            placeholder="Search meetings..."
+            placeholder="Search notes..."
+            aria-label="Search notes"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -284,14 +302,14 @@ export function MeetingDashboard({
               <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
             </InputGroupButton>
           ) : (
-            <InputGroupButton size="icon-sm" tabIndex={-1} className="pointer-events-none">
+            <InputGroupButton size="icon-sm" tabIndex={-1} className="pointer-events-none" aria-label="Search notes">
               <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
             </InputGroupButton>
           )}
         </InputGroup>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="sm" className="h-9 shrink-0">
+            <Button variant="ghost" size="sm" className="shrink-0">
               <HugeiconsIcon icon={SortingAZIcon} strokeWidth={2} data-icon="inline-start" />
               {SORT_LABELS[sortKey]}
             </Button>
@@ -313,7 +331,7 @@ export function MeetingDashboard({
         <motion.div
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-2.5"
+          className="app-alert border-destructive/30 text-destructive"
         >
           <p className="text-sm text-destructive">
             <span className="font-medium">"{pendingDelete.title}"</span> deleted.
@@ -325,7 +343,7 @@ export function MeetingDashboard({
       )}
 
       {meetings.length > 0 && filteredMeetings.length > 0 && (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between border-b border-border/60 pb-2">
           <Button
             variant="ghost"
             size="sm"
@@ -354,9 +372,9 @@ export function MeetingDashboard({
 
       {meetings.length === 0 ? (
         <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 py-12">
-            <div className="bg-muted inline-flex size-12 items-center justify-center rounded-full">
-              <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={2} className="size-6 text-muted-foreground" />
+          <CardContent className="app-empty">
+            <div className="inline-flex size-9 items-center justify-center rounded-2xl bg-muted ring-1 ring-border/70">
+              <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={2} className="size-5 text-muted-foreground" />
             </div>
             <p className="text-muted-foreground text-sm">No notes yet</p>
             <Button variant="outline" onClick={onNewMeeting}>
@@ -366,7 +384,7 @@ export function MeetingDashboard({
         </Card>
       ) : filteredMeetings.length === 0 ? (
         <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 py-12">
+          <CardContent className="app-empty">
             <p className="text-muted-foreground text-sm">No notes match "{searchQuery}"</p>
             <Button variant="outline" onClick={() => setSearchQuery("")}>
               Clear search
@@ -378,9 +396,9 @@ export function MeetingDashboard({
           {filteredMeetings.map((meeting) => {
             const template = meeting.templateId ? getTemplateById(meeting.templateId) : undefined
             const previewText = meeting.structuredNotes?.[0]?.content
-              ? meeting.structuredNotes[0].content.replace(/^[•\-\s]+/, "")
+              ? stripMarkdown(meeting.structuredNotes[0].content)
               : meeting.notes
-                ? meeting.notes.replace(/\n/g, " · ")
+                ? stripMarkdown(meeting.notes)
                 : meeting.transcript.replace(/\n/g, " ")
             const isEditing = editingTitleId === meeting.id
             const isSelected = selected.has(meeting.id)
@@ -394,8 +412,9 @@ export function MeetingDashboard({
               whileTap={batchMode ? undefined : { scale: 0.99 }}
             >
             <Card
+              size="sm"
               className={cn(
-                "hover:bg-muted/50 hover:shadow-sm transition-colors",
+                "transition-colors hover:bg-muted/50",
                 !batchMode && "cursor-pointer",
                 isSelected && "ring-2 ring-primary/50"
               )}
@@ -407,7 +426,7 @@ export function MeetingDashboard({
                 }
               }}
             >
-              <CardHeader className="pb-3">
+              <CardHeader>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex flex-col gap-1 min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -491,7 +510,7 @@ export function MeetingDashboard({
                 </CardContent>
               )}
               {!batchMode && (
-              <CardFooter className="justify-end gap-2 pt-3">
+              <CardFooter className="justify-end gap-1 pt-3">
                 <Button
                   variant="ghost"
                   size="sm"
@@ -515,7 +534,7 @@ export function MeetingDashboard({
               )}
             </Card>
             {briefMeetingId === meeting.id && briefResult && (
-              <Card className="border-primary/30 mt-2">
+              <Card size="sm" className="border-primary/30 mt-2">
                 <CardHeader className="py-2.5 cursor-pointer" onClick={() => { setBriefMeetingId(null); setBriefResult(null) }}>
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-xs flex items-center gap-1.5">
@@ -528,9 +547,10 @@ export function MeetingDashboard({
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <div className="text-xs whitespace-pre-wrap leading-relaxed text-muted-foreground max-h-48 overflow-y-auto">
-                    {briefResult}
-                  </div>
+                  <div
+                    className="mdx-brief text-xs leading-relaxed text-muted-foreground max-h-48 overflow-y-auto"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdown(briefResult) }}
+                  />
                 </CardContent>
               </Card>
             )}

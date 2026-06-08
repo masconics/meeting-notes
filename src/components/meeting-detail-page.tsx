@@ -1,7 +1,6 @@
 import { useState, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
-import { Textarea } from "@/components/ui/textarea"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -132,8 +131,6 @@ export function MeetingDetailPage({
   const [newSpeakerName, setNewSpeakerName] = useState("")
   const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
   const [editSegmentText, setEditSegmentText] = useState("")
-  const [editingNotes, setEditingNotes] = useState(false)
-  const [editNotesText, setEditNotesText] = useState("")
 
   const speakerLabels = useMemo(() => viewing.speakerLabels ?? [], [viewing.speakerLabels])
 
@@ -195,16 +192,6 @@ export function MeetingDetailPage({
     update({ transcriptSegments: updated, speakerLabels })
     setEditingSegmentIndex(null)
     setEditSegmentText("")
-  }
-
-  const handleNotesEditStart = () => {
-    setEditingNotes(true)
-    setEditNotesText(viewing.notes)
-  }
-
-  const handleNotesSave = () => {
-    update({ notes: editNotesText })
-    setEditingNotes(false)
   }
 
   return (
@@ -474,33 +461,14 @@ export function MeetingDetailPage({
 
           {viewing.notes && (
             <section className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Raw Notes</h3>
-                {!editingNotes && (
-                  <Button variant="ghost" size="sm" onClick={handleNotesEditStart}>
-                    Edit
-                  </Button>
-                )}
-              </div>
-              {editingNotes ? (
-                <div className="flex flex-col gap-2">
-                  <Textarea
-                    value={editNotesText}
-                    onChange={(e) => setEditNotesText(e.target.value)}
-                    className="min-h-28 text-sm"
-                    autoFocus
-                  />
-                  <div className="flex items-center gap-2">
-                    <Button size="sm" onClick={handleNotesSave}>Save</Button>
-                    <Button variant="outline" size="sm" onClick={() => setEditingNotes(false)}>Cancel</Button>
-                  </div>
-                </div>
-              ) : (
-                <MarkdownView
-                  markdown={viewing.notes}
-                  className="text-sm max-h-60 overflow-y-auto leading-relaxed bg-muted rounded-2xl p-4"
-                />
-              )}
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Raw Notes</h3>
+              <MarkdownView
+                markdown={viewing.notes}
+                editable
+                onChange={(value) => update({ notes: value })}
+                className="text-sm max-h-60 overflow-y-auto leading-relaxed bg-muted rounded-2xl p-4"
+                editorLabel="Edit raw notes"
+              />
             </section>
           )}
 
@@ -528,7 +496,10 @@ export function MeetingDetailPage({
               </h3>
               <MarkdownView
                 markdown={viewing.enhancedNotes}
+                editable
+                onChange={(value) => update({ enhancedNotes: value })}
                 className="text-sm leading-relaxed bg-primary/5 rounded-2xl p-4 border border-primary/10"
+                editorLabel="Edit enhanced notes"
               />
             </section>
           )}

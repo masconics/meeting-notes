@@ -1,10 +1,38 @@
-import type { Meeting, AppSettings, AISettings, MeetingTemplate, ChatMessage } from "@/types"
-import { DEFAULT_SETTINGS, DEFAULT_AI_SETTINGS } from "@/types"
+import { dbGet, dbSet, dbRemove, initDatabase } from "@/lib/stronghold"
 
 const MEETINGS_KEY = "meeting-notes"
 const SETTINGS_KEY = "meeting-notes-settings"
 const AI_SETTINGS_KEY = "meeting-notes-ai-settings"
 const TEMPLATES_KEY = "meeting-notes-templates"
+
+const ALL_KEYS = [MEETINGS_KEY, SETTINGS_KEY, AI_SETTINGS_KEY, TEMPLATES_KEY]
+
+export async function hydrateFromVault(): Promise<void> {
+  await initDatabase()
+  for (const key of ALL_KEYS) {
+    try {
+      const value = await dbGet(key)
+      if (value !== null) {
+        localStorage.setItem(key, value)
+      }
+    } catch {
+      // key not in vault yet, use localStorage fallback
+    }
+  }
+}
+
+async function persist(key: string, value: string): Promise<void> {
+  await initDatabase()
+  await dbSet(key, value)
+}
+
+async function persistRemove(key: string): Promise<void> {
+  await initDatabase()
+  await dbRemove(key)
+}
+
+import type { Meeting, AppSettings, AISettings, MeetingTemplate, ChatMessage } from "@/types"
+import { DEFAULT_SETTINGS, DEFAULT_AI_SETTINGS } from "@/types"
 
 export function loadMeetings(): Meeting[] {
   try {
@@ -16,7 +44,9 @@ export function loadMeetings(): Meeting[] {
 }
 
 export function saveMeetings(meetings: Meeting[]): void {
-  localStorage.setItem(MEETINGS_KEY, JSON.stringify(meetings))
+  const raw = JSON.stringify(meetings)
+  localStorage.setItem(MEETINGS_KEY, raw)
+  persist(MEETINGS_KEY, raw)
 }
 
 export function updateMeeting(id: string, patch: Partial<Meeting>): Meeting[] {
@@ -36,6 +66,7 @@ export function deleteMeeting(id: string): Meeting[] {
 
 export function clearAllMeetings(): void {
   localStorage.removeItem(MEETINGS_KEY)
+  persistRemove(MEETINGS_KEY)
 }
 
 export function loadSettings(): AppSettings {
@@ -49,7 +80,9 @@ export function loadSettings(): AppSettings {
 }
 
 export function saveSettings(settings: AppSettings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings))
+  const raw = JSON.stringify(settings)
+  localStorage.setItem(SETTINGS_KEY, raw)
+  persist(SETTINGS_KEY, raw)
 }
 
 export function loadAISettings(): AISettings {
@@ -63,7 +96,9 @@ export function loadAISettings(): AISettings {
 }
 
 export function saveAISettings(settings: AISettings): void {
-  localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(settings))
+  const raw = JSON.stringify(settings)
+  localStorage.setItem(AI_SETTINGS_KEY, raw)
+  persist(AI_SETTINGS_KEY, raw)
 }
 
 const SECURE_API_KEY_KEY = "deepseek-api-key"
@@ -102,7 +137,9 @@ export function loadTemplates(): MeetingTemplate[] {
 }
 
 export function saveTemplates(templates: MeetingTemplate[]): void {
-  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates))
+  const raw = JSON.stringify(templates)
+  localStorage.setItem(TEMPLATES_KEY, raw)
+  persist(TEMPLATES_KEY, raw)
 }
 
 export function saveChatHistory(meetingId: string, messages: ChatMessage[]): void {

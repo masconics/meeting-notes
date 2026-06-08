@@ -184,7 +184,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "Failed to start recording"
       setError(msg)
     }
-  }, [mic, teardownListeners])
+  }, [settings.asrModel, settings.speechLang, teardownListeners])
 
   const stopRecording = useCallback(async () => {
     teardownListeners()
@@ -201,14 +201,15 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
 
       const finalTranscript = transcriptRef.current.trim()
       if (finalTranscript) {
-        const { generateNotes, isAIConfigured } = await import("@/lib/ai-service")
+        const { streamGenerateNotes, isAIConfigured } = await import("@/lib/ai-service")
         if (isAIConfigured()) {
           try {
-            const enhanced = await generateNotes(notesRef.current, finalTranscript, selectedTemplate?.sections)
-            setNotes((prev) => {
-              if (prev && enhanced) return prev + "\n\n---\n\n" + enhanced
-              return enhanced || prev
-            })
+            let streamed = ""
+            const gen = streamGenerateNotes(notesRef.current, finalTranscript, selectedTemplate?.sections)
+            for await (const chunk of gen) {
+              streamed += chunk
+              setNotes(streamed)
+            }
           } catch {
             // silently fail — AI enhancement is optional
           }

@@ -1,6 +1,5 @@
 import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { Textarea } from "@/components/ui/textarea"
 import { MarkdownView } from "@/components/markdown-view"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ArrowLeft01Icon } from "@hugeicons/core-free-icons"
@@ -65,18 +64,13 @@ export function StructuredNoteView({
               transition={{ duration: 0.2, ease: "easeInOut" }}
               className="overflow-hidden"
             >
-            {editable ? (
-              <Textarea
-                value={section.content}
-                onChange={(e) => updateSection(idx, e.target.value)}
-                className="min-h-20 text-sm"
-              />
-            ) : (
-              <MarkdownView
-                markdown={section.content}
-                className="text-sm bg-muted/60 rounded-2xl p-3"
-              />
-            )}
+            <MarkdownView
+              markdown={section.content}
+              editable={editable}
+              onChange={(value) => updateSection(idx, value)}
+              className="text-sm bg-muted/60 rounded-2xl p-3"
+              editorLabel={`Edit ${section.title}`}
+            />
             </motion.div>
           )}
           </AnimatePresence>

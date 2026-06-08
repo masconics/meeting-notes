@@ -3,7 +3,14 @@ import { motion, AnimatePresence } from "framer-motion"
 import { MeetingDashboard } from "@/components/meeting-dashboard"
 import { NoteEditor } from "@/components/note-editor"
 import { SettingsPage } from "@/components/settings-page"
-import { loadMeetings, saveMeetings, loadSettings, saveSettings, updateMeeting } from "@/lib/storage"
+import {
+  loadMeetings,
+  loadSettings,
+  saveMeetings,
+  saveSettings,
+  updateMeeting,
+  hydrateFromVault,
+} from "@/lib/storage"
 import { useTheme } from "@/lib/use-theme"
 import type { Meeting, AppSettings } from "@/types"
 
@@ -54,6 +61,13 @@ export function App() {
   const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useTheme(settings.theme)
+
+  useEffect(() => {
+    hydrateFromVault().then(() => {
+      setMeetings(loadMeetings())
+      setSettings(loadSettings())
+    }).catch(() => {})
+  }, [])
 
   useEffect(() => {
     viewRef.current = view
@@ -154,12 +168,22 @@ export function App() {
 
   const handleClearData = useCallback(() => setMeetings([]), [])
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { id: string }
+      const m = meetingsRef.current.find(m => m.id === detail.id)
+      if (m) { setEditorNote(m); navigate("editor", m.id) }
+    }
+    window.addEventListener("navigate-meeting", handler)
+    return () => window.removeEventListener("navigate-meeting", handler)
+  }, [navigate])
+
   return (
-    <div className="bg-background h-screen overflow-hidden">
+    <div className="h-screen overflow-hidden bg-muted/30">
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
           <motion.div key="dashboard" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-            <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8 h-screen overflow-y-auto">
+            <main className="h-screen overflow-y-auto">
               <MeetingDashboard
                 meetings={meetings}
                 pendingDelete={pendingDelete}
@@ -177,6 +201,7 @@ export function App() {
           <motion.div key={editorNote?.id || "new"} variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }} className="h-full">
             <NoteEditor
               note={editorNote}
+              meetings={meetings}
               onSave={handleSave}
               onCancel={goBack}
               onSettings={() => navigate("settings")}
@@ -186,7 +211,7 @@ export function App() {
         )}
         {view === "settings" && (
           <motion.div key="settings" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-            <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:px-6 lg:px-8 h-screen overflow-y-auto">
+            <main className="h-screen overflow-y-auto">
               <SettingsPage
                 onBack={goBack}
                 onClearData={handleClearData}

@@ -9,7 +9,33 @@ use log;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(
+            tauri_plugin_stronghold::Builder::new(|password| {
+                use sha2::{Sha256, Digest};
+                let salt = b"notes-app-vault-salt-v2";
+                let password_bytes: &[u8] = password.as_ref();
+                let mut input = Vec::from(password_bytes);
+                input.extend_from_slice(salt);
+                for _ in 0..100_000 {
+                    let mut hasher = Sha256::new();
+                    hasher.update(&input);
+                    input = hasher.finalize().to_vec();
+                }
+                let mut key = Vec::with_capacity(64);
+                key.extend_from_slice(&input);
+                key.extend_from_slice(&input);
+                key
+            })
+            .build(),
+        )
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

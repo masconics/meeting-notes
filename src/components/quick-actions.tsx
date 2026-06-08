@@ -19,12 +19,12 @@ import { getTemplateById } from "@/lib/templates"
 import type { Meeting, QuickAction } from "@/types"
 
 const QUICK_ACTIONS: QuickAction[] = [
-  { label: "Write follow-up email", icon: "Mail01Icon", prompt: "Write a concise, professional follow-up email based on this meeting." },
-  { label: "List action items", icon: "Task01Icon", prompt: "List all action items, to-dos, and commitments made during this meeting. Include owners if mentioned." },
-  { label: "What's their budget?", icon: "DollarCircleIcon", prompt: "What budget, pricing, or financial information was discussed?" },
-  { label: "List objections", icon: "AlertCircleIcon", prompt: "What objections, concerns, or risks were raised during this meeting?" },
-  { label: "Summarize decisions", icon: "NoteIcon", prompt: "Summarize key decisions and conclusions from this meeting." },
-  { label: "Generate next steps", icon: "ArrowRight01Icon", prompt: "Based on this meeting, what should the next steps be?" },
+  { label: "Write follow-up email", icon: "Mail01Icon", prompt: "Write a concise, professional follow-up email based on this meeting. Use markdown formatting." },
+  { label: "List action items", icon: "Task01Icon", prompt: "List all action items, to-dos, and commitments made during this meeting. Include owners if mentioned. Use markdown bullet points." },
+  { label: "What's their budget?", icon: "DollarCircleIcon", prompt: "What budget, pricing, or financial information was discussed? Use markdown with bullet points and bold for key numbers." },
+  { label: "List objections", icon: "AlertCircleIcon", prompt: "What objections, concerns, or risks were raised during this meeting? Use markdown bullet points with bold for key concerns." },
+  { label: "Summarize decisions", icon: "NoteIcon", prompt: "Summarize key decisions and conclusions from this meeting. Use markdown with headings and bullet points." },
+  { label: "Generate next steps", icon: "ArrowRight01Icon", prompt: "Based on this meeting, what should the next steps be? Use markdown — numbered list with bold for action owners." },
 ]
 
 const ICON_MAP: Record<string, IconSvgElement> = {

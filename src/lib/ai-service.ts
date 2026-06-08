@@ -9,7 +9,7 @@ async function getApiKey(): Promise<string> {
   return key
 }
 
-async function callDeepSeek(
+export async function callDeepSeek(
   messages: { role: string; content: string }[],
   opts: { stream?: boolean; thinking?: boolean } = {}
 ): Promise<string> {
@@ -118,9 +118,7 @@ export async function generateNotes(
 ): Promise<string> {
   const hasTemplate = templateSections && templateSections.length > 0
   const prompt = hasTemplate
-    ? `You are a professional meeting assistant. Take the raw notes and transcript below, and create clean, organized meeting notes.
-
-Return the notes directly in markdown format using the section headers below. Use bullet points (•) within each section. Be concise. Extract key facts, decisions, numbers, and action items. Do NOT invent information not present.
+    ? `You are a professional meeting assistant. Create clean, organized meeting notes from the raw notes and transcript below. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, and clear section structure.
 
 SECTIONS:
 ${templateSections!.map((s) => `## ${s}`).join("\n")}
@@ -130,9 +128,7 @@ ${transcript || "(none)"}
 
 RAW NOTES:
 ${rawNotes || "(none)"}`
-    : `You are a professional meeting assistant. Take the raw notes and transcript below, and create clean, organized meeting notes.
-
-Return the notes directly in markdown format with appropriate section headers (## Key Points, ## Decisions Made, ## Action Items, ## Next Steps, etc.). Use bullet points (•) within each section. Be concise. Extract key facts, decisions, numbers, and action items. Do NOT invent information not present. If there's very little content, just organize what is there clearly.
+    : `You are a professional meeting assistant. Create clean, organized meeting notes from the raw notes and transcript below. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, and clear section structure.
 
 TRANSCRIPT:
 ${transcript || "(none)"}
@@ -141,11 +137,92 @@ RAW NOTES:
 ${rawNotes || "(none)"}`
 
   const response = await callDeepSeek([
-    { role: "system", content: "You are a professional meeting notes organizer. You produce clean, well-formatted meeting notes in markdown." },
+    { role: "system", content: "You are a professional meeting notes organizer. Output clean, well-structured markdown with headings, bullet points, and bold for emphasis." },
     { role: "user", content: prompt },
   ], { thinking: true })
 
   return response.trim().replace(/^```(?:markdown)?\s*\n?/i, "").replace(/\n?```\s*$/, "")
+}
+
+export async function* streamGenerateNotes(
+  rawNotes: string,
+  transcript: string,
+  templateSections?: string[]
+): AsyncGenerator<string> {
+  const settings = loadAISettings()
+  const apiKey = await getApiKey()
+
+  const hasTemplate = templateSections && templateSections.length > 0
+  const prompt = hasTemplate
+    ? `You are a professional meeting assistant. Take the raw notes and transcript below, and create clean, organized meeting notes. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, and clear section structure.
+
+SECTIONS:
+${templateSections!.map((s) => `## ${s}`).join("\n")}
+
+TRANSCRIPT:
+${transcript || "(none)"}
+
+RAW NOTES:
+${rawNotes || "(none)"}`
+    : `You are a professional meeting assistant. Create clean, organized meeting notes from the raw notes and transcript below. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, and clear section structure.
+
+TRANSCRIPT:
+${transcript || "(none)"}
+
+RAW NOTES:
+${rawNotes || "(none)"}`
+
+  const res = await fetch(`${DEEPSEEK_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.model || "deepseek-v4-pro",
+      messages: [
+        { role: "system", content: "You are a professional meeting notes organizer. Output clean, well-structured markdown with headings, bullet points, and bold for emphasis." },
+        { role: "user", content: prompt },
+      ],
+      stream: true,
+      temperature: 0.3,
+      max_tokens: 4096,
+    }),
+  })
+
+  if (!res.ok) {
+    const body = await res.text()
+    if (res.status === 401) throw new Error("Invalid API key.")
+    throw new Error(`DeepSeek API error (${res.status}): ${body}`)
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) throw new Error("No response stream")
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() || ""
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue
+      const data = line.slice(6)
+      if (data === "[DONE]") continue
+      try {
+        const parsed = JSON.parse(data)
+        const delta = parsed.choices?.[0]?.delta?.content
+        if (delta) yield delta
+      } catch {
+        continue
+      }
+    }
+  }
 }
 
 export async function enhanceNotes(
@@ -170,7 +247,7 @@ ${transcript || "(none)"}
 
 Rules:
 - Fill every section listed above
-- Use bullet points (•) within each section's content
+- Use markdown formatting in each section's content (bullet points with -, bold with **, etc.)
 - Be concise. Extract key facts, decisions, numbers, and action items
 - If a section has no relevant info from the notes/transcript, write "No information captured"
 - Do NOT invent or hallucinate information not present in the notes or transcript`
@@ -235,7 +312,7 @@ ${sectionList}
 RELATED PAST MEETINGS:
 ${pastContext}
 
-Generate a pre-meeting brief with these sections (use bullet points):
+Generate a pre-meeting brief with these sections. Use markdown formatting — headings (###), bullet points (-), bold (**) for names and key terms:
 
 1. **Context from Past Meetings** — What was discussed before that relates to this meeting?
 2. **Key People & Terms** — Names, roles, and terminology that have come up
@@ -261,7 +338,7 @@ export async function executeQuickAction(
     ? structuredNotes.map((s) => `${s.title}:\n${s.content}`).join("\n\n")
     : ""
 
-  const system = `You are a professional meeting assistant. Answer concisely with actionable, specific information based only on the meeting data provided.`
+  const system = `You are a professional meeting assistant. Answer concisely with actionable, specific information based only on the meeting data provided. Use markdown formatting in your response — headings, bullet points, and bold for emphasis where appropriate.`
 
   const user = `${action.prompt}
 
@@ -294,7 +371,7 @@ export async function* streamChatResponse(
     ? structuredNotes.map((s) => `${s.title}:\n${s.content}`).join("\n\n")
     : ""
 
-  const systemMsg = `You are a helpful AI meeting assistant. You have access to the full meeting transcript, notes, and structured notes. Answer questions based on this context. Be concise and specific.
+  const systemMsg = `You are a helpful AI meeting assistant. You have access to the full meeting transcript, notes, and structured notes. Answer questions based on this context. Be concise and specific. Use markdown formatting in your responses — headings, bullet points, and bold for emphasis where appropriate.
 
 MEETING CONTEXT:
 Transcript: ${transcript || "(none)"}

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -42,7 +43,16 @@ import {
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { useMicrophonePermission } from "@/lib/use-permissions"
-import { loadSettings, saveSettings, clearAllMeetings, loadMeetings, loadAISettings, saveAISettings, loadApiKey, saveApiKey } from "@/lib/storage"
+import {
+  clearAllMeetings,
+  loadAISettings,
+  loadApiKey,
+  loadMeetings,
+  loadSettings,
+  saveAISettings,
+  saveApiKey,
+  saveSettings,
+} from "@/lib/storage"
 import { invoke } from "@tauri-apps/api/core"
 import { testConnection } from "@/lib/ai-service"
 import type { AppSettings, AISettings } from "@/types"
@@ -143,21 +153,23 @@ export function SettingsPage({
   }, [onClearData])
 
   return (
-    <div className="flex flex-col gap-6 w-full max-w-2xl mx-auto">
-      <div className="flex items-center gap-3">
+    <div className="app-page app-page-narrow">
+      <div className="app-page-header">
+        <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
         </Button>
         <div>
-          <h1 className="font-heading text-2xl font-medium">Settings</h1>
-          <p className="text-muted-foreground text-sm">Configure audio, meetings, and appearance</p>
+          <h1 className="app-page-title">Settings</h1>
+          <p className="app-page-description">Configure audio, AI, templates, and appearance</p>
+        </div>
         </div>
       </div>
 
       {mic.permission === "denied" && (
-        <Card className="border-destructive/30 bg-destructive/5">
+        <Card size="sm" className="border-destructive/30">
           <CardContent className="flex items-start gap-4 pt-4">
-            <div className="bg-destructive/15 inline-flex size-10 shrink-0 items-center justify-center rounded-full">
+            <div className="bg-destructive/10 inline-flex size-10 shrink-0 items-center justify-center rounded-2xl">
               <HugeiconsIcon icon={LockIcon} strokeWidth={2} className="size-5 text-destructive" />
             </div>
             <div className="flex flex-col gap-2 flex-1">
@@ -186,7 +198,7 @@ export function SettingsPage({
         </Card>
       )}
 
-      <Card>
+      <Card size="sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AccountSetting01Icon} strokeWidth={2} className="size-5" />
@@ -246,19 +258,19 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card size="sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
             Transcription
             {fluidLoaded ? (
-              <Badge variant="default" className="ml-auto gap-1"><span className="size-1.5 rounded-full bg-emerald-500" />Ready</Badge>
+              <Badge variant="default" className="ml-auto">Ready</Badge>
             ) : fluidReady ? (
-              <Badge variant="outline" className="ml-auto gap-1"><span className="size-1.5 rounded-full bg-amber-500 animate-pulse" />Setting up&hellip;</Badge>
+              <Badge variant="outline" className="ml-auto">Setting up&hellip;</Badge>
             ) : fluidReady === false ? (
               <Badge variant="destructive" className="ml-auto">Not installed</Badge>
             ) : (
-              <Badge variant="outline" className="ml-auto gap-1"><span className="size-1.5 rounded-full bg-muted-foreground animate-pulse" />Checking&hellip;</Badge>
+              <Badge variant="outline" className="ml-auto">Checking&hellip;</Badge>
             )}
           </CardTitle>
           <CardDescription>
@@ -312,10 +324,10 @@ export function SettingsPage({
           </div>
 
           {!fluidReady && fluidReady !== null && (
-            <div className="bg-muted rounded-2xl p-4 text-sm">
+            <div className="rounded-2xl bg-muted p-4 text-sm ring-1 ring-border/70">
               <p className="font-medium mb-2">Transcription engine not installed</p>
               <p className="text-muted-foreground mb-3">Build the engine from the source and place it in the app bundle:</p>
-              <div className="bg-background rounded-xl p-3 font-mono text-xs">
+              <div className="app-code-block">
                 cd fluid-sidecar<br />
                 swift build -c release<br />
                 cp .build/release/fluidasr ../src-tauri/binaries/fluidasr-aarch64-apple-darwin
@@ -325,7 +337,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card size="sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AiMagicIcon} strokeWidth={2} className="size-5" />
@@ -338,12 +350,11 @@ export function SettingsPage({
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium">API Key</label>
-            <input
+            <Input
               type="password"
               value={aiSettings.apiKey}
               onChange={(e) => updateAI({ apiKey: e.target.value })}
               placeholder="sk-..."
-              className="h-8 w-full min-w-0 rounded-2xl border border-transparent bg-input/50 px-2.5 py-1 text-sm transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
             />
             <p className="text-xs text-muted-foreground">
               Get your key at{" "}
@@ -388,12 +399,12 @@ export function SettingsPage({
               role="switch"
               aria-checked={aiSettings.enabled}
               onClick={() => updateAI({ enabled: !aiSettings.enabled })}
-              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-full transition-colors ${
-                aiSettings.enabled ? "bg-primary" : "bg-muted border border-border"
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                aiSettings.enabled ? "bg-primary" : "bg-muted"
               }`}
             >
               <span
-                className={`inline-block size-4 rounded-full bg-background shadow-sm transition-transform ${
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
                   aiSettings.enabled ? "translate-x-5" : "translate-x-1"
                 }`}
               />
@@ -417,10 +428,7 @@ export function SettingsPage({
               )}
             </Button>
             {connectionStatus === "success" && (
-              <Badge variant="secondary" className="gap-1">
-                <span className="size-1.5 rounded-full bg-emerald-500" />
-                Connected
-              </Badge>
+              <Badge variant="secondary">Connected</Badge>
             )}
             {connectionStatus === "failed" && (
               <Badge variant="destructive">Connection failed</Badge>
@@ -429,7 +437,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card size="sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AccountSetting01Icon} strokeWidth={2} className="size-5" />
@@ -440,12 +448,11 @@ export function SettingsPage({
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium">Title Prefix</label>
-            <input
+            <Input
               type="text"
               value={settings.titlePrefix}
               onChange={(e) => update({ titlePrefix: e.target.value })}
               placeholder="e.g. Weekly Standup, Sprint Review..."
-              className="h-8 w-full min-w-0 rounded-2xl border border-transparent bg-input/50 px-2.5 py-1 text-sm transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
             />
             <p className="text-xs text-muted-foreground">
               New meetings will use this as the default title if left blank.
@@ -454,7 +461,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card size="sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={CheckmarkBadge01Icon} strokeWidth={2} className="size-5" />
@@ -469,7 +476,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card size="sm">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={SunIcon} strokeWidth={2} className="size-5" />
@@ -502,7 +509,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card className="border-destructive/30">
+      <Card size="sm" className="border-destructive/30">
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={2} className="size-5" />
