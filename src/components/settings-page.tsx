@@ -45,7 +45,7 @@ import { useMicrophonePermission } from "@/lib/use-permissions"
 import { loadSettings, saveSettings, clearAllMeetings, loadMeetings, loadAISettings, saveAISettings } from "@/lib/storage"
 import { testConnection } from "@/lib/ai-service"
 import type { AppSettings, AISettings } from "@/types"
-import { SPEECH_LANGS, AI_MODELS } from "@/types"
+import { SPEECH_LANGS, AI_MODELS, ASR_ENGINES } from "@/types"
 import { TemplateEditor } from "@/components/template-editor"
 
 interface SettingsPageProps {
@@ -70,6 +70,9 @@ export function SettingsPage({
   const [whisperStatus, setWhisperStatus] = useState<{ binary: boolean; model: boolean; ready: boolean } | null>(null)
   const [whisperLoading, setWhisperLoading] = useState(false)
   const [downloadProgress, setDownloadProgress] = useState<{ downloaded: number; total: number } | null>(null)
+  const [moonshineReady, setMoonshineReady] = useState<boolean | null>(null)
+  const [moonshineLoading, setMoonshineLoading] = useState(false)
+  const [moonshineProgress, setMoonshineProgress] = useState<{ downloaded: number; total: number } | null>(null)
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
 
@@ -77,6 +80,7 @@ export function SettingsPage({
     setMeetingCount(loadMeetings().length)
     mic.check()
     checkWhisper()
+    checkMoonshine()
   }, [])
 
   useEffect(() => {
@@ -106,6 +110,47 @@ export function SettingsPage({
     }
   }, [])
 
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    ;(async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event")
+        unlisten = await listen<{ downloaded: number; total: number }>(
+          "moonshine-download-progress",
+          (e) => setMoonshineProgress(e.payload)
+        )
+      } catch {
+        // Not running under Tauri — no events.
+      }
+    })()
+    return () => {
+      if (unlisten) unlisten()
+    }
+  }, [])
+
+  async function checkMoonshine() {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core")
+      setMoonshineReady(await invoke<boolean>("check_moonshine_ready"))
+    } catch {
+      setMoonshineReady(null)
+    }
+  }
+
+  async function handleSetupMoonshine() {
+    setMoonshineLoading(true)
+    try {
+      const { invoke } = await import("@tauri-apps/api/core")
+      const ready = await invoke<boolean>("setup_moonshine")
+      setMoonshineReady(ready)
+    } catch {
+      setMoonshineReady(false)
+    } finally {
+      setMoonshineLoading(false)
+      setMoonshineProgress(null)
+    }
+  }
+
   async function checkWhisper() {
     try {
       const { invoke } = await import("@tauri-apps/api/core")
@@ -134,6 +179,12 @@ export function SettingsPage({
       setSettings((prev) => {
         const next = { ...prev, ...patch }
         saveSettings(next)
+        // Free the Moonshine sessions (~186MB) when switching off it.
+        if (prev.asrEngine === "moonshine" && next.asrEngine !== "moonshine") {
+          import("@tauri-apps/api/core")
+            .then(({ invoke }) => invoke("unload_moonshine"))
+            .catch(() => {})
+        }
         return next
       })
     },
@@ -294,6 +345,31 @@ export function SettingsPage({
               </SelectContent>
             </Select>
           </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium">Transcription Engine</label>
+            <Select
+              value={settings.asrEngine}
+              onValueChange={(v) => update({ asrEngine: v as AppSettings["asrEngine"] })}
+            >
+              <SelectTrigger>
+                <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
+                <SelectValue placeholder="Select engine..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {Object.entries(ASR_ENGINES).map(([key, name]) => (
+                    <SelectItem key={key} value={key}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">
+              Moonshine is lower-latency for live segments; Whisper is more accurate.
+            </p>
+          </div>
         </CardContent>
       </Card>
 
@@ -393,6 +469,80 @@ export function SettingsPage({
                 </div>
               )}
             </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
+            Moonshine Engine
+          </CardTitle>
+          <CardDescription>
+            Low-latency on-device transcription (Moonshine tiny, ONNX)
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm">Model (tiny ~186MB)</span>
+            {moonshineReady === null ? (
+              <Badge variant="outline">Unknown</Badge>
+            ) : moonshineReady ? (
+              <Badge variant="secondary">Installed</Badge>
+            ) : (
+              <Badge variant="outline">Needs download</Badge>
+            )}
+          </div>
+          {moonshineProgress && (
+            <div className="flex flex-col gap-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Downloading model…</span>
+                <span>
+                  {moonshineProgress.total > 0
+                    ? `${Math.round((moonshineProgress.downloaded / moonshineProgress.total) * 100)}% · ${(moonshineProgress.downloaded / 1048576).toFixed(0)} / ${(moonshineProgress.total / 1048576).toFixed(0)} MB`
+                    : `${(moonshineProgress.downloaded / 1048576).toFixed(0)} MB`}
+                </span>
+              </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="bg-primary h-full rounded-full transition-all duration-300"
+                  style={{
+                    width:
+                      moonshineProgress.total > 0
+                        ? `${Math.min(100, Math.round((moonshineProgress.downloaded / moonshineProgress.total) * 100))}%`
+                        : "100%",
+                  }}
+                />
+              </div>
+            </div>
+          )}
+          {moonshineReady ? (
+            <div className="flex items-center gap-2 pt-1">
+              <div className="size-2 rounded-full bg-emerald-500" />
+              <span className="text-xs text-muted-foreground">
+                Moonshine model is ready for on-device transcription.
+              </span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2 pt-1">
+              <p className="text-xs text-muted-foreground">
+                Download the Moonshine tiny model to use it for transcription.
+              </p>
+              <Button size="sm" onClick={handleSetupMoonshine} disabled={moonshineLoading}>
+                {moonshineLoading ? (
+                  <>
+                    <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                    {moonshineProgress ? "Downloading model…" : "Working…"}
+                  </>
+                ) : (
+                  <>
+                    <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
+                    Download Model
+                  </>
+                )}
+              </Button>
+            </div>
           )}
         </CardContent>
       </Card>

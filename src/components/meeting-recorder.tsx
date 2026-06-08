@@ -84,22 +84,60 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`
 }
 
-function AudioBars({ active }: { active: boolean }) {
+const BAR_COUNT = 9
+
+// Real-time level meter driven by the recording analyser. Reads the frequency
+// spectrum each animation frame and maps the speech-range bins onto BAR_COUNT
+// bars, so the bars actually move with the user's voice.
+function AudioBars({
+  active,
+  analyserRef,
+}: {
+  active: boolean
+  analyserRef: React.RefObject<AnalyserNode | null>
+}) {
+  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0))
+  const rafRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!active) {
+      setLevels(new Array(BAR_COUNT).fill(0))
+      return
+    }
+    // ~512 fftSize -> 256 bins. Speech energy lives in the low-mid bins, so we
+    // only sample the first ~72 (roughly up to a few kHz) and split into bars.
+    const USABLE_BINS = 72
+    const per = Math.floor(USABLE_BINS / BAR_COUNT)
+    const data = new Uint8Array(256)
+
+    const loop = () => {
+      const analyser = analyserRef.current
+      if (analyser) {
+        analyser.getByteFrequencyData(data)
+        const next: number[] = []
+        for (let b = 0; b < BAR_COUNT; b++) {
+          let sum = 0
+          for (let i = 0; i < per; i++) sum += data[b * per + i]
+          // Normalize 0..1, apply a gentle curve so quiet speech still shows.
+          next.push(Math.pow(sum / per / 255, 0.6))
+        }
+        setLevels(next)
+      }
+      rafRef.current = requestAnimationFrame(loop)
+    }
+    rafRef.current = requestAnimationFrame(loop)
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    }
+  }, [active, analyserRef])
+
   return (
     <div className="flex items-end justify-center gap-0.5 h-10" aria-hidden="true">
-      {Array.from({ length: 9 }).map((_, i) => (
+      {levels.map((lvl, i) => (
         <div
           key={i}
-          className="w-1 bg-primary rounded-full"
-          style={
-            active
-              ? {
-                  height: `${30 + Math.random() * 70}%`,
-                  animation: `audio-bar 0.${400 + i * 50}ms ease-in-out infinite alternate`,
-                  animationDelay: `${i * 80}ms`,
-                }
-              : { height: "16%" }
-          }
+          className="w-1 bg-primary rounded-full transition-[height] duration-75 ease-out"
+          style={{ height: active ? `${Math.max(8, Math.min(100, lvl * 130))}%` : "16%" }}
         />
       ))}
     </div>
@@ -146,6 +184,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const segmentTicksRef = useRef(0)
   const vadCtxRef = useRef<AudioContext | null>(null)
   const recordStreamRef = useRef<MediaStream | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
 
   const mic = useMicrophonePermission()
 
@@ -178,6 +217,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       mediaRecorderRef.current.stop()
     }
     mediaRecorderRef.current = null
+    analyserRef.current = null
     if (vadCtxRef.current && vadCtxRef.current.state !== "closed") {
       vadCtxRef.current.close()
     }
@@ -209,7 +249,8 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       await audioCtx.close()
 
       const { invoke } = await import("@tauri-apps/api/core")
-      const text: string = await invoke("transcribe_audio", {
+      const cmd = settings.asrEngine === "moonshine" ? "transcribe_audio_moonshine" : "transcribe_audio"
+      const text: string = await invoke(cmd, {
         audioData: wavBytes,
       })
 
@@ -217,13 +258,17 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
         transcriptAccRef.current += " " + text.trim()
         setTranscript(transcriptAccRef.current.trim())
       }
-    } catch {
-      // Silently continue
+    } catch (err) {
+      // Surface the failure instead of silently dropping the segment — a missing
+      // model or unregistered command otherwise looks like "nothing happens".
+      const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "Transcription failed"
+      console.error("transcribeBlob failed:", err)
+      setError(msg)
     } finally {
       processingRef.current = false
       setIsProcessingChunk(false)
     }
-  }, [])
+  }, [settings.asrEngine])
 
   const startRecording = useCallback(async () => {
     const permResult = await mic.request()
@@ -314,21 +359,18 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       highpass.type = "highpass"
       highpass.frequency.value = 85 // remove HVAC hum, desk thumps, DC offset
 
-      const lowshelf = audioCtx.createBiquadFilter()
-      lowshelf.type = "lowshelf"
-      lowshelf.frequency.value = 200
-      lowshelf.gain.value = -6 // tame low-end boom that muddies speech
-
       const analyser = audioCtx.createAnalyser()
       analyser.fftSize = 512
       analyser.smoothingTimeConstant = 0.3
+      analyserRef.current = analyser // drives the real-time level meter
 
       const dest = audioCtx.createMediaStreamDestination()
 
+      // Keep the chain minimal — just a rumble high-pass. The previous low-shelf
+      // de-emphasis attenuated speech formants and hurt ASR accuracy.
       source.connect(highpass)
-      highpass.connect(lowshelf)
-      lowshelf.connect(analyser)
-      lowshelf.connect(dest)
+      highpass.connect(analyser)
+      highpass.connect(dest)
 
       // Recorder records the filtered output, not the raw mic stream.
       recordStreamRef.current = dest.stream
@@ -720,7 +762,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             </Card>
           )}
 
-          <AudioBars active={recorderState === "recording"} />
+          <AudioBars active={recorderState === "recording"} analyserRef={analyserRef} />
 
           {error && (
             <div className="text-destructive text-sm font-medium" role="alert">
@@ -804,6 +846,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
                   setNotes((prev) => (prev ? prev + "\n" + text : text))
                 }
                 onOpenSettings={onSettings}
+                engine={settings.asrEngine}
               />
             </div>
             <Textarea

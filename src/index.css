@@ -129,8 +129,3 @@
     @apply font-sans;
     }
 }
-
-@keyframes audio-bar {
-  from { height: 10%; }
-  to { height: 100%; }
-}

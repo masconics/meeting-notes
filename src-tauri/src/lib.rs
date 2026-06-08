@@ -1,3 +1,4 @@
+mod moonshine;
 mod transcribe;
 
 #[tauri::command]
@@ -15,6 +16,10 @@ pub fn run() {
             transcribe::check_whisper_ready,
             transcribe::get_whisper_status,
             transcribe::setup_whisper,
+            moonshine::transcribe_audio_moonshine,
+            moonshine::check_moonshine_ready,
+            moonshine::setup_moonshine,
+            moonshine::unload_moonshine,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

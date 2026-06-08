@@ -55,12 +55,22 @@ export interface AISettings {
   enabled: boolean
 }
 
+export type AsrEngine = "whisper" | "moonshine"
+
 export interface AppSettings {
   audioSource: "mic" | "system"
   preferredDeviceId: string
   speechLang: string
   titlePrefix: string
   theme: "light" | "dark" | "system"
+  // On-device transcription engine. whisper = whisper.cpp small.en (accurate);
+  // moonshine = Moonshine tiny (lower latency, better for live segments).
+  asrEngine: AsrEngine
+}
+
+export const ASR_ENGINES: Record<AsrEngine, string> = {
+  whisper: "Whisper small.en — most accurate",
+  moonshine: "Moonshine tiny — fastest, low latency",
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
@@ -75,6 +85,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   speechLang: "en-US",
   titlePrefix: "",
   theme: "system",
+  asrEngine: "moonshine",
 }
 
 export const AI_MODELS: Record<string, string> = {

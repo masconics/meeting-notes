@@ -19,14 +19,16 @@ import {
 } from "@hugeicons/core-free-icons"
 import { useWhisper } from "@/lib/use-whisper"
 import { useCallback } from "react"
+import type { AsrEngine } from "@/types"
 
 interface WhisperModalProps {
   onTranscription: (text: string) => void
   onOpenSettings: () => void
+  engine?: AsrEngine
 }
 
-export function WhisperModal({ onTranscription, onOpenSettings }: WhisperModalProps) {
-  const whisper = useWhisper()
+export function WhisperModal({ onTranscription, onOpenSettings, engine = "whisper" }: WhisperModalProps) {
+  const whisper = useWhisper(engine)
 
   const handleOpen = useCallback((open: boolean) => {
     if (open) {
