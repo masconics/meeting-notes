@@ -20,6 +20,7 @@ pub fn run() {
             moonshine::check_moonshine_ready,
             moonshine::setup_moonshine,
             moonshine::unload_moonshine,
+            moonshine::moonshine_loaded,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

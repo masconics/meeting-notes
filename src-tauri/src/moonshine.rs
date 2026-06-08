@@ -417,6 +417,13 @@ pub async fn unload_moonshine() -> Result<(), String> {
     Ok(())
 }
 
+// Whether the Moonshine sessions are currently resident in memory. Used by
+// Settings to show the live memory state (loaded vs idle).
+#[tauri::command]
+pub async fn moonshine_loaded() -> Result<bool, String> {
+    Ok(engine_slot().lock().map(|g| g.is_some()).unwrap_or(false))
+}
+
 #[tauri::command]
 pub async fn setup_moonshine(app: AppHandle) -> Result<bool, String> {
     let dir = model_dir(&app);

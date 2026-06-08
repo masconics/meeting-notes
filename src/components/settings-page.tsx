@@ -73,6 +73,7 @@ export function SettingsPage({
   const [moonshineReady, setMoonshineReady] = useState<boolean | null>(null)
   const [moonshineLoading, setMoonshineLoading] = useState(false)
   const [moonshineProgress, setMoonshineProgress] = useState<{ downloaded: number; total: number } | null>(null)
+  const [moonshineLoaded, setMoonshineLoaded] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
 
@@ -81,6 +82,17 @@ export function SettingsPage({
     mic.check()
     checkWhisper()
     checkMoonshine()
+    // Poll the live in-memory state so the badge reflects load/unload that
+    // happens during recording elsewhere in the app.
+    const id = setInterval(async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core")
+        setMoonshineLoaded(await invoke<boolean>("moonshine_loaded"))
+      } catch {
+        // not under Tauri
+      }
+    }, 3000)
+    return () => clearInterval(id)
   }, [])
 
   useEffect(() => {
@@ -132,6 +144,7 @@ export function SettingsPage({
     try {
       const { invoke } = await import("@tauri-apps/api/core")
       setMoonshineReady(await invoke<boolean>("check_moonshine_ready"))
+      setMoonshineLoaded(await invoke<boolean>("moonshine_loaded"))
     } catch {
       setMoonshineReady(null)
     }
@@ -179,10 +192,12 @@ export function SettingsPage({
       setSettings((prev) => {
         const next = { ...prev, ...patch }
         saveSettings(next)
-        // Free the Moonshine sessions (~186MB) when switching off it.
+        // Free the Moonshine sessions (~186MB) when switching off it, so only
+        // the active engine ever stays resident.
         if (prev.asrEngine === "moonshine" && next.asrEngine !== "moonshine") {
           import("@tauri-apps/api/core")
             .then(({ invoke }) => invoke("unload_moonshine"))
+            .then(() => setMoonshineLoaded(false))
             .catch(() => {})
         }
         return next
@@ -378,9 +393,13 @@ export function SettingsPage({
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
             Whisper Engine
+            {settings.asrEngine === "whisper" && (
+              <Badge variant="default" className="ml-auto">Active</Badge>
+            )}
           </CardTitle>
           <CardDescription>
-            Local voice-to-text transcription powered by whisper.cpp
+            Local voice-to-text transcription powered by whisper.cpp. Runs per
+            segment as a subprocess — no model stays resident in memory.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -478,6 +497,9 @@ export function SettingsPage({
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
             Moonshine Engine
+            {settings.asrEngine === "moonshine" && (
+              <Badge variant="default" className="ml-auto">Active</Badge>
+            )}
           </CardTitle>
           <CardDescription>
             Low-latency on-device transcription (Moonshine tiny, ONNX)
@@ -492,6 +514,17 @@ export function SettingsPage({
               <Badge variant="secondary">Installed</Badge>
             ) : (
               <Badge variant="outline">Needs download</Badge>
+            )}
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-sm">Memory</span>
+            {moonshineLoaded ? (
+              <Badge variant="secondary" className="gap-1.5">
+                <span className="size-1.5 rounded-full bg-emerald-500" />
+                Loaded (~186MB)
+              </Badge>
+            ) : (
+              <Badge variant="outline">Idle (not in memory)</Badge>
             )}
           </div>
           {moonshineProgress && (
