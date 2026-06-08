@@ -177,6 +177,9 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const audioCtxRef = useRef<AudioContext | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const analyserPollerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const savedAudioDataRef = useRef<number[] | null>(null)
+  const recorderStateRef = useRef(recorderState)
+  recorderStateRef.current = recorderState
 
   const mic = useMicrophonePermission()
 
@@ -198,6 +201,10 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const cleanupRecording = useCallback(() => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop()
+      window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
+      import("@tauri-apps/api/event").then(({ emit }) =>
+        emit("recording-state", { recording: false }).catch(() => {})
+      )
     }
     mediaRecorderRef.current = null
     analyserRef.current = null
@@ -247,6 +254,15 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
         audio: { ...deviceConstraint, ...dspConstraints },
       })
       streamRef.current = stream
+
+      stream.getAudioTracks().forEach((track) => {
+        track.onended = () => {
+          if (mediaRecorderRef.current?.state === "recording") {
+            setError("Audio stream was interrupted. Your device may have been disconnected. Please check your audio device and try again.")
+            stopRecording()
+          }
+        }
+      })
 
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
         ? "audio/webm;codecs=opus"
@@ -300,11 +316,13 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             const decCtx = new AudioContext({ sampleRate: 16000 })
             const audioBuffer = await decCtx.decodeAudioData(arrayBuffer)
             const wavBuffer = createWav(audioBuffer)
+            const wavData = Array.from(new Uint8Array(wavBuffer))
             await decCtx.close()
 
+            savedAudioDataRef.current = wavData
             const { invoke } = await import("@tauri-apps/api/core")
             const text: string = await invoke("transcribe_audio_fluid", {
-              audioData: Array.from(new Uint8Array(wavBuffer)),
+              audioData: wavData,
             })
             setTranscript(text.trim())
           } catch (err) {
@@ -346,6 +364,10 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       }, 1000)
 
       setRecorderState("recording")
+      window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: true } }))
+      import("@tauri-apps/api/event").then(({ emit }) =>
+        emit("recording-state", { recording: true }).catch(() => {})
+      )
     } catch (err) {
       setError(
         err instanceof DOMException && err.name === "NotAllowedError"
@@ -358,8 +380,43 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop()
+      window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
+      import("@tauri-apps/api/event").then(({ emit }) =>
+        emit("recording-state", { recording: false }).catch(() => {})
+      )
     }
   }, [])
+
+  const retryTranscription = useCallback(async () => {
+    const wavData = savedAudioDataRef.current
+    if (!wavData) return
+    setIsTranscribing(true)
+    setError(null)
+    try {
+      const { invoke } = await import("@tauri-apps/api/core")
+      const text: string = await invoke("transcribe_audio_fluid", {
+        audioData: wavData,
+      })
+      setTranscript(text.trim())
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "Transcription failed"
+      setError(msg)
+    } finally {
+      setIsTranscribing(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    const handler = () => {
+      if (recorderStateRef.current === "recording") {
+        stopRecording()
+      } else if (recorderStateRef.current === "idle") {
+        startRecording()
+      }
+    }
+    window.addEventListener("toggle-recording", handler)
+    return () => window.removeEventListener("toggle-recording", handler)
+  }, [startRecording, stopRecording])
 
   const handleGenerateBrief = useCallback(async () => {
     setIsBriefLoading(true)
@@ -424,7 +481,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
                   </Badge>
                 </motion.div>
               )}
-              <Button variant="ghost" size="icon-sm" onClick={onSettings}>
+              <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
                 <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
               </Button>
               <Button variant="ghost" size="sm" onClick={onCancel}>
@@ -468,6 +525,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
           ) : (
             <>
           <Input
+            autoFocus
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="Meeting title..."
@@ -683,8 +741,14 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
           <AudioBars active={recorderState === "recording"} analyserRef={analyserRef} />
 
           {error && (
-            <div className="text-destructive text-sm font-medium" role="alert">
-              {error}
+            <div className="flex flex-col gap-2" role="alert">
+              <div className="text-destructive text-sm font-medium">{error}</div>
+              {savedAudioDataRef.current && !isTranscribing && (
+                <Button variant="outline" size="sm" onClick={retryTranscription} className="self-start">
+                  <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
+                  Retry Transcription
+                </Button>
+              )}
             </div>
           )}
 
@@ -692,7 +756,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             <div className="flex justify-center gap-2">
               <Button variant="outline" size="lg" onClick={handleGenerateBrief} disabled={isBriefLoading}>
                 <HugeiconsIcon icon={AiBrain01Icon} strokeWidth={2} data-icon="inline-start" />
-                {isBriefLoading ? "Generating..." : "Brief"}
+                {isBriefLoading ? "Generating..." : "Pre-Meeting Brief"}
               </Button>
               <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
               <Button size="lg" onClick={startRecording}>

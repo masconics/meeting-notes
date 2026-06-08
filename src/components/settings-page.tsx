@@ -42,7 +42,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { useMicrophonePermission } from "@/lib/use-permissions"
-import { loadSettings, saveSettings, clearAllMeetings, loadMeetings, loadAISettings, saveAISettings } from "@/lib/storage"
+import { loadSettings, saveSettings, clearAllMeetings, loadMeetings, loadAISettings, saveAISettings, loadApiKey, saveApiKey } from "@/lib/storage"
 import { testConnection } from "@/lib/ai-service"
 import type { AppSettings, AISettings } from "@/types"
 import { SPEECH_LANGS, AI_MODELS } from "@/types"
@@ -77,12 +77,14 @@ export function SettingsPage({
     setMeetingCount(loadMeetings().length)
     mic.check()
     checkFluid()
+    loadApiKey().then((key) => {
+      if (key) setAiSettings((prev) => ({ ...prev, apiKey: key }))
+    })
     const id = setInterval(async () => {
       try {
         const { invoke } = await import("@tauri-apps/api/core")
         setFluidLoaded(await invoke<boolean>("fluid_loaded"))
       } catch {
-        // not under Tauri
       }
     }, 3000)
     return () => clearInterval(id)
@@ -128,6 +130,7 @@ export function SettingsPage({
       setAiSettings((prev) => {
         const next = { ...prev, ...patch }
         saveAISettings(next)
+        if (patch.apiKey !== undefined) saveApiKey(patch.apiKey)
         return next
       })
     },
@@ -157,7 +160,7 @@ export function SettingsPage({
   return (
     <div className="flex flex-col gap-6 w-full max-w-2xl mx-auto">
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon-sm" onClick={onBack}>
+        <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
         </Button>
         <div>

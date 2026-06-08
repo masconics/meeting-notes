@@ -1,7 +1,13 @@
 import type { MeetingSection, ChatMessage, QuickAction, Meeting } from "@/types"
-import { loadAISettings } from "@/lib/storage"
+import { loadAISettings, loadApiKey } from "@/lib/storage"
 
 const DEEPSEEK_BASE = "https://api.deepseek.com"
+
+async function getApiKey(): Promise<string> {
+  const key = await loadApiKey()
+  if (!key) throw new Error("DeepSeek API key not configured. Set it in Settings.")
+  return key
+}
 
 async function callDeepSeek(
   messages: { role: string; content: string }[],
@@ -9,7 +15,7 @@ async function callDeepSeek(
 ): Promise<string> {
   const { stream = false, thinking = false } = opts
   const settings = loadAISettings()
-  if (!settings.apiKey) throw new Error("DeepSeek API key not configured. Set it in Settings.")
+  const apiKey = await getApiKey()
 
   const body: Record<string, unknown> = {
     model: settings.model || "deepseek-v4-pro",
@@ -70,11 +76,10 @@ async function callDeepSeek(
   return result
 }
 
-// True only when AI is enabled and an API key is present. UI uses this to gate
-// AI features instead of letting calls fail after the user acts.
+// True only when AI is enabled. API key presence is checked async on API calls.
 export function isAIConfigured(): boolean {
   const s = loadAISettings()
-  return s.enabled && !!s.apiKey.trim()
+  return s.enabled
 }
 
 export async function testConnection(): Promise<boolean> {
@@ -226,7 +231,7 @@ export async function* streamChatResponse(
   signal?: AbortSignal
 ): AsyncGenerator<string> {
   const settings = loadAISettings()
-  if (!settings.apiKey) throw new Error("DeepSeek API key not configured. Set it in Settings.")
+  const apiKey = await getApiKey()
 
   const sectionsContext = structuredNotes
     ? structuredNotes.map((s) => `${s.title}:\n${s.content}`).join("\n\n")
@@ -248,7 +253,7 @@ ${sectionsContext ? `Structured Notes:\n${sectionsContext}` : ""}`
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${settings.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: settings.model || "deepseek-v4-pro",

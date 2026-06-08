@@ -1,10 +1,12 @@
-import { useState, useCallback, useMemo } from "react"
+import { useState, useCallback, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
+import { Textarea } from "@/components/ui/textarea"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -21,14 +23,14 @@ import {
   Cancel01Icon,
   Add01Icon,
 } from "@hugeicons/core-free-icons"
-import type { Meeting } from "@/types"
+import type { Meeting, TranscriptSegment } from "@/types"
 import { cn } from "@/lib/utils"
 import { NoteEnhancer } from "@/components/note-enhancer"
 import { QuickActions } from "@/components/quick-actions"
 import { StructuredNoteView } from "@/components/structured-note-view"
 import { Input } from "@/components/ui/input"
 import { isAIConfigured } from "@/lib/ai-service"
-import { toMarkdown, toPlainText } from "@/lib/export"
+import { toMarkdown, toPlainText, saveToFile } from "@/lib/export"
 import { motion, AnimatePresence } from "framer-motion"
 
 function formatDate(iso: string): string {
@@ -92,6 +94,14 @@ export function MeetingDetailPage({
     setTimeout(() => setCopied(false), 2000)
   }, [viewing])
 
+  const saveMarkdown = useCallback(async () => {
+    await saveToFile(viewing, "md")
+  }, [viewing])
+
+  const saveText = useCallback(async () => {
+    await saveToFile(viewing, "txt")
+  }, [viewing])
+
   const SPEAKER_COLORS = [
     "bg-blue-500/20 text-blue-700 border-blue-500/30",
     "bg-amber-500/20 text-amber-700 border-amber-500/30",
@@ -101,11 +111,23 @@ export function MeetingDetailPage({
     "bg-cyan-500/20 text-cyan-700 border-cyan-500/30",
     "bg-orange-500/20 text-orange-700 border-orange-500/30",
     "bg-teal-500/20 text-teal-700 border-teal-500/30",
+    "bg-sky-500/20 text-sky-700 border-sky-500/30",
+    "bg-pink-500/20 text-pink-700 border-pink-500/30",
+    "bg-lime-500/20 text-lime-700 border-lime-500/30",
+    "bg-indigo-500/20 text-indigo-700 border-indigo-500/30",
+    "bg-fuchsia-500/20 text-fuchsia-700 border-fuchsia-500/30",
+    "bg-yellow-500/20 text-yellow-700 border-yellow-500/30",
+    "bg-green-500/20 text-green-700 border-green-500/30",
+    "bg-red-500/20 text-red-700 border-red-500/30",
   ]
 
   const [selectedSpeakerIndex, setSelectedSpeakerIndex] = useState<number | null>(null)
   const [isAddingSpeaker, setIsAddingSpeaker] = useState(false)
   const [newSpeakerName, setNewSpeakerName] = useState("")
+  const [editingSegmentIndex, setEditingSegmentIndex] = useState<number | null>(null)
+  const [editSegmentText, setEditSegmentText] = useState("")
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [editNotesText, setEditNotesText] = useState("")
 
   const speakerLabels = useMemo(() => viewing.speakerLabels ?? [], [viewing.speakerLabels])
 
@@ -154,10 +176,35 @@ export function MeetingDetailPage({
     update({ transcriptSegments: updated, speakerLabels })
   }
 
+  const handleSegmentDoubleClick = (segmentIndex: number, text: string) => {
+    setEditingSegmentIndex(segmentIndex)
+    setEditSegmentText(text)
+  }
+
+  const handleSegmentSave = (segmentIndex: number) => {
+    const currentSegments = viewing.transcriptSegments ?? displaySegments
+    const updated = currentSegments.map((seg, i) =>
+      i === segmentIndex ? { ...seg, text: editSegmentText.trim() } : seg
+    )
+    update({ transcriptSegments: updated, speakerLabels })
+    setEditingSegmentIndex(null)
+    setEditSegmentText("")
+  }
+
+  const handleNotesEditStart = () => {
+    setEditingNotes(true)
+    setEditNotesText(viewing.notes)
+  }
+
+  const handleNotesSave = () => {
+    update({ notes: editNotesText })
+    setEditingNotes(false)
+  }
+
   return (
     <div className="flex flex-col gap-6 w-full max-w-2xl mx-auto">
       <div className="flex items-center gap-3 shrink-0">
-        <Button variant="ghost" size="icon-sm" onClick={onBack}>
+        <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
         </Button>
         <div className="flex flex-col gap-0.5 min-w-0 flex-1">
@@ -180,7 +227,7 @@ export function MeetingDetailPage({
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon-sm">
+            <Button variant="ghost" size="icon-sm" title="Copy" aria-label="Copy meeting notes">
               <AnimatePresence mode="wait">
                 {copied ? (
                   <motion.div
@@ -213,9 +260,16 @@ export function MeetingDetailPage({
             <DropdownMenuItem onClick={copyPlainText}>
               Copy as Plain Text
             </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={saveMarkdown}>
+              Save as Markdown
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={saveText}>
+              Save as Text File
+            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Button variant="ghost" size="icon-sm" onClick={onSettings}>
+        <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
           <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
         </Button>
       </div>
@@ -318,24 +372,73 @@ export function MeetingDetailPage({
                 <div className="flex flex-col gap-0.5 bg-muted rounded-2xl p-3 max-h-80 overflow-y-auto">
                   {displaySegments.map((seg, i) => {
                     const speaker = seg.speakerIndex >= 0 ? speakerLabels[seg.speakerIndex] : null
+                    const isEditing = editingSegmentIndex === i
                     return (
                       <div
                         key={i}
-                        onClick={() => handleSegmentClick(i)}
                         className={cn(
-                          "text-sm px-3 py-1.5 rounded-xl transition-colors cursor-pointer leading-relaxed",
-                          speaker
-                            ? cn(speaker.color, "border")
-                            : "text-muted-foreground hover:bg-muted-foreground/10",
-                          selectedSpeakerIndex !== null && "hover:ring-1 hover:ring-ring/50"
+                          "text-sm px-3 py-1.5 rounded-xl transition-colors leading-relaxed group",
+                          !isEditing && "cursor-pointer",
+                          isEditing
+                            ? "bg-background ring-2 ring-ring"
+                            : speaker
+                              ? cn(speaker.color, "border")
+                              : "text-muted-foreground hover:bg-muted-foreground/10",
+                          selectedSpeakerIndex !== null && !isEditing && "hover:ring-1 hover:ring-ring/50"
                         )}
                       >
-                        {speaker && (
-                          <span className="text-[10px] font-semibold uppercase tracking-wide mr-2 opacity-70">
-                            {speaker.name}
-                          </span>
+                        {isEditing ? (
+                          <div className="flex flex-col gap-1.5">
+                            <textarea
+                              value={editSegmentText}
+                              onChange={(e) => setEditSegmentText(e.target.value)}
+                              className="w-full min-h-16 text-sm bg-transparent outline-none resize-none rounded-xl p-2 border border-border"
+                              autoFocus
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") {
+                                  setEditingSegmentIndex(null)
+                                  setEditSegmentText("")
+                                }
+                                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                  handleSegmentSave(i)
+                                }
+                              }}
+                            />
+                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => handleSegmentSave(i)}
+                              >
+                                Save
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => {
+                                  setEditingSegmentIndex(null)
+                                  setEditSegmentText("")
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                              <span className="ml-auto">Enter to save, Esc to cancel</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            onClick={() => handleSegmentClick(i)}
+                            onDoubleClick={() => handleSegmentDoubleClick(i, seg.text)}
+                            title="Double-click to edit"
+                          >
+                            {speaker && (
+                              <span className="text-[10px] font-semibold uppercase tracking-wide mr-2 opacity-70">
+                                {speaker.name}
+                              </span>
+                            )}
+                            <span>{seg.text}</span>
+                          </div>
                         )}
-                        <span>{seg.text}</span>
                       </div>
                     )
                   })}
@@ -346,10 +449,37 @@ export function MeetingDetailPage({
 
           {viewing.notes && (
             <section className="flex flex-col gap-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Raw Notes</h3>
-              <div className="text-sm text-foreground bg-muted rounded-2xl p-4 whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
-                {viewing.notes}
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Raw Notes</h3>
+                {!editingNotes && (
+                  <Button variant="ghost" size="sm" onClick={handleNotesEditStart}>
+                    Edit
+                  </Button>
+                )}
               </div>
+              {editingNotes ? (
+                <div className="flex flex-col gap-2">
+                  <Textarea
+                    value={editNotesText}
+                    onChange={(e) => setEditNotesText(e.target.value)}
+                    className="min-h-28 text-sm"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setEditingNotes(false)
+                      }
+                    }}
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" onClick={handleNotesSave}>Save</Button>
+                    <Button variant="outline" size="sm" onClick={() => setEditingNotes(false)}>Cancel</Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-foreground bg-muted rounded-2xl p-4 whitespace-pre-wrap max-h-60 overflow-y-auto leading-relaxed">
+                  {viewing.notes}
+                </div>
+              )}
             </section>
           )}
 

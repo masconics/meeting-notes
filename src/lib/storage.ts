@@ -66,6 +66,32 @@ export function saveAISettings(settings: AISettings): void {
   localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(settings))
 }
 
+const SECURE_API_KEY_KEY = "deepseek-api-key"
+
+async function getSecureStore() {
+  const { load } = await import("@tauri-apps/plugin-store")
+  return await load("meeting-notes-secure.json", { autoSave: true })
+}
+
+export async function saveApiKey(apiKey: string): Promise<void> {
+  try {
+    const store = await getSecureStore()
+    await store.set(SECURE_API_KEY_KEY, apiKey)
+  } catch {
+    localStorage.setItem(SECURE_API_KEY_KEY, apiKey)
+  }
+}
+
+export async function loadApiKey(): Promise<string> {
+  try {
+    const store = await getSecureStore()
+    const value = await store.get<string>(SECURE_API_KEY_KEY)
+    return value ?? ""
+  } catch {
+    return localStorage.getItem(SECURE_API_KEY_KEY) ?? ""
+  }
+}
+
 export function loadTemplates(): MeetingTemplate[] {
   try {
     const raw = localStorage.getItem(TEMPLATES_KEY)

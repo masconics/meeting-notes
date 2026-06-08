@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { motion } from "framer-motion"
@@ -15,8 +15,9 @@ import {
   Clock01Icon,
   AiMagicIcon,
 } from "@hugeicons/core-free-icons"
-import { streamChatResponse, isAIConfigured } from "@/lib/ai-service"
-import type { Meeting, ChatMessage } from "@/types"
+import { useChat } from "@/lib/use-chat"
+import { isAIConfigured } from "@/lib/ai-service"
+import type { Meeting } from "@/types"
 
 const SUGGESTED_QUESTIONS = [
   "What were the key decisions made?",
@@ -50,120 +51,34 @@ interface ChatPageProps {
 }
 
 export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => meeting.chatHistory || [])
-  const [input, setInput] = useState("")
-  const [streaming, setStreaming] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
-  const [showContext, setShowContext] = useState(true)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const {
+    messages,
+    input,
+    setInput,
+    streaming,
+    error,
+    copiedIdx,
+    scrollRef,
+    sendMessage,
+    stopStreaming,
+    retryLast,
+    copyMessage,
+    lastIsStreaming,
+  } = useChat(meeting, onUpdate)
+
   const inputRef = useRef<HTMLInputElement>(null)
-  const streamingRef = useRef("")
-  const abortRef = useRef<AbortController | null>(null)
   const configured = isAIConfigured()
-
-  const persistHistory = useCallback((msgs: ChatMessage[]) => {
-    setMessages(msgs)
-    onUpdate({ ...meeting, chatHistory: msgs })
-  }, [meeting, onUpdate])
-
-  const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || streaming) return
-
-    const userMsg: ChatMessage = {
-      role: "user",
-      content: text.trim(),
-      timestamp: new Date().toISOString(),
-    }
-    const base = [...messages, userMsg]
-    persistHistory(base)
-    setInput("")
-    setError(null)
-    setStreaming(true)
-    streamingRef.current = ""
-
-    const assistantMsg: ChatMessage = {
-      role: "assistant",
-      content: "",
-      timestamp: new Date().toISOString(),
-    }
-    setMessages([...base, assistantMsg])
-
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    try {
-      const gen = streamChatResponse(
-        base,
-        meeting.transcript,
-        meeting.notes,
-        meeting.structuredNotes,
-        controller.signal
-      )
-      for await (const chunk of gen) {
-        streamingRef.current += chunk
-        setMessages([...base, { ...assistantMsg, content: streamingRef.current }])
-      }
-      if (streamingRef.current.trim()) {
-        persistHistory([...base, { ...assistantMsg, content: streamingRef.current }])
-      } else {
-        persistHistory(base)
-      }
-    } catch (e) {
-      const aborted = e instanceof DOMException && e.name === "AbortError"
-      if (aborted && streamingRef.current.trim()) {
-        persistHistory([...base, { ...assistantMsg, content: streamingRef.current }])
-      } else {
-        persistHistory(base)
-        if (!aborted) setError(e instanceof Error ? e.message : "Chat failed")
-      }
-    } finally {
-      abortRef.current = null
-      setStreaming(false)
-    }
-  }, [messages, streaming, meeting, persistHistory])
-
-  const stopStreaming = useCallback(() => {
-    abortRef.current?.abort()
-  }, [])
-
-  const retryLast = useCallback(() => {
-    const lastUser = [...messages].reverse().find((m) => m.role === "user")
-    if (!lastUser) return
-    setMessages(messages.filter((m) => m !== lastUser))
-    sendMessage(lastUser.content)
-  }, [messages, sendMessage])
-
-  const copyMessage = useCallback(async (content: string, idx: number) => {
-    await navigator.clipboard.writeText(content)
-    setCopiedIdx(idx)
-    setTimeout(() => setCopiedIdx((c) => (c === idx ? null : c)), 2000)
-  }, [])
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
+  const [showContext, setShowContext] = useState(true)
 
   useEffect(() => {
     const t = setTimeout(() => inputRef.current?.focus(), 100)
     return () => clearTimeout(t)
   }, [])
 
-  useEffect(() => {
-    return () => {
-      abortRef.current?.abort()
-    }
-  }, [])
-
-  const lastIsStreaming =
-    messages.length > 0 && messages[messages.length - 1].role === "assistant" && streaming
-
   return (
     <div className="flex flex-col gap-4 w-full max-w-2xl mx-auto h-[calc(100vh-6rem)]">
       <div className="flex items-center gap-3 shrink-0">
-        <Button variant="ghost" size="icon-sm" onClick={onBack}>
+        <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
         </Button>
         <div className="flex flex-col gap-0.5 min-w-0 flex-1">
@@ -183,7 +98,7 @@ export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProp
             </span>
           </div>
         </div>
-        <Button variant="ghost" size="icon-sm" onClick={onSettings}>
+        <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
           <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
         </Button>
       </div>
@@ -360,7 +275,8 @@ export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProp
                   <button
                     className="shrink-0 inline-flex items-center justify-center size-8 text-destructive hover:bg-destructive/10 disabled:opacity-50"
                     onClick={stopStreaming}
-                    disabled={false}
+                    title="Stop generating"
+                    aria-label="Stop generating"
                   >
                     <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
                   </button>
@@ -369,6 +285,8 @@ export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProp
                     className="shrink-0 inline-flex items-center justify-center size-8 text-primary hover:bg-primary/10 disabled:opacity-30"
                     onClick={() => sendMessage(input)}
                     disabled={!input.trim()}
+                    title="Send message"
+                    aria-label="Send message"
                   >
                     <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
                   </button>
@@ -381,3 +299,4 @@ export function ChatPage({ meeting, onBack, onSettings, onUpdate }: ChatPageProp
     </div>
   )
 }
+

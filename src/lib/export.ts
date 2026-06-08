@@ -83,3 +83,36 @@ export function toPlainText(meeting: Meeting): string {
 
   return parts.join("\n")
 }
+
+export async function saveToFile(meeting: Meeting, format: "md" | "txt"): Promise<boolean> {
+  const content = format === "md" ? toMarkdown(meeting) : toPlainText(meeting)
+  const ext = format === "md" ? ".md" : ".txt"
+  const filename = `${meeting.title.replace(/[^a-zA-Z0-9\s-]/g, "").slice(0, 50)}${ext}`
+
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog")
+    const filePath = await save({
+      defaultPath: filename,
+      filters: [{
+        name: format === "md" ? "Markdown" : "Text",
+        extensions: [format],
+      }],
+    })
+    if (!filePath) return false
+
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs")
+    await writeTextFile(filePath, content)
+    return true
+  } catch {
+    const blob = new Blob([content], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    return true
+  }
+}

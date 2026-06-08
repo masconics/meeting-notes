@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useEffect, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import {
@@ -19,8 +19,9 @@ import {
   Settings02Icon,
   AlertCircleIcon,
 } from "@hugeicons/core-free-icons"
-import { streamChatResponse, isAIConfigured } from "@/lib/ai-service"
-import type { Meeting, ChatMessage } from "@/types"
+import { useChat } from "@/lib/use-chat"
+import { isAIConfigured } from "@/lib/ai-service"
+import type { Meeting } from "@/types"
 
 const SUGGESTED_QUESTIONS = [
   "What were the key decisions made?",
@@ -46,107 +47,24 @@ export function AIChatPanel({
   onUpdate,
   onOpenSettings,
 }: AIChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>(() => meeting.chatHistory || [])
-  const [input, setInput] = useState("")
-  const [streaming, setStreaming] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [copiedIdx, setCopiedIdx] = useState<number | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const {
+    messages,
+    input,
+    setInput,
+    streaming,
+    error,
+    copiedIdx,
+    scrollRef,
+    sendMessage,
+    stopStreaming,
+    retryLast,
+    copyMessage,
+    lastIsStreaming,
+  } = useChat(meeting, onUpdate)
+
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  const streamingRef = useRef("")
-  const abortRef = useRef<AbortController | null>(null)
   const configured = isAIConfigured()
 
-  const persistHistory = useCallback((msgs: ChatMessage[]) => {
-    setMessages(msgs)
-    onUpdate({ ...meeting, chatHistory: msgs })
-  }, [meeting, onUpdate])
-
-  const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || streaming) return
-
-    const userMsg: ChatMessage = {
-      role: "user",
-      content: text.trim(),
-      timestamp: new Date().toISOString(),
-    }
-    // Base history for this turn — used to roll back cleanly on error.
-    const base = [...messages, userMsg]
-    persistHistory(base)
-    setInput("")
-    setError(null)
-    setStreaming(true)
-    streamingRef.current = ""
-
-    const assistantMsg: ChatMessage = {
-      role: "assistant",
-      content: "",
-      timestamp: new Date().toISOString(),
-    }
-    setMessages([...base, assistantMsg])
-
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    try {
-      const gen = streamChatResponse(
-        base,
-        meeting.transcript,
-        meeting.notes,
-        meeting.structuredNotes,
-        controller.signal
-      )
-      for await (const chunk of gen) {
-        streamingRef.current += chunk
-        setMessages([...base, { ...assistantMsg, content: streamingRef.current }])
-      }
-      // Keep whatever streamed (full or stopped-early), as long as non-empty.
-      if (streamingRef.current.trim()) {
-        persistHistory([...base, { ...assistantMsg, content: streamingRef.current }])
-      } else {
-        persistHistory(base)
-      }
-    } catch (e) {
-      const aborted = e instanceof DOMException && e.name === "AbortError"
-      if (aborted && streamingRef.current.trim()) {
-        // User stopped — keep the partial answer.
-        persistHistory([...base, { ...assistantMsg, content: streamingRef.current }])
-      } else {
-        // Drop the empty assistant bubble; keep the user message + offer retry.
-        persistHistory(base)
-        if (!aborted) setError(e instanceof Error ? e.message : "Chat failed")
-      }
-    } finally {
-      abortRef.current = null
-      setStreaming(false)
-    }
-  }, [messages, streaming, meeting, persistHistory])
-
-  const stopStreaming = useCallback(() => {
-    abortRef.current?.abort()
-  }, [])
-
-  const retryLast = useCallback(() => {
-    // Re-send the last user message (it is still the tail after a failed turn).
-    const lastUser = [...messages].reverse().find((m) => m.role === "user")
-    if (!lastUser) return
-    setMessages(messages.filter((m) => m !== lastUser))
-    sendMessage(lastUser.content)
-  }, [messages, sendMessage])
-
-  const copyMessage = useCallback(async (content: string, idx: number) => {
-    await navigator.clipboard.writeText(content)
-    setCopiedIdx(idx)
-    setTimeout(() => setCopiedIdx((c) => (c === idx ? null : c)), 2000)
-  }, [])
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
-  }, [messages])
-
-  // Focus the composer when the panel opens.
   useEffect(() => {
     if (open && configured) {
       const t = setTimeout(() => inputRef.current?.focus(), 50)
@@ -154,13 +72,9 @@ export function AIChatPanel({
     }
   }, [open, configured])
 
-  // Abort any in-flight stream if the dialog is closed mid-response.
   useEffect(() => {
-    if (!open) abortRef.current?.abort()
-  }, [open])
-
-  const lastIsStreaming =
-    messages.length > 0 && messages[messages.length - 1].role === "assistant" && streaming
+    if (!open) stopStreaming()
+  }, [open, stopStreaming])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -174,7 +88,7 @@ export function AIChatPanel({
               </DialogTitle>
               <DialogDescription className="truncate">{meeting.title}</DialogDescription>
             </div>
-            <Button variant="ghost" size="icon-sm" onClick={() => onOpenChange(false)}>
+            <Button variant="ghost" size="icon-sm" onClick={() => onOpenChange(false)} title="Close" aria-label="Close">
               <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
             </Button>
           </div>
@@ -291,7 +205,7 @@ export function AIChatPanel({
                 }}
               />
               {streaming ? (
-                <Button size="icon" variant="destructive" onClick={stopStreaming} title="Stop">
+                <Button size="icon" variant="destructive" onClick={stopStreaming} title="Stop generating" aria-label="Stop generating">
                   <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
                 </Button>
               ) : (
@@ -299,7 +213,8 @@ export function AIChatPanel({
                   size="icon"
                   onClick={() => sendMessage(input)}
                   disabled={!input.trim()}
-                  title="Send"
+                  title="Send message"
+                  aria-label="Send message"
                 >
                   <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
                 </Button>
