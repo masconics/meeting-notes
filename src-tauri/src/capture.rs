@@ -9,12 +9,13 @@ use tauri::{AppHandle, Emitter};
 use log;
 
 const TARGET_SR: u32 = 16000;
-const RMS_SPEECH_THRESHOLD: f32 = 0.012;
-const SILENCE_FLUSH_SECS: f32 = 0.6;
-const MAX_SEGMENT_SECS: f32 = 8.0;
-const MIN_SEGMENT_SECS: f32 = 0.4;
-const LEADING_SILENCE_CAP_SECS: f32 = 2.0;
+const VAD_FRAME_SAMPLES: u32 = 4096;
+const VAD_FRAME_SECS: f32 = VAD_FRAME_SAMPLES as f32 / TARGET_SR as f32;
+const MIN_SPEECH_SECS: f32 = 0.15;
+const MIN_SILENCE_SECS: f32 = 0.75;
+const MAX_SEGMENT_SECS: f32 = 14.0;
 const PARAGRAPH_SILENCE_SECS: f32 = 2.5;
+const SPEECH_PADDING_SECS: f32 = 0.1;
 
 #[derive(Clone, Serialize)]
 struct TranscriptSegment {
@@ -360,11 +361,11 @@ async fn run_processor(
     });
 
     let mut seg: Vec<f32> = Vec::new();
-    let mut silence_samples: usize = 0;
     let mut had_speech = false;
+    let mut speech_start_frame: usize = 0;
     let mut flush_count: usize = 0;
     let mut loop_iter: usize = 0;
-    let mut post_flush_silence_samples: usize = 0;
+    let mut post_flush_silence_frames: usize = 0;
     let mut pending_break = false;
 
     loop {
@@ -390,15 +391,6 @@ async fn run_processor(
             continue;
         }
 
-        if loop_iter % 50 == 1 {
-            let silence_secs = silence_samples as f32 / rate as f32;
-            let seg_secs = seg.len() as f32 / rate as f32;
-            log::debug!(
-                "loop #{loop_iter}: chunk={} samples, seg={:.1}s, silence={:.1}s, had_speech={}, rate={}",
-                chunk.len(), seg_secs, silence_secs, had_speech, rate
-            );
-        }
-
         if !chunk.is_empty() {
             let window_samples = ((rate as f32) * 0.1) as usize;
             let win = window_samples.max(1);
@@ -406,66 +398,100 @@ async fn run_processor(
             for window in chunk.chunks(win) {
                 let r = rms(window);
                 let _ = app.emit("audio-level", AudioLevel { rms: r });
-
-                if r > RMS_SPEECH_THRESHOLD {
-                    if !had_speech {
-                        let gap_secs = post_flush_silence_samples as f32 / rate as f32;
-                        if gap_secs >= PARAGRAPH_SILENCE_SECS {
-                            pending_break = true;
-                        }
-                    }
-                    had_speech = true;
-                    silence_samples = 0;
-                    post_flush_silence_samples = 0;
-                } else {
-                    silence_samples += window.len();
-                    post_flush_silence_samples += window.len();
-                }
-                seg.extend_from_slice(window);
             }
+            seg.extend_from_slice(&chunk);
         }
 
-        let silence_secs = silence_samples as f32 / rate as f32;
+        let seg_16k = if rate != TARGET_SR {
+            resample(&seg, rate, TARGET_SR)
+        } else {
+            seg.clone()
+        };
+
+        if seg_16k.len() < VAD_FRAME_SAMPLES as usize {
+            if stopping {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+
+        let frames = match fluid::vad_process_samples(&seg_16k).await {
+            Ok(f) => f,
+            Err(e) => {
+                log::error!("VAD error: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
+
+        let frame_count = frames.len();
+        let trailing_silence = frames.iter().rev().take_while(|f| !f.is_voice_active).count();
+        let in_speech = trailing_silence < frame_count;
+
+        if in_speech {
+            if !had_speech {
+                let gap_frames = post_flush_silence_frames;
+                let gap_secs = gap_frames as f32 * VAD_FRAME_SECS;
+                if gap_secs >= PARAGRAPH_SILENCE_SECS {
+                    pending_break = true;
+                }
+                speech_start_frame = frames.iter().position(|f| f.is_voice_active).unwrap_or(0);
+                had_speech = true;
+            }
+            post_flush_silence_frames = 0;
+        } else if had_speech {
+            post_flush_silence_frames = trailing_silence;
+        }
+
         let seg_secs = seg.len() as f32 / rate as f32;
+        let silence_secs = trailing_silence as f32 * VAD_FRAME_SECS;
 
         let should_flush = had_speech
-            && seg_secs >= MIN_SEGMENT_SECS
-            && (silence_secs >= SILENCE_FLUSH_SECS || seg_secs >= MAX_SEGMENT_SECS);
+            && seg_secs >= MIN_SPEECH_SECS
+            && (silence_secs >= MIN_SILENCE_SECS || seg_secs >= MAX_SEGMENT_SECS);
 
-        if had_speech && loop_iter % 10 == 0 {
+        if loop_iter % 10 == 0 {
             log::debug!(
-                "vad check #{loop_iter}: seg={:.1}s, silence={:.1}s, should_flush={}",
-                seg_secs, silence_secs, should_flush
+                "vad #{loop_iter}: seg={:.1}s, frames={}, trailing_silence={} frames ({:.1}s), in_speech={}, should_flush={}",
+                seg_secs, frame_count, trailing_silence, silence_secs, in_speech, should_flush
             );
         }
 
-        if should_flush || (stopping && had_speech && seg_secs >= MIN_SEGMENT_SECS) {
-            let samples_16k = if rate != TARGET_SR {
-                resample(&seg, rate, TARGET_SR)
+        if should_flush || (stopping && had_speech && seg_secs >= MIN_SPEECH_SECS) {
+            let speech_end_frame = if trailing_silence >= (MIN_SILENCE_SECS / VAD_FRAME_SECS) as usize {
+                frame_count.saturating_sub(trailing_silence)
             } else {
-                seg.clone()
+                frame_count
             };
+
+            let pad_frames = (SPEECH_PADDING_SECS / VAD_FRAME_SECS).ceil() as usize;
+            let start_f = speech_start_frame.saturating_sub(pad_frames);
+            let end_f = (speech_end_frame + pad_frames).min(frame_count);
+            let start_16k = start_f * VAD_FRAME_SAMPLES as usize;
+            let end_16k = (end_f * VAD_FRAME_SAMPLES as usize).min(seg_16k.len());
+            let speech_16k = seg_16k[start_16k..end_16k].to_vec();
+
             let has_break = pending_break;
             pending_break = false;
             log::debug!(
-                "flush segment #{}: {:.1}s ({} samples @16k){}",
+                "flush #{}: {:.1}s native, {} 16k samples (frames {}-{}/{}){}",
                 flush_count + 1,
                 seg_secs,
-                samples_16k.len(),
+                speech_16k.len(),
+                start_f, end_f, frame_count,
                 if stopping { " [final]" } else { "" }
             );
+
             seg.clear();
-            silence_samples = 0;
             had_speech = false;
+            post_flush_silence_frames = 0;
             flush_count += 1;
 
-            match tx.send((samples_16k, language.clone(), model.clone(), has_break)).await {
+            match tx.send((speech_16k, language.clone(), model.clone(), has_break)).await {
                 Ok(()) => log::debug!("sent segment #{flush_count} to consumer channel"),
                 Err(e) => log::error!("FAILED to send segment #{flush_count} to channel: {e}"),
             }
-        } else if !had_speech && seg_secs > LEADING_SILENCE_CAP_SECS {
-            seg.clear();
-            silence_samples = 0;
         }
 
         if stopping {

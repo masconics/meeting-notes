@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use fluidaudio_rs::FluidAudio;
+use fluidaudio_rs::{FluidAudio, VadFrame};
 use tauri::AppHandle;
 use tokio::sync::Mutex;
 use log;
@@ -23,6 +23,8 @@ async fn get_or_init() -> Result<(), String> {
     );
     audio.init_asr().map_err(|e| format!("init ASR: {}", e))?;
     log::info!("fluidaudio ASR ready");
+    audio.init_vad(0.85).map_err(|e| format!("init VAD: {}", e))?;
+    log::info!("fluidaudio VAD ready");
     *guard = Some(audio);
     Ok(())
 }
@@ -143,4 +145,10 @@ pub async fn transcribe_samples(samples: &[f32], _language: &str, _model: &str) 
         .transcribe_samples(samples)
         .map_err(|e| format!("transcription: {}", e))?;
     Ok(result.text)
+}
+
+pub async fn vad_process_samples(samples: &[f32]) -> Result<Vec<VadFrame>, String> {
+    let guard = slot().lock().await;
+    let audio = guard.as_ref().ok_or("VAD not initialized")?;
+    audio.vad_process_samples(samples).map_err(|e| format!("VAD: {}", e))
 }
