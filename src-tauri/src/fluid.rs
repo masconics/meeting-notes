@@ -1,202 +1,132 @@
-use std::path::PathBuf;
 use std::sync::OnceLock;
-use std::time::Duration;
 
-use tauri::{AppHandle, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use std::process::Stdio;
-use tokio::process::{Child, Command};
+use fluidaudio_rs::FluidAudio;
+use tauri::AppHandle;
 use tokio::sync::Mutex;
 use log;
 
-const REQUEST_TIMEOUT_SECS: u64 = 30;
-
-struct Sidecar {
-    child: Child,
-    stdin: tokio::process::ChildStdin,
-    stdout: BufReader<tokio::process::ChildStdout>,
-}
-
-impl Drop for Sidecar {
-    fn drop(&mut self) {
-        log::debug!("sidecar dropped, killing child");
-        let _ = self.child.start_kill();
-    }
-}
-
-fn slot() -> &'static Mutex<Option<Sidecar>> {
-    static S: OnceLock<Mutex<Option<Sidecar>>> = OnceLock::new();
+fn slot() -> &'static Mutex<Option<FluidAudio>> {
+    static S: OnceLock<Mutex<Option<FluidAudio>>> = OnceLock::new();
     S.get_or_init(|| Mutex::new(None))
 }
 
-fn binary_path(app: &AppHandle) -> PathBuf {
-    if let Ok(p) = std::env::var("FLUID_SIDECAR_BIN") {
-        let pb = PathBuf::from(&p);
-        if std::fs::metadata(&pb).map(|m| m.len() > 1000).unwrap_or(false) {
-            return pb;
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let bundled = dir.join("fluidasr");
-            if std::fs::metadata(&bundled).map(|m| m.len() > 1000).unwrap_or(false) {
-                return bundled;
-            }
-        }
-    }
-    let base = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("meeting-notes"));
-    base.join("fluidasr")
-}
-
-fn binary_present(app: &AppHandle) -> bool {
-    std::fs::metadata(binary_path(app))
-        .map(|m| m.len() > 1000)
-        .unwrap_or(false)
-}
-
-async fn spawn_sidecar(app: &AppHandle, sensevoice: bool) -> Result<Sidecar, String> {
-    let bin = binary_path(app);
-    log::debug!("spawning sidecar: {} {}", bin.display(), if sensevoice { "--sensevoice" } else { "" });
-    let mut cmd = Command::new(&bin);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    if sensevoice {
-        cmd.arg("--sensevoice");
-    }
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("spawn {}: {}", bin.display(), e))?;
-    let stdin = child.stdin.take().ok_or("no stdin")?;
-    let mut stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
-
-    let ready = tokio::time::timeout(Duration::from_secs(300), async {
-        loop {
-            let mut line = String::new();
-            let n = stdout
-                .read_line(&mut line)
-                .await
-                .map_err(|e| format!("read READY: {}", e))?;
-            if n == 0 {
-                return Err("sidecar exited before READY".into());
-            }
-            let line = line.trim();
-            if line == "READY" {
-                return Ok(());
-            }
-            if let Some(msg) = line.strip_prefix("FATAL\t") {
-                return Err(format!("sidecar fatal: {}", msg));
-            }
-        }
-    })
-    .await;
-
-    match ready {
-        Ok(Ok(())) => {
-            log::debug!("sidecar ready");
-            Ok(Sidecar {
-                child,
-                stdin,
-                stdout,
-            })
-        }
-        Ok(Err(e)) => {
-            log::error!("sidecar failed to start: {e}");
-            Err(e)
-        }
-        Err(_) => {
-            let _ = child.start_kill();
-            Err("sidecar did not become ready within 300s".into())
-        }
-    }
-}
-
-async fn request(sc: &mut Sidecar, wav_path: &str, language: &str) -> Result<String, String> {
-    let msg = if language.is_empty() {
-        format!("{}\n", wav_path)
-    } else {
-        format!("{}\t{}\n", language, wav_path)
-    };
-    log::debug!("request: sending {}", msg.trim());
-    sc.stdin
-        .write_all(msg.as_bytes())
-        .await
-        .map_err(|e| format!("write req: {}", e))?;
-    sc.stdin
-        .flush()
-        .await
-        .map_err(|e| format!("flush: {}", e))?;
-
-    log::debug!("request: waiting for response...");
-    let mut line = String::new();
-    let read_result = tokio::time::timeout(
-        Duration::from_secs(REQUEST_TIMEOUT_SECS),
-        sc.stdout.read_line(&mut line),
-    )
-    .await;
-
-    match read_result {
-        Ok(Ok(n)) => {
-            if n == 0 {
-                log::debug!("request: sidecar closed (n=0)");
-                return Err("sidecar closed".into());
-            }
-            let line = line.trim_end_matches(['\r', '\n']);
-            log::debug!("request: got response: {:?}", line);
-            if let Some(text) = line.strip_prefix("OK\t") {
-                Ok(text.to_string())
-            } else if let Some(msg) = line.strip_prefix("ERR\t") {
-                Err(format!("transcription error: {}", msg))
-            } else {
-                Err(format!("unexpected response: {}", line))
-            }
-        }
-        Ok(Err(e)) => {
-            log::error!("request: read error: {e}");
-            Err(format!("read resp: {}", e))
-        }
-        Err(_) => {
-            log::debug!("request: timed out");
-            Err("sidecar request timed out".into())
-        }
-    }
-}
-
-pub async fn prewarm_fluid(app: &AppHandle, sensevoice: bool) {
-    if !binary_present(app) { return; }
+async fn get_or_init() -> Result<(), String> {
     let mut guard = slot().lock().await;
-    if guard.is_some() { return; }
-    log::debug!("prewarming sidecar (sensevoice={})", sensevoice);
-    match spawn_sidecar(app, sensevoice).await {
-        Ok(s) => { *guard = Some(s); }
-        Err(e) => { log::error!("prewarm failed: {e}"); }
+    if guard.is_some() {
+        return Ok(());
+    }
+    let audio = FluidAudio::new().map_err(|e| format!("fluidaudio: {}", e))?;
+    log::info!(
+        "fluidaudio-rs initialized on {} ({})",
+        audio.system_info().chip_name,
+        audio.system_info().platform
+    );
+    audio.init_asr().map_err(|e| format!("init ASR: {}", e))?;
+    log::info!("fluidaudio ASR ready");
+    *guard = Some(audio);
+    Ok(())
+}
+
+fn parse_wav_to_samples(wav: &[u8]) -> Result<(Vec<f32>, u32), String> {
+    if wav.len() < 44 || &wav[0..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
+        return Err("invalid WAV header".into());
+    }
+    let sample_rate = u32::from_le_bytes([wav[24], wav[25], wav[26], wav[27]]);
+    let bits_per_sample = u16::from_le_bytes([wav[34], wav[35]]);
+    let data_size = u32::from_le_bytes([wav[40], wav[41], wav[42], wav[43]]) as usize;
+    let data_start = 44usize;
+
+    if data_start + data_size > wav.len() {
+        return Err("WAV data size mismatch".into());
+    }
+
+    let sample_count = data_size / (bits_per_sample as usize / 8);
+    let mut samples = Vec::with_capacity(sample_count);
+
+    match bits_per_sample {
+        16 => {
+            for i in (0..data_size).step_by(2) {
+                let byte_idx = data_start + i;
+                let v = i16::from_le_bytes([wav[byte_idx], wav[byte_idx + 1]]);
+                samples.push(v as f32 / 32768.0);
+            }
+        }
+        32 => {
+            for i in (0..data_size).step_by(4) {
+                let byte_idx = data_start + i;
+                let v = f32::from_le_bytes([wav[byte_idx], wav[byte_idx + 1], wav[byte_idx + 2], wav[byte_idx + 3]]);
+                samples.push(v);
+            }
+        }
+        _ => return Err(format!("unsupported bits per sample: {}", bits_per_sample)),
+    }
+
+    Ok((samples, sample_rate))
+}
+
+fn resample_to_16k(input: &[f32], src: u32) -> Vec<f32> {
+    let dst: u32 = 16000;
+    if src == dst || input.is_empty() {
+        return input.to_vec();
+    }
+    let ratio = dst as f64 / src as f64;
+    let out_len = ((input.len() as f64) * ratio).round() as usize;
+    let mut out = Vec::with_capacity(out_len);
+    let last = input.len() - 1;
+    for i in 0..out_len {
+        let pos = i as f64 / ratio;
+        let idx = pos.floor() as usize;
+        let frac = (pos - idx as f64) as f32;
+        let a = input[idx.min(last)];
+        let b = input[(idx + 1).min(last)];
+        out.push(a + (b - a) * frac);
+    }
+    out
+}
+
+#[tauri::command]
+pub async fn transcribe_audio_fluid(
+    _app: AppHandle,
+    audio_data: Vec<u8>,
+    _language: Option<String>,
+    _model: Option<String>,
+) -> Result<String, String> {
+    let guard = slot().lock().await;
+    let audio = guard.as_ref().ok_or("ASR not initialized. Run setup_fluid first.")?;
+
+    let (samples, src_rate) = parse_wav_to_samples(&audio_data)?;
+    let samples_16k = resample_to_16k(&samples, src_rate);
+
+    let result = audio
+        .transcribe_samples(&samples_16k)
+        .map_err(|e| format!("transcription: {}", e))?;
+
+    Ok(result.text)
+}
+
+#[tauri::command]
+pub async fn check_fluid_ready(_app: AppHandle) -> Result<bool, String> {
+    let guard = slot().lock().await;
+    if let Some(audio) = guard.as_ref() {
+        return Ok(audio.is_apple_silicon());
+    }
+    match FluidAudio::new() {
+        Ok(audio) => Ok(audio.is_apple_silicon()),
+        Err(_) => Ok(false),
     }
 }
 
 #[tauri::command]
-pub async fn check_fluid_ready(app: AppHandle) -> Result<bool, String> {
-    Ok(binary_present(&app))
-}
-
-#[tauri::command]
-pub async fn setup_fluid(app: AppHandle) -> Result<bool, String> {
-    if !binary_present(&app) {
-        return Err("Parakeet (Core ML) sidecar binary not installed.".into());
-    }
-    let mut guard = slot().lock().await;
-    if guard.is_none() {
-        *guard = Some(spawn_sidecar(&app, false).await?);
-    }
-    Ok(true)
+pub async fn setup_fluid(_app: AppHandle) -> Result<bool, String> {
+    get_or_init().await.map(|_| true)
 }
 
 #[tauri::command]
 pub async fn unload_fluid() -> Result<(), String> {
     let mut guard = slot().lock().await;
-    *guard = None;
+    if let Some(audio) = guard.take() {
+        audio.cleanup();
+    }
     Ok(())
 }
 
@@ -206,62 +136,11 @@ pub async fn fluid_loaded() -> Result<bool, String> {
     Ok(guard.is_some())
 }
 
-#[tauri::command]
-pub async fn transcribe_audio_fluid(
-    app: AppHandle,
-    audio_data: Vec<u8>,
-    language: Option<String>,
-    model: Option<String>,
-) -> Result<String, String> {
-    if !binary_present(&app) {
-        return Err("ASR sidecar not installed.".into());
-    }
-    let dir = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("meeting-notes"));
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| format!("create dir: {}", e))?;
-    let tmp = tempfile::Builder::new()
-        .prefix("fluid-")
-        .suffix(".wav")
-        .tempfile_in(&dir)
-        .map_err(|e| format!("temp file: {}", e))?;
-    let path = tmp
-        .into_temp_path()
-        .keep()
-        .map_err(|e| format!("persist temp: {}", e))?;
-    tokio::fs::write(&path, &audio_data)
-        .await
-        .map_err(|e| format!("write wav: {}", e))?;
-
-    let sensevoice = model.as_deref() == Some("sensevoice");
-    let lang = language.as_deref().unwrap_or("");
-    let path_str = path.to_string_lossy().to_string();
-    log::debug!("transcribe_audio_fluid: wav={}, size={} bytes, lang={}, model={}", path_str, audio_data.len(), if lang.is_empty() { "auto" } else { lang }, if sensevoice { "sensevoice" } else { "parakeet" });
-    let result = {
-        let mut guard = slot().lock().await;
-        if guard.is_none() {
-            log::debug!("no sidecar in slot, spawning...");
-            *guard = Some(spawn_sidecar(&app, sensevoice).await?);
-        }
-        match request(guard.as_mut().unwrap(), &path_str, lang).await {
-            Ok(t) => {
-                log::debug!("sidecar responded OK ({} chars)", t.len());
-                Ok(t)
-            }
-            Err(e) => {
-                log::error!("sidecar request failed: {e}, respawning...");
-                *guard = Some(spawn_sidecar(&app, sensevoice).await?);
-                log::debug!("sidecar respawned, retrying request...");
-                let r = request(guard.as_mut().unwrap(), &path_str, lang).await;
-                log::debug!("retry result: {:?}", r.as_ref().map(|s| s.len()));
-                r
-            }
-        }
-    };
-
-    let _ = tokio::fs::remove_file(&path).await;
-    result
+pub async fn transcribe_samples(samples: &[f32], _language: &str, _model: &str) -> Result<String, String> {
+    let guard = slot().lock().await;
+    let audio = guard.as_ref().ok_or("ASR not initialized")?;
+    let result = audio
+        .transcribe_samples(samples)
+        .map_err(|e| format!("transcription: {}", e))?;
+    Ok(result.text)
 }

@@ -21,7 +21,6 @@ import {
   StopIcon,
   PlayListAddIcon,
   Mic01Icon,
-  HeadsetIcon,
   Settings02Icon,
   FileCheckIcon,
   ArrowDown01Icon,
@@ -105,6 +104,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const [audioLevel, setAudioLevel] = useState(0)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const unlistenRef = useRef<Array<() => void>>([])
+  const speakingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const transcriptRef = useRef("")
   const notesRef = useRef(notes); notesRef.current = notes
   const recorderStateRef = useRef(recorderState)
@@ -120,6 +120,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     setSelectedDevice,
     audioSource,
     setAudioSource,
+    getDeviceLabel,
   } = useAudioDevices()
 
   useEffect(() => {
@@ -135,6 +136,10 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     if (timerRef.current) {
       clearInterval(timerRef.current)
       timerRef.current = null
+    }
+    if (speakingDebounceRef.current) {
+      clearTimeout(speakingDebounceRef.current)
+      speakingDebounceRef.current = null
     }
   }, [])
 
@@ -163,14 +168,25 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       const unLevel = await listen<{ rms: number }>("audio-level", (e) => {
         const rms = e.payload.rms
         setAudioLevel(rms)
-        setIsSpeaking(rms > 0.012)
+        if (rms > 0.012) {
+          if (speakingDebounceRef.current) {
+            clearTimeout(speakingDebounceRef.current)
+            speakingDebounceRef.current = null
+          }
+          setIsSpeaking(true)
+        } else if (!speakingDebounceRef.current) {
+          speakingDebounceRef.current = setTimeout(() => {
+            setIsSpeaking(false)
+            speakingDebounceRef.current = null
+          }, 80)
+        }
       })
       const unErr = await listen<{ text: string }>("capture-error", (e) => {
         setError(`Transcription: ${e.payload.text}`)
       })
       unlistenRef.current = [unTranscript, unLevel, unErr]
 
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, deviceId: settings.preferredDeviceId !== "default" ? getDeviceLabel(settings.preferredDeviceId) : null })
 
       timerRef.current = setInterval(() => {
         setDuration((d) => d + 1)
@@ -453,7 +469,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             onClick={() => setShowOptions(!showOptions)}
           >
             <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} className="size-3.5" />
-            {selectedTemplate ? `${selectedTemplate.name} · ` : ""}{audioSource === "mic" ? "Microphone" : "System Audio"}
+            {selectedTemplate ? `${selectedTemplate.name} · ` : ""}Microphone
             {devices.length > 0 ? ` · ${devices.find((d) => d.deviceId === selectedDevice)?.label || "Default"}` : ""}
             <HugeiconsIcon icon={showOptions ? ArrowUp01Icon : ArrowDown01Icon} strokeWidth={1.5} className="size-3 ml-auto" />
           </button>
@@ -479,11 +495,8 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
               <div className="flex flex-col gap-1.5">
                 <label className="text-xs font-medium text-muted-foreground">Audio Source</label>
                 <div className="flex gap-2">
-                  <Button variant={audioSource === "mic" ? "default" : "outline"} size="sm" onClick={() => setAudioSource("mic")} className="flex-1">
-                    <HugeiconsIcon icon={Mic01Icon} strokeWidth={2} data-icon="inline-start" />Mic
-                  </Button>
-                  <Button variant={audioSource === "system" ? "default" : "outline"} size="sm" onClick={() => setAudioSource("system")} className="flex-1">
-                    <HugeiconsIcon icon={HeadsetIcon} strokeWidth={2} data-icon="inline-start" />System
+                  <Button variant="default" size="sm" className="flex-1" disabled>
+                    <HugeiconsIcon icon={Mic01Icon} strokeWidth={2} data-icon="inline-start" />Microphone
                   </Button>
                 </div>
               </div>

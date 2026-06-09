@@ -79,5 +79,6 @@ export function useAudioDevices() {
     requestStream,
     stopStream,
     enumerate,
+    getDeviceLabel: (deviceId: string) => devices.find(d => d.deviceId === deviceId)?.label ?? null,
   }
 }

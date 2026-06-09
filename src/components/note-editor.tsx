@@ -142,9 +142,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const isPausedRef = useRef(false)
   const enhancedNotesRef = useRef<string>("")
   const previousNotesRef = useRef<string>("")
+  const preRecordNotesRef = useRef<string>("")
+  const speakingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const chatHistoryRef = useRef<ChatMessage[]>(note?.chatHistory ?? [])
 
-  const { devices, selectedDevice, setSelectedDevice, audioSource, setAudioSource } = useAudioDevices()
+  const { devices, selectedDevice, setSelectedDevice, audioSource, setAudioSource, getDeviceLabel } = useAudioDevices()
 
   useEffect(() => {
     if (settings.audioSource) setAudioSource(settings.audioSource)
@@ -198,6 +200,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     unlistenRef.current = []
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
     if (silenceTimerRef.current) { clearInterval(silenceTimerRef.current); silenceTimerRef.current = null }
+    if (speakingDebounceRef.current) { clearTimeout(speakingDebounceRef.current); speakingDebounceRef.current = null }
   }, [])
 
   const startRecording = useCallback(async () => {
@@ -207,6 +210,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setSilenceSeconds(0)
     setIsPaused(false)
     isPausedRef.current = false
+    preRecordNotesRef.current = notesRef.current
 
     try {
       const unTranscript = await listen<{ text: string; hasBreak?: boolean }>("transcript-segment", (e) => {
@@ -222,15 +226,26 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         const rms = e.payload.rms
         setAudioLevel(rms)
         const speaking = rms > 0.012
-        setIsSpeaking(speaking)
-        if (speaking) setSilenceSeconds(0)
+        if (speaking) {
+          if (speakingDebounceRef.current) {
+            clearTimeout(speakingDebounceRef.current)
+            speakingDebounceRef.current = null
+          }
+          setIsSpeaking(true)
+          setSilenceSeconds(0)
+        } else if (!speakingDebounceRef.current) {
+          speakingDebounceRef.current = setTimeout(() => {
+            setIsSpeaking(false)
+            speakingDebounceRef.current = null
+          }, 80)
+        }
       })
       const unErr = await listen<{ text: string }>("capture-error", (e) => {
         setError(`Transcription: ${e.payload.text}`)
       })
       unlistenRef.current = [unTranscript, unLevel, unErr]
 
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, deviceId: settings.preferredDeviceId !== "default" ? getDeviceLabel(settings.preferredDeviceId) : null })
 
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
       silenceTimerRef.current = setInterval(() => {
@@ -267,8 +282,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const resumeRecording = useCallback(async () => {
     setIsPaused(false)
     isPausedRef.current = false
+    preRecordNotesRef.current = notesRef.current
     try {
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, deviceId: settings.preferredDeviceId === "default" ? null : getDeviceLabel(settings.preferredDeviceId) })
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
       silenceTimerRef.current = setInterval(() => {
         setSilenceSeconds(s => {
@@ -327,6 +343,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
       const content = notesRef.current.trim()
       if (content) {
+        const preRecord = preRecordNotesRef.current.trim()
+        const newTranscript = preRecord ? content.slice(preRecord.length).trim() : content
         setRawTranscript(content)
         previousNotesRef.current = notesRef.current
 
@@ -334,8 +352,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         if (isAIConfigured()) {
           try {
             setIsStreaming(true)
-            let streamed = ""
-            const gen = streamGenerateNotes(content, content, selectedTemplate?.sections)
+            let streamed = preRecord || ""
+            const gen = streamGenerateNotes(preRecord, newTranscript, selectedTemplate?.sections)
             for await (const chunk of gen) {
               streamed += chunk
               setNotes(streamed)
@@ -347,16 +365,17 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             const defaultTitle = titleRef.current.trim() === "" || titleRef.current === settings.titlePrefix
             if (defaultTitle) {
               const { generateTitle } = await import("@/lib/ai-service")
-              const autoTitle = await generateTitle(content, content)
+              const autoTitle = await generateTitle(newTranscript, preRecord)
               if (autoTitle) setTitle(autoTitle)
             }
           } catch { /* ignore title generation failure during auto-enhance */ }
         }
-        autoDetectSpeakers(content)
+        autoDetectSpeakers(newTranscript)
       }
     } finally {
       setIsTranscribing(false)
     }
+    preRecordNotesRef.current = ""
     window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
     emit("recording-state", { recording: false }).catch((e) => logError(String(e)))
   }, [teardownListeners, selectedTemplate, settings.titlePrefix])
@@ -372,7 +391,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       const sections = selectedTemplate?.sections
       setIsStreaming(true)
       let streamed = ""
-      const gen = streamGenerateNotes(content, content, sections)
+      const gen = streamGenerateNotes("", content, sections)
       for await (const chunk of gen) {
         streamed += chunk
         setNotes(streamed)
@@ -874,15 +893,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 >
                   <HugeiconsIcon icon={MicIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />Mic
                 </button>
-                <button
-                  className="app-control-item"
-                  data-active={audioSource === "system"}
-                  onClick={() => setAudioSource("system")}
-                >
-                  <HugeiconsIcon icon={ComputerIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />System
-                </button>
               </div>
-              {devices.length > 1 && (
+              {devices.length > 0 && (
                 <Select value={selectedDevice} onValueChange={setSelectedDevice}>
                   <SelectTrigger className="h-8 max-w-[160px] rounded-2xl border-border bg-background text-sm text-muted-foreground">
                     <SelectValue />

@@ -1,17 +1,3 @@
-// Continuous on-device transcription, fully in Rust.
-//
-// cpal captures the default input device on a dedicated thread (the CoreAudio
-// `Stream` is !Send, so it must live on the thread that built it). The audio
-// callback downmixes to mono f32 and pushes into a shared buffer. A separate
-// async processor drains that buffer, runs a coarse RMS voice-activity check,
-// and flushes each speech segment (on a pause, or after a max length) to the
-// Parakeet sidecar via `fluid::transcribe_audio_fluid`. Each finished segment
-// is emitted to the frontend as a `transcript-segment` event; the processor
-// also emits `audio-level` for the level meter.
-//
-// Note: on macOS cpal can only capture *input* devices (the mic). Capturing
-// system output audio needs ScreenCaptureKit and is out of scope here.
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -23,13 +9,12 @@ use tauri::{AppHandle, Emitter};
 use log;
 
 const TARGET_SR: u32 = 16000;
-// VAD / segmentation tuning.
-const RMS_SPEECH_THRESHOLD: f32 = 0.012; // above this, a chunk counts as speech
-const SILENCE_FLUSH_SECS: f32 = 0.6; // trailing silence that ends a segment
-const MAX_SEGMENT_SECS: f32 = 8.0; // force a flush so output stays live during long speech
-const MIN_SEGMENT_SECS: f32 = 0.4; // ignore blips shorter than this
-const LEADING_SILENCE_CAP_SECS: f32 = 2.0; // drop buffered silence before speech
-const PARAGRAPH_SILENCE_SECS: f32 = 2.5; // silence gap that triggers a paragraph break
+const RMS_SPEECH_THRESHOLD: f32 = 0.012;
+const SILENCE_FLUSH_SECS: f32 = 0.6;
+const MAX_SEGMENT_SECS: f32 = 8.0;
+const MIN_SEGMENT_SECS: f32 = 0.4;
+const LEADING_SILENCE_CAP_SECS: f32 = 2.0;
+const PARAGRAPH_SILENCE_SECS: f32 = 2.5;
 
 #[derive(Clone, Serialize)]
 struct TranscriptSegment {
@@ -63,7 +48,7 @@ fn slot() -> &'static Mutex<Option<Capture>> {
 }
 
 #[tauri::command]
-pub async fn start_continuous(app: AppHandle, language: Option<String>, model: Option<String>) -> Result<(), String> {
+pub async fn start_continuous(app: AppHandle, language: Option<String>, model: Option<String>, device_id: Option<String>) -> Result<(), String> {
     log::debug!("start_continuous called");
     let mut guard = slot().lock().map_err(|_| "lock poisoned".to_string())?;
     if guard.is_some() {
@@ -76,12 +61,13 @@ pub async fn start_continuous(app: AppHandle, language: Option<String>, model: O
     let src_rate = Arc::new(Mutex::new(0u32));
 
     let app2 = app.clone();
+    let device_id_val = device_id.unwrap_or_default();
     let thread = {
         let stop = stop.clone();
         let shared = shared.clone();
         let src_rate = src_rate.clone();
         std::thread::spawn(move || {
-            if let Err(e) = run_capture(app2, stop, shared, src_rate) {
+            if let Err(e) = run_capture(app2, stop, shared, src_rate, &device_id_val) {
                 log::error!("[capture] error: {e}");
             }
         })
@@ -95,11 +81,6 @@ pub async fn start_continuous(app: AppHandle, language: Option<String>, model: O
         let lang = language.unwrap_or_default();
         let mdl = model.unwrap_or_default();
         log::debug!("spawning run_processor task (lang={}, model={})", if lang.is_empty() { "auto" } else { &lang }, if mdl.is_empty() { "default" } else { &mdl });
-        let sensevoice = mdl == "sensevoice";
-        let app2 = app.clone();
-        tauri::async_runtime::spawn(async move {
-            fluid::prewarm_fluid(&app2, sensevoice).await;
-        });
         tauri::async_runtime::spawn(async move {
             run_processor(app, stop, shared, src_rate, lang, mdl).await;
         });
@@ -116,23 +97,127 @@ pub async fn start_continuous(app: AppHandle, language: Option<String>, model: O
 #[tauri::command]
 pub async fn stop_continuous() -> Result<(), String> {
     let mut guard = slot().lock().map_err(|_| "lock poisoned".to_string())?;
-    *guard = None; // Drop sets the stop flag and joins the capture thread
+    *guard = None;
     Ok(())
 }
 
-// Owns the cpal stream for its whole lifetime and parks until asked to stop.
-// Reports stream setup success/failure back to the caller via `ready_tx`.
+fn test_slot() -> &'static Mutex<Option<Capture>> {
+    static S: OnceLock<Mutex<Option<Capture>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
+#[tauri::command]
+pub async fn start_mic_test(app: AppHandle, device_id: Option<String>) -> Result<(), String> {
+    let mut guard = test_slot().lock().map_err(|_| "lock poisoned")?;
+    if guard.is_some() {
+        return Ok(());
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let device_id_val = device_id.unwrap_or_default();
+
+    let app2 = app.clone();
+    let thread = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = run_mic_test(app2, stop, &device_id_val) {
+                log::error!("[mic-test] error: {e}");
+            }
+        })
+    };
+
+    *guard = Some(Capture { stop, thread: Some(thread) });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_mic_test() -> Result<(), String> {
+    let mut guard = test_slot().lock().map_err(|_| "lock poisoned")?;
+    *guard = None;
+    Ok(())
+}
+
+fn run_mic_test(app: AppHandle, stop: Arc<AtomicBool>, device_id: &str) -> Result<(), String> {
+    let host = cpal::default_host();
+    let device = if !device_id.is_empty() {
+        host.devices()
+            .map_err(|e| format!("enumerate: {e}"))?
+            .find(|d| d.name().map(|n| n == device_id).unwrap_or(false))
+            .ok_or_else(|| format!("device not found: {device_id}"))?
+    } else {
+        host.default_input_device().ok_or("no default input device")?
+    };
+
+    let config = device.default_input_config().map_err(|e| format!("config: {e}"))?;
+    let name = device.name().unwrap_or_else(|_| "<unknown>".into());
+    let channels = config.channels() as usize;
+    let sample_format = config.sample_format();
+    log::info!("[mic-test] device='{name}' ch={channels}");
+
+    let err_fn = |e| log::error!("[mic-test] stream error: {e}");
+    let stream_config: cpal::StreamConfig = config.into();
+
+    let stream = match sample_format {
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            &stream_config,
+            move |data: &[f32], _: &_| {
+                let r = rms_mono(data, channels);
+                let _ = app.emit("audio-level", AudioLevel { rms: r });
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            &stream_config,
+            move |data: &[i16], _: &_| {
+                let r = rms_mono_i16(data, channels);
+                let _ = app.emit("audio-level", AudioLevel { rms: r });
+            },
+            err_fn,
+            None,
+        ),
+        cpal::SampleFormat::U16 => device.build_input_stream(
+            &stream_config,
+            move |data: &[u16], _: &_| {
+                let r = rms_mono_u16(data, channels);
+                let _ = app.emit("audio-level", AudioLevel { rms: r });
+            },
+            err_fn,
+            None,
+        ),
+        other => return Err(format!("unsupported format: {other:?}")),
+    }
+    .map_err(|e| format!("build stream: {e}"))?;
+
+    stream.play().map_err(|e| format!("play: {e}"))?;
+    log::debug!("[mic-test] streaming started");
+
+    while !stop.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(stream);
+    log::debug!("[mic-test] streaming stopped");
+    Ok(())
+}
+
 fn run_capture(
     app: AppHandle,
     stop: Arc<AtomicBool>,
     shared: Arc<Mutex<Vec<f32>>>,
     src_rate: Arc<Mutex<u32>>,
+    device_id: &str,
 ) -> Result<(), String> {
     let build = || -> Result<cpal::Stream, String> {
         let host = cpal::default_host();
-        let device = host
-            .default_input_device()
-            .ok_or("no default input device")?;
+        let device = if !device_id.is_empty() {
+            host.devices()
+                .map_err(|e| format!("enumerate devices: {e}"))?
+                .find(|d| d.name().map(|n| n == device_id).unwrap_or(false))
+                .ok_or_else(|| format!("device not found: {device_id}"))?
+        } else {
+            host.default_input_device()
+                .ok_or("no default input device")?
+        };
         let name = device.name().unwrap_or_else(|_| "<unknown>".into());
         let config = device
             .default_input_config()
@@ -201,13 +286,11 @@ fn run_capture(
             }
             drop(stream);
             log::debug!("capture thread: streaming stopped");
-            log::info!("[capture] streaming stopped");
             Ok(())
         }
     }
 }
 
-// Downmix interleaved frames to mono and append to the shared buffer.
 fn push_mono<T: Copy>(
     data: &[T],
     channels: usize,
@@ -239,16 +322,22 @@ async fn run_processor(
     model: String,
 ) {
     log::debug!("run_processor started");
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u8>, String, String, bool)>(4);
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<f32>, String, String, bool)>(4);
 
     let consumer_app = app.clone();
     let consumer = tauri::async_runtime::spawn(async move {
         let mut seg_idx: usize = 0;
-        while let Some((wav, lang, mdl, has_break)) = rx.recv().await {
+        while let Some((samples_16k, lang, mdl, has_break)) = rx.recv().await {
             seg_idx += 1;
-            log::debug!("consumer got segment #{}, {} bytes, lang={}, model={}, has_break={}", seg_idx, wav.len(), if lang.is_empty() { "auto" } else { &lang }, if mdl.is_empty() { "default" } else { &mdl }, has_break);
-            let mdl_opt = if mdl.is_empty() { None } else { Some(mdl.clone()) };
-            match fluid::transcribe_audio_fluid(consumer_app.clone(), wav, Some(lang), mdl_opt).await {
+            log::debug!(
+                "consumer got segment #{}, {} samples, lang={}, model={}, has_break={}",
+                seg_idx,
+                samples_16k.len(),
+                if lang.is_empty() { "auto" } else { &lang },
+                if mdl.is_empty() { "default" } else { &mdl },
+                has_break
+            );
+            match fluid::transcribe_samples(&samples_16k, &lang, &mdl).await {
                 Ok(t) => {
                     let t = t.trim().to_string();
                     log::debug!("transcript #{}: {:?} ({} chars)", seg_idx, t, t.len());
@@ -351,14 +440,18 @@ async fn run_processor(
         }
 
         if should_flush || (stopping && had_speech && seg_secs >= MIN_SEGMENT_SECS) {
-            let wav = to_wav_16k(&seg, rate);
+            let samples_16k = if rate != TARGET_SR {
+                resample(&seg, rate, TARGET_SR)
+            } else {
+                seg.clone()
+            };
             let has_break = pending_break;
             pending_break = false;
             log::debug!(
-                "flush segment #{}: {:.1}s ({} bytes wav){}",
+                "flush segment #{}: {:.1}s ({} samples @16k){}",
                 flush_count + 1,
                 seg_secs,
-                wav.len(),
+                samples_16k.len(),
                 if stopping { " [final]" } else { "" }
             );
             seg.clear();
@@ -366,7 +459,7 @@ async fn run_processor(
             had_speech = false;
             flush_count += 1;
 
-            match tx.send((wav, language.clone(), model.clone(), has_break)).await {
+            match tx.send((samples_16k, language.clone(), model.clone(), has_break)).await {
                 Ok(()) => log::debug!("sent segment #{flush_count} to consumer channel"),
                 Err(e) => log::error!("FAILED to send segment #{flush_count} to channel: {e}"),
             }
@@ -395,39 +488,6 @@ fn rms(samples: &[f32]) -> f32 {
     (sum / samples.len() as f32).sqrt()
 }
 
-// Linear-resample mono f32 to 16k and serialize as 16-bit PCM mono WAV bytes.
-fn to_wav_16k(input: &[f32], src_rate: u32) -> Vec<u8> {
-    let resampled = resample(input, src_rate, TARGET_SR);
-    let data_size = resampled.len() * 2;
-    let byte_rate = TARGET_SR * 2; // mono, 16-bit
-    let mut out = Vec::with_capacity(44 + data_size);
-
-    out.extend_from_slice(b"RIFF");
-    out.extend_from_slice(&((36 + data_size) as u32).to_le_bytes());
-    out.extend_from_slice(b"WAVE");
-    out.extend_from_slice(b"fmt ");
-    out.extend_from_slice(&16u32.to_le_bytes());
-    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
-    out.extend_from_slice(&1u16.to_le_bytes()); // mono
-    out.extend_from_slice(&TARGET_SR.to_le_bytes());
-    out.extend_from_slice(&byte_rate.to_le_bytes());
-    out.extend_from_slice(&2u16.to_le_bytes()); // block align
-    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-    out.extend_from_slice(b"data");
-    out.extend_from_slice(&(data_size as u32).to_le_bytes());
-
-    for s in resampled {
-        let clamped = s.clamp(-1.0, 1.0);
-        let v = if clamped < 0.0 {
-            (clamped * 32768.0) as i16
-        } else {
-            (clamped * 32767.0) as i16
-        };
-        out.extend_from_slice(&v.to_le_bytes());
-    }
-    out
-}
-
 fn resample(input: &[f32], src: u32, dst: u32) -> Vec<f32> {
     if src == dst || input.is_empty() {
         return input.to_vec();
@@ -445,4 +505,31 @@ fn resample(input: &[f32], src: u32, dst: u32) -> Vec<f32> {
         out.push(a + (b - a) * frac);
     }
     out
+}
+
+fn rms_mono(data: &[f32], channels: usize) -> f32 {
+    if data.is_empty() || channels == 0 { return 0.0; }
+    let samples: Vec<f32> = data
+        .chunks(channels)
+        .map(|f| f.iter().sum::<f32>() / channels as f32)
+        .collect();
+    rms(&samples)
+}
+
+fn rms_mono_i16(data: &[i16], channels: usize) -> f32 {
+    if data.is_empty() || channels == 0 { return 0.0; }
+    let samples: Vec<f32> = data
+        .chunks(channels)
+        .map(|f| f.iter().map(|&s| s as f32 / 32768.0).sum::<f32>() / channels as f32)
+        .collect();
+    rms(&samples)
+}
+
+fn rms_mono_u16(data: &[u16], channels: usize) -> f32 {
+    if data.is_empty() || channels == 0 { return 0.0; }
+    let samples: Vec<f32> = data
+        .chunks(channels)
+        .map(|f| f.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).sum::<f32>() / channels as f32)
+        .collect();
+    rms(&samples)
 }

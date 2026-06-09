@@ -10,8 +10,8 @@ interface WaveformProps {
 }
 
 const POINT_COUNT = 72
-const ATTACK = 0.22
-const RELEASE = 0.08
+const ATTACK = 0.45
+const RELEASE = 0.18
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t
@@ -88,7 +88,7 @@ export function Waveform({ active, level, className = "", color = "var(--primary
       ctx.clearRect(0, 0, width, height)
 
       const active = activeRef.current
-      const raw = active ? Math.min(1, Math.pow(Math.max(0, levelRef.current) * 18, 0.72)) : 0
+      const raw = active ? Math.min(1, Math.pow(Math.max(0, levelRef.current) * 8, 0.85)) : 0
       const target = active ? Math.max(0.06, raw) : 0
       const smoothing = target > amplitudeRef.current ? ATTACK : RELEASE
       amplitudeRef.current = lerp(amplitudeRef.current, target, smoothing)

@@ -301,9 +301,7 @@ export function MeetingDashboard({
         return
       }
       const { loadMeetings } = await import("@/lib/storage")
-      const template = meeting.templateId ? getTemplateById(meeting.templateId) : undefined
-      const sections = template?.sections ?? []
-      const result = await generateBrief(meeting.title, sections, loadMeetings())
+      const result = await generateBrief(meeting, loadMeetings())
       setBriefResult(result)
       setBriefMeetingId(meeting.id)
       onUpdateMeeting(meeting.id, { brief: result })

@@ -26,7 +26,6 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   AccountSetting01Icon,
   Mic01Icon,
-  HeadsetIcon,
   LanguageCircleIcon,
   SunIcon,
   MoonIcon,
@@ -61,6 +60,7 @@ import { exportAllMeetings, exportAllMeetingsMarkdown } from "@/lib/export"
 import type { AppSettings, AISettings } from "@/types"
 import { SPEECH_LANGS, AI_MODELS, ASR_MODELS } from "@/types"
 import { TemplateEditor } from "@/components/template-editor"
+import { Waveform } from "@/components/Waveform"
 
 interface SettingsPageProps {
   onBack: () => void
@@ -79,6 +79,10 @@ export function SettingsPage({
   const [aiSettings, setAiSettings] = useState<AISettings>(() => loadAISettings())
   const [meetingCount, setMeetingCount] = useState(0)
   const { devices, enumerate } = useAudioDevices()
+
+  const getDeviceLabel = useCallback((id: string) => {
+    return devices.find(d => d.deviceId === id)?.label ?? null
+  }, [devices])
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const mic = useMicrophonePermission()
   const [fluidReady, setFluidReady] = useState<boolean | null>(null)
@@ -89,9 +93,22 @@ export function SettingsPage({
   const [pendingTheme, setPendingTheme] = useState<AppSettings["theme"]>(theme)
   const [micTesting, setMicTesting] = useState(false)
   const [micTestLevel, setMicTestLevel] = useState(0)
-  const micTestStreamRef = useRef<MediaStream | null>(null)
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const micTestFrameRef = useRef<number>(0)
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    if (micTesting) {
+      const setup = async () => {
+        const { listen } = await import("@tauri-apps/api/event")
+        unlisten = await listen<{ rms: number }>("audio-level", (e) => {
+          setMicTestLevel(e.payload.rms)
+        })
+      }
+      setup()
+    }
+    return () => {
+      unlisten?.()
+    }
+  }, [micTesting])
 
   useEffect(() => {
     setMeetingCount(loadMeetings().length)
@@ -109,9 +126,7 @@ export function SettingsPage({
     }, 1000)
     return () => {
       clearInterval(id)
-      if (micTestFrameRef.current) cancelAnimationFrame(micTestFrameRef.current)
-      if (micTestStreamRef.current) micTestStreamRef.current.getTracks().forEach((t) => t.stop())
-      if (audioContextRef.current) audioContextRef.current.close()
+      invoke("stop_mic_test").catch(() => {})
     }
   }, [])
 
@@ -126,47 +141,20 @@ export function SettingsPage({
 
   const startMicTest = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      micTestStreamRef.current = stream
-      const audioCtx = new AudioContext()
-      audioContextRef.current = audioCtx
-      const source = audioCtx.createMediaStreamSource(stream)
-      const analyser = audioCtx.createAnalyser()
-      analyser.fftSize = 256
-      source.connect(analyser)
-      const dataArray = new Uint8Array(analyser.frequencyBinCount)
-      const loop = () => {
-        analyser.getByteTimeDomainData(dataArray)
-        let sum = 0
-        for (let i = 0; i < dataArray.length; i++) {
-          const v = (dataArray[i] - 128) / 128
-          sum += v * v
-        }
-        setMicTestLevel(Math.sqrt(sum / dataArray.length))
-        micTestFrameRef.current = requestAnimationFrame(loop)
-      }
-      loop()
+      const label = settings.preferredDeviceId !== "default"
+        ? getDeviceLabel(settings.preferredDeviceId)
+        : null
+      await invoke("start_mic_test", { deviceId: label })
       setMicTesting(true)
     } catch {
       setMicTesting(false)
     }
-  }, [])
+  }, [settings.preferredDeviceId, getDeviceLabel])
 
-  const stopMicTest = useCallback(() => {
-    if (micTestFrameRef.current) {
-      cancelAnimationFrame(micTestFrameRef.current)
-      micTestFrameRef.current = 0
-    }
-    if (micTestStreamRef.current) {
-      micTestStreamRef.current.getTracks().forEach((t) => t.stop())
-      micTestStreamRef.current = null
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
+  const stopMicTest = useCallback(async () => {
     setMicTesting(false)
     setMicTestLevel(0)
+    await invoke("stop_mic_test").catch(() => {})
   }, [])
 
   const validateApiKey = useCallback((key: string): string | null => {
@@ -294,15 +282,6 @@ export function SettingsPage({
                 <HugeiconsIcon icon={Mic01Icon} strokeWidth={2} data-icon="inline-start" />
                 Microphone
               </Button>
-              <Button
-                variant={settings.audioSource === "system" ? "default" : "outline"}
-                size="sm"
-                onClick={() => update({ audioSource: "system" })}
-                className="flex-1"
-              >
-                <HugeiconsIcon icon={HeadsetIcon} strokeWidth={2} data-icon="inline-start" />
-                System Audio
-              </Button>
             </div>
           </div>
 
@@ -356,12 +335,7 @@ export function SettingsPage({
                   <div className="size-2 rounded-full bg-green-500 animate-pulse" />
                   <span className="text-xs text-muted-foreground">Listening...</span>
                 </div>
-                <div className="h-2 w-full rounded-full bg-muted ring-1 ring-border/50 overflow-hidden">
-                  <div
-                    className="h-full rounded-full bg-primary transition-[width] duration-75 ease-linear"
-                    style={{ width: `${Math.min(micTestLevel * 100, 100)}%` }}
-                  />
-                </div>
+                <Waveform active={micTesting} level={micTestLevel} className="w-full" height={48} />
               </div>
             )}
           </div>
