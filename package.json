@@ -24,6 +24,7 @@
     "@milkdown/plugin-listener": "^7.21.2",
     "@milkdown/plugin-streaming": "^7.21.2",
     "@milkdown/react": "^7.21.2",
+    "@prosemirror-adapter/react": "^0.5.3",
     "@radix-ui/react-toolbar": "^1.1.12",
     "@tailwindcss/vite": "^4.1.17",
     "@tauri-apps/api": "^2",

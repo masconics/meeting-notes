@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -40,6 +40,8 @@ import {
   AiVoiceIcon,
   AiMagicIcon,
   CheckmarkBadge01Icon,
+  RefreshIcon,
+  Download01Icon,
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { useMicrophonePermission } from "@/lib/use-permissions"
@@ -55,6 +57,7 @@ import {
 } from "@/lib/storage"
 import { invoke } from "@tauri-apps/api/core"
 import { testConnection } from "@/lib/ai-service"
+import { exportAllMeetings, exportAllMeetingsMarkdown } from "@/lib/export"
 import type { AppSettings, AISettings } from "@/types"
 import { SPEECH_LANGS, AI_MODELS, ASR_MODELS } from "@/types"
 import { TemplateEditor } from "@/components/template-editor"
@@ -75,13 +78,20 @@ export function SettingsPage({
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings())
   const [aiSettings, setAiSettings] = useState<AISettings>(() => loadAISettings())
   const [meetingCount, setMeetingCount] = useState(0)
-  const { devices } = useAudioDevices()
+  const { devices, enumerate } = useAudioDevices()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const mic = useMicrophonePermission()
   const [fluidReady, setFluidReady] = useState<boolean | null>(null)
   const [fluidLoaded, setFluidLoaded] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null)
+  const [pendingTheme, setPendingTheme] = useState<AppSettings["theme"]>(theme)
+  const [micTesting, setMicTesting] = useState(false)
+  const [micTestLevel, setMicTestLevel] = useState(0)
+  const micTestStreamRef = useRef<MediaStream | null>(null)
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const micTestFrameRef = useRef<number>(0)
 
   useEffect(() => {
     setMeetingCount(loadMeetings().length)
@@ -96,8 +106,13 @@ export function SettingsPage({
       } catch {
         setFluidLoaded(false)
       }
-    }, 3000)
-    return () => clearInterval(id)
+    }, 1000)
+    return () => {
+      clearInterval(id)
+      if (micTestFrameRef.current) cancelAnimationFrame(micTestFrameRef.current)
+      if (micTestStreamRef.current) micTestStreamRef.current.getTracks().forEach((t) => t.stop())
+      if (audioContextRef.current) audioContextRef.current.close()
+    }
   }, [])
 
   async function checkFluid() {
@@ -108,6 +123,58 @@ export function SettingsPage({
       setFluidReady(null)
     }
   }
+
+  const startMicTest = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      micTestStreamRef.current = stream
+      const audioCtx = new AudioContext()
+      audioContextRef.current = audioCtx
+      const source = audioCtx.createMediaStreamSource(stream)
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      source.connect(analyser)
+      const dataArray = new Uint8Array(analyser.frequencyBinCount)
+      const loop = () => {
+        analyser.getByteTimeDomainData(dataArray)
+        let sum = 0
+        for (let i = 0; i < dataArray.length; i++) {
+          const v = (dataArray[i] - 128) / 128
+          sum += v * v
+        }
+        setMicTestLevel(Math.sqrt(sum / dataArray.length))
+        micTestFrameRef.current = requestAnimationFrame(loop)
+      }
+      loop()
+      setMicTesting(true)
+    } catch {
+      setMicTesting(false)
+    }
+  }, [])
+
+  const stopMicTest = useCallback(() => {
+    if (micTestFrameRef.current) {
+      cancelAnimationFrame(micTestFrameRef.current)
+      micTestFrameRef.current = 0
+    }
+    if (micTestStreamRef.current) {
+      micTestStreamRef.current.getTracks().forEach((t) => t.stop())
+      micTestStreamRef.current = null
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+    setMicTesting(false)
+    setMicTestLevel(0)
+  }, [])
+
+  const validateApiKey = useCallback((key: string): string | null => {
+    if (!key) return null
+    if (!key.startsWith("sk-")) return "API key must start with 'sk-'"
+    if (key.length < 20) return "API key must be at least 20 characters"
+    return null
+  }, [])
 
   const update = useCallback(
     (patch: Partial<AppSettings>) => {
@@ -133,6 +200,12 @@ export function SettingsPage({
   )
 
   const handleTestConnection = useCallback(async () => {
+    const err = validateApiKey(aiSettings.apiKey)
+    if (err) {
+      setApiKeyError(err)
+      return
+    }
+    setApiKeyError(null)
     setTestingConnection(true)
     setConnectionStatus(null)
     try {
@@ -143,7 +216,7 @@ export function SettingsPage({
     } finally {
       setTestingConnection(false)
     }
-  }, [])
+  }, [aiSettings.apiKey, validateApiKey])
 
   const handleClearData = useCallback(() => {
     clearAllMeetings()
@@ -235,7 +308,19 @@ export function SettingsPage({
 
           {devices.length > 0 && (
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium">Preferred Input Device</label>
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-medium">Preferred Input Device</label>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="size-5"
+                  onClick={() => enumerate()}
+                  title="Refresh devices"
+                  aria-label="Refresh device list"
+                >
+                  <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} className="size-3.5" />
+                </Button>
+              </div>
               <Select
                 value={settings.preferredDeviceId}
                 onValueChange={(v) => update({ preferredDeviceId: v })}
@@ -252,9 +337,34 @@ export function SettingsPage({
                     ))}
                   </SelectGroup>
                 </SelectContent>
-              </Select>
+                </Select>
             </div>
           )}
+
+          <div className="flex flex-col gap-2">
+            {!micTesting ? (
+              <Button variant="outline" size="sm" onClick={startMicTest} className="w-fit">
+                <HugeiconsIcon icon={Mic01Icon} strokeWidth={2} data-icon="inline-start" />
+                Test Microphone
+              </Button>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-2">
+                  <Button variant="destructive" size="sm" onClick={stopMicTest}>
+                    Stop Testing
+                  </Button>
+                  <div className="size-2 rounded-full bg-green-500 animate-pulse" />
+                  <span className="text-xs text-muted-foreground">Listening...</span>
+                </div>
+                <div className="h-2 w-full rounded-full bg-muted ring-1 ring-border/50 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-primary transition-[width] duration-75 ease-linear"
+                    style={{ width: `${Math.min(micTestLevel * 100, 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 
@@ -353,9 +463,18 @@ export function SettingsPage({
             <Input
               type="password"
               value={aiSettings.apiKey}
-              onChange={(e) => updateAI({ apiKey: e.target.value })}
+              onChange={(e) => {
+                updateAI({ apiKey: e.target.value });
+                setApiKeyError(null);
+              }}
+              onBlur={() => {
+                if (aiSettings.apiKey) setApiKeyError(validateApiKey(aiSettings.apiKey));
+              }}
               placeholder="sk-..."
             />
+            {apiKeyError && (
+              <p className="text-xs text-destructive">{apiKeyError}</p>
+            )}
             <p className="text-xs text-muted-foreground">
               Get your key at{" "}
               <a
@@ -457,6 +576,9 @@ export function SettingsPage({
             <p className="text-xs text-muted-foreground">
               New meetings will use this as the default title if left blank.
             </p>
+            <p className="text-xs text-muted-foreground">
+              Preview: <span className="font-medium text-foreground">{settings.titlePrefix || "[prefix]"}</span>Untitled
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -484,28 +606,73 @@ export function SettingsPage({
           </CardTitle>
           <CardDescription>Choose your preferred theme</CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
             {(["light", "dark", "system"] as const).map((t) => (
-              <Button
+              <button
                 key={t}
-                variant={theme === t ? "default" : "outline"}
-                size="sm"
-                onClick={() => {
-                  onThemeChange(t)
-                  update({ theme: t })
-                }}
-                className="flex-1"
+                type="button"
+                onClick={() => setPendingTheme(t)}
+                className={`flex items-center gap-3 rounded-xl border p-3 text-left transition-colors ${
+                  pendingTheme === t
+                    ? "border-primary bg-primary/5 ring-1 ring-primary"
+                    : "border-border hover:border-primary/40"
+                }`}
               >
                 <HugeiconsIcon
                   icon={t === "light" ? SunIcon : t === "dark" ? MoonIcon : ComputerIcon}
                   strokeWidth={2}
-                  data-icon="inline-start"
+                  className="size-5 shrink-0"
                 />
-                {t.charAt(0).toUpperCase() + t.slice(1)}
-              </Button>
+                <div className="flex-1">
+                  <p className="text-sm font-medium">{t.charAt(0).toUpperCase() + t.slice(1)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {t === "light" ? "Light appearance" : t === "dark" ? "Dark appearance" : "Follow system preference"}
+                  </p>
+                </div>
+                <div
+                  className={`h-8 w-14 shrink-0 rounded-md border overflow-hidden ${
+                    t === "light"
+                      ? "bg-amber-50"
+                      : t === "dark"
+                        ? "bg-gray-900"
+                        : "bg-gradient-to-br from-amber-50 to-gray-900"
+                  }`}
+                >
+                  <div
+                    className={`h-2 ${
+                      t === "light"
+                        ? "bg-amber-100"
+                        : t === "dark"
+                          ? "bg-gray-700"
+                          : "bg-gradient-to-r from-amber-100 to-gray-700"
+                    }`}
+                  />
+                  <div
+                    className={`mx-1.5 mt-0.5 h-0.5 rounded-full ${
+                      t === "light" ? "bg-amber-200" : "bg-gray-600"
+                    }`}
+                  />
+                  <div
+                    className={`mx-1.5 mt-0.5 h-0.5 w-2/3 rounded-full ${
+                      t === "light" ? "bg-amber-200" : "bg-gray-600"
+                    }`}
+                  />
+                </div>
+              </button>
             ))}
           </div>
+          {pendingTheme !== theme && (
+            <Button
+              size="sm"
+              onClick={() => {
+                onThemeChange(pendingTheme)
+                update({ theme: pendingTheme })
+              }}
+            >
+              Apply Theme
+            </Button>
+          )}
         </CardContent>
       </Card>
 
@@ -519,7 +686,27 @@ export function SettingsPage({
             {meetingCount} meeting{meetingCount !== 1 ? "s" : ""} saved in local storage
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={meetingCount === 0}
+              onClick={() => exportAllMeetings()}
+            >
+              <HugeiconsIcon icon={Download01Icon} strokeWidth={2} data-icon="inline-start" />
+              Export All (JSON)
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={meetingCount === 0}
+              onClick={() => exportAllMeetingsMarkdown()}
+            >
+              <HugeiconsIcon icon={Download01Icon} strokeWidth={2} data-icon="inline-start" />
+              Export All (Markdown)
+            </Button>
+          </div>
           <AlertDialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" disabled={meetingCount === 0}>

@@ -43,6 +43,10 @@ import {
   Mail01Icon,
   DeleteIcon,
   NoteAddIcon,
+  ArrowUp01Icon,
+  ArrowDown01Icon,
+  ArrowRight01Icon,
+  Copy01Icon,
 } from "@hugeicons/core-free-icons"
 import type { IconSvgElement } from "@hugeicons/react"
 import type { MeetingTemplate, QuickAction } from "@/types"
@@ -101,6 +105,7 @@ export function TemplateEditor() {
   const [form, setForm] = useState<MeetingTemplate>(emptyTemplate())
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
 
   const refresh = useCallback(() => {
     setTemplates(getTemplates())
@@ -148,6 +153,27 @@ export function TemplateEditor() {
       ...f,
       sections: f.sections.filter((_, i) => i !== index),
     }))
+  }
+
+  function moveSection(from: number, to: number) {
+    if (to < 0 || to >= form.sections.length) return
+    setForm((f) => {
+      const sections = [...f.sections]
+      ;[sections[from], sections[to]] = [sections[to], sections[from]]
+      return { ...f, sections }
+    })
+  }
+
+  function toggleExpand(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) {
+        next.delete(id)
+      } else {
+        next.add(id)
+      }
+      return next
+    })
   }
 
   function updateQuickAction(index: number, patch: Partial<QuickAction>) {
@@ -198,6 +224,18 @@ export function TemplateEditor() {
     const custom = templates.filter((t) => !DEFAULT_IDS.has(t.id))
     saveTemplates([...DEFAULT_TEMPLATES.map((t) => ({ ...t })), ...custom])
     setShowResetConfirm(false)
+    refresh()
+  }
+
+  function handleDuplicate(template: MeetingTemplate) {
+    const copy: MeetingTemplate = {
+      ...template,
+      id: crypto.randomUUID(),
+      name: `Copy of ${template.name}`,
+      sections: [...template.sections],
+      quickActions: template.quickActions.map((a) => ({ ...a })),
+    }
+    saveTemplate(copy)
     refresh()
   }
 
@@ -264,47 +302,84 @@ export function TemplateEditor() {
         )}
 
         <div className="flex flex-col gap-2">
-          {templates.map((t) => (
-            <div
-              key={t.id}
-              className="flex items-center gap-3 rounded-2xl border p-3"
-            >
-              <TemplateIcon name={t.icon} className="size-5" />
-              <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">{t.name}</span>
-                  {DEFAULT_IDS.has(t.id) && (
-                    <Badge variant="secondary" className="text-[10px] py-0">
-                      Built-in
-                    </Badge>
-                  )}
-                </div>
-                <span className="text-xs text-muted-foreground">
-                  {t.sections.length} sections &middot; {t.quickActions.length}{" "}
-                  quick actions
-                </span>
-              </div>
-              <div className="flex gap-1 shrink-0">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => openEdit(t)}
+          {templates.map((t) => {
+            const isExpanded = expandedIds.has(t.id)
+            return (
+              <div key={t.id}>
+                <div
+                  className="flex items-center gap-3 rounded-2xl border p-3 cursor-pointer"
+                  onClick={() => toggleExpand(t.id)}
                 >
-                  <HugeiconsIcon icon={Edit01Icon} strokeWidth={2} />
-                </Button>
-                {!DEFAULT_IDS.has(t.id) && (
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="text-destructive hover:text-destructive"
-                    onClick={() => setDeleteId(t.id)}
-                  >
-                    <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
-                  </Button>
+                  <TemplateIcon name={t.icon} className="size-5" />
+                  <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{t.name}</span>
+                      {DEFAULT_IDS.has(t.id) && (
+                        <Badge variant="secondary" className="text-[10px] py-0">
+                          Built-in
+                        </Badge>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {t.sections.length} sections &middot; {t.quickActions.length}{" "}
+                      quick actions
+                    </span>
+                  </div>
+                  <div className="flex gap-1 shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={(e) => { e.stopPropagation(); openEdit(t) }}
+                    >
+                      <HugeiconsIcon icon={Edit01Icon} strokeWidth={2} />
+                    </Button>
+                    {DEFAULT_IDS.has(t.id) && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-muted-foreground"
+                        onClick={(e) => { e.stopPropagation(); handleDuplicate(t) }}
+                        title="Duplicate"
+                      >
+                        <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
+                      </Button>
+                    )}
+                    {!DEFAULT_IDS.has(t.id) && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="text-destructive hover:text-destructive"
+                        onClick={(e) => { e.stopPropagation(); setDeleteId(t.id) }}
+                      >
+                        <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="text-muted-foreground"
+                      onClick={(e) => { e.stopPropagation(); toggleExpand(t.id) }}
+                    >
+                      <HugeiconsIcon
+                        icon={isExpanded ? ArrowDown01Icon : ArrowRight01Icon}
+                        strokeWidth={2}
+                        className="size-4"
+                      />
+                    </Button>
+                  </div>
+                </div>
+                {isExpanded && (
+                  <div className="ml-[52px] border-l-2 border-muted pl-4 py-1 space-y-0.5">
+                    {t.sections.map((section, i) => (
+                      <div key={i} className="text-xs text-muted-foreground">
+                        {section}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 
@@ -324,6 +399,15 @@ export function TemplateEditor() {
             </DialogDescription>
           </DialogHeader>
 
+          {editing && DEFAULT_IDS.has(editing.id) && (
+            <div className="flex items-start gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-amber-600 dark:text-amber-400 text-xs">
+              <svg className="size-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+              <span>Editing a built-in template will create a custom version. Reset defaults to restore the original.</span>
+            </div>
+          )}
+
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium">Template Name</label>
@@ -338,13 +422,13 @@ export function TemplateEditor() {
 
             <div className="flex flex-col gap-1.5">
               <label className="text-xs font-medium">Icon</label>
-              <div className="grid grid-cols-7 gap-1.5">
+              <div className="grid grid-cols-5 gap-1.5">
                 {ICON_OPTIONS.map(({ name, icon }) => (
                   <button
                     key={name}
                     type="button"
                     className={cn(
-                      "size-9 inline-flex items-center justify-center rounded-xl border transition-colors cursor-pointer",
+                      "size-11 inline-flex items-center justify-center rounded-xl border transition-colors cursor-pointer",
                       form.icon === name
                         ? "border-primary bg-primary/10 text-primary"
                         : "border-border hover:bg-muted text-muted-foreground"
@@ -354,7 +438,7 @@ export function TemplateEditor() {
                     <HugeiconsIcon
                       icon={icon}
                       strokeWidth={2}
-                      className="size-4"
+                      className="size-5"
                     />
                   </button>
                 ))}
@@ -376,6 +460,26 @@ export function TemplateEditor() {
               <div className="flex flex-col gap-1.5">
                 {form.sections.map((section, i) => (
                   <div key={i} className="flex items-center gap-1.5">
+                    <div className="flex flex-col gap-0.5 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={i === 0}
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => moveSection(i, i - 1)}
+                      >
+                        <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        disabled={i === form.sections.length - 1}
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => moveSection(i, i + 1)}
+                      >
+                        <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} />
+                      </Button>
+                    </div>
                     <input
                       type="text"
                       value={section}

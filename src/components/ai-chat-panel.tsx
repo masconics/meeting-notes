@@ -160,7 +160,7 @@ export function AIChatPanel({
                     {msg.role === "assistant" && msg.content && !(isLast && lastIsStreaming) && (
                       <button
                         onClick={() => copyMessage(msg.content, i)}
-                        className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="text-[11px] text-muted-foreground/50 hover:text-foreground inline-flex items-center gap-1"
                       >
                         {copiedIdx === i ? (
                           <span className="text-emerald-500">Copied</span>

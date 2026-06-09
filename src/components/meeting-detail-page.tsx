@@ -195,7 +195,7 @@ export function MeetingDetailPage({
   }
 
   return (
-    <div className="flex flex-col gap-6 w-full max-w-2xl mx-auto">
+    <div className="flex flex-col gap-6 w-full px-6 sm:px-8 lg:px-12">
       <div className="flex items-center gap-3 shrink-0">
         <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
@@ -522,7 +522,7 @@ export function MeetingDetailPage({
               </section>
               <section>
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Quick Actions</h3>
-                <QuickActions meeting={viewing} />
+                <QuickActions meeting={viewing} onInsertToNotes={(content) => update({ notes: viewing.notes ? viewing.notes + "\n\n" + content : content })} />
               </section>
             </div>
           ) : (

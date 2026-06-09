@@ -1,3 +1,4 @@
+import { useState } from "react"
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,7 @@ export function MeetingTemplateSelector({
   onOpenChange,
 }: MeetingTemplateSelectorProps) {
   const templates = getTemplates()
+  const [expandedTemplateId, setExpandedTemplateId] = useState<string | null>(null)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -49,7 +51,7 @@ export function MeetingTemplateSelector({
             transition={{ duration: 0.2 }}
           >
           <button
-            className="flex items-center gap-3 rounded-2xl border p-3 text-left transition-colors hover:bg-muted/50 w-full"
+            className="flex items-center gap-3 rounded-2xl border-2 border-dashed border-muted-foreground/25 p-3 text-left transition-colors hover:bg-muted/50 w-full"
             onClick={() => {
               onSelect(undefined)
               onOpenChange(false)
@@ -66,6 +68,7 @@ export function MeetingTemplateSelector({
           </motion.div>
           {templates.map((t, idx) => {
             const isSelected = t.id === selectedId
+            const isExpanded = expandedTemplateId === t.id
             return (
               <motion.div
                 key={t.id}
@@ -75,22 +78,42 @@ export function MeetingTemplateSelector({
               >
               <button
                 key={t.id}
-                className={`flex items-center gap-3 rounded-2xl border p-3 text-left transition-colors hover:bg-muted/50 ${isSelected ? "border-primary bg-primary/5 ring-1 ring-primary/20" : ""}`}
+                className={`flex flex-col rounded-2xl border p-3 text-left transition-colors hover:bg-muted/50 ${isSelected ? "border-primary bg-primary/5 ring-1 ring-primary/20" : ""}`}
                 onClick={() => {
                   onSelect(t)
                   onOpenChange(false)
                 }}
               >
-                <TemplateIcon name={t.icon} className="size-5" />
-                <div className="flex flex-col gap-0.5 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{t.name}</span>
-                    {isSelected && <Badge variant="secondary" className="text-[10px] py-0">Selected</Badge>}
+                <div className="flex items-center gap-3">
+                  <TemplateIcon name={t.icon} className="size-5" />
+                  <div className="flex flex-col gap-0.5 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium">{t.name}</span>
+                      {isSelected && <Badge variant="secondary" className="text-[10px] py-0">Selected</Badge>}
+                    </div>
+                    <span className="text-xs text-muted-foreground truncate">
+                      {t.sections.length} sections &middot; {t.sections.slice(0, 3).join(", ") + (t.sections.length > 3 ? "..." : "")}
+                    </span>
                   </div>
-                  <span className="text-xs text-muted-foreground truncate">
-                    {t.sections.length} sections &middot; {t.sections.slice(0, 3).join(", ") + (t.sections.length > 3 ? "..." : "")}
-                  </span>
                 </div>
+                <span
+                  className="text-[11px] text-muted-foreground/70 hover:text-muted-foreground mt-1.5 cursor-pointer"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setExpandedTemplateId(isExpanded ? null : t.id)
+                  }}
+                >
+                  {isExpanded ? "Show less" : `Show all ${t.sections.length} sections`}
+                </span>
+                {isExpanded && (
+                  <div className="mt-1.5 space-y-0.5">
+                    {t.sections.map((section, i) => (
+                      <div key={i} className="text-xs text-muted-foreground pl-0.5">
+                        {section}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </button>
               </motion.div>
             )

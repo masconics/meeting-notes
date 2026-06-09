@@ -3,6 +3,9 @@ import { motion, AnimatePresence } from "framer-motion"
 import { MeetingDashboard } from "@/components/meeting-dashboard"
 import { NoteEditor } from "@/components/note-editor"
 import { SettingsPage } from "@/components/settings-page"
+import { ConfirmDialog } from "@/components/confirm-dialog"
+import { OnboardingWizard } from "@/components/onboarding-wizard"
+import { isOnboardingComplete } from "@/lib/onboarding"
 import {
   loadMeetings,
   loadSettings,
@@ -53,12 +56,20 @@ export function App() {
     return undefined
   })
   const [pendingDelete, setPendingDelete] = useState<Meeting | null>(null)
+  const [onboardingComplete, setOnboardingComplete] = useState(() => isOnboardingComplete())
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string
+    message: string
+    onConfirm: () => void
+    variant?: "destructive" | "default"
+  } | null>(null)
 
   const viewRef = useRef(view)
   const meetingsRef = useRef(meetings)
   const isNavigatingRef = useRef(false)
   const recorderDirtyRef = useRef(false)
   const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingNavigateRef = useRef<{ view: View; meetingId?: string } | null>(null)
 
   useTheme(settings.theme)
 
@@ -79,8 +90,22 @@ export function App() {
 
   const navigate = useCallback((nextView: View, meetingId?: string) => {
     if (viewRef.current === "editor" && nextView !== "editor" && recorderDirtyRef.current) {
-      if (!window.confirm("You have unsaved changes. Leave anyway?")) return
-      recorderDirtyRef.current = false
+      pendingNavigateRef.current = { view: nextView, meetingId }
+      setConfirmDialog({
+        title: "Unsaved Changes",
+        message: "You have unsaved changes. Leave anyway?",
+        variant: "destructive",
+        onConfirm: () => {
+          recorderDirtyRef.current = false
+          const nav = pendingNavigateRef.current!
+          pendingNavigateRef.current = null
+          isNavigatingRef.current = true
+          window.location.hash = "#" + buildHash(nav.view, nav.meetingId)
+          setView(nav.view)
+          setTimeout(() => { isNavigatingRef.current = false }, 0)
+        },
+      })
+      return
     }
     isNavigatingRef.current = true
     window.location.hash = "#" + buildHash(nextView, meetingId)
@@ -135,12 +160,18 @@ export function App() {
 
   const handleThemeChange = useCallback((theme: AppSettings["theme"]) => handleSettingsChange({ theme }), [handleSettingsChange])
 
-  const handleSave = useCallback((meeting: Meeting) => {
+  const handleSave = useCallback((meeting: Meeting, stayOnEditor?: boolean) => {
     recorderDirtyRef.current = false
     const isNew = !meetingsRef.current.find(m => m.id === meeting.id)
     const updated = isNew ? [meeting, ...meetingsRef.current] : meetingsRef.current.map(m => m.id === meeting.id ? meeting : m)
     saveMeetings(updated); setMeetings(updated)
-    if (isNew) navigate("dashboard")
+    if (isNew) {
+      if (stayOnEditor) {
+        setEditorNote(undefined)
+      } else {
+        navigate("dashboard")
+      }
+    }
   }, [navigate])
 
   const handleDelete = useCallback((id: string) => {
@@ -167,6 +198,11 @@ export function App() {
   }, [navigate])
 
   const handleClearData = useCallback(() => setMeetings([]), [])
+
+  const handleOnboardingComplete = useCallback(() => {
+    setOnboardingComplete(true)
+    navigate("dashboard")
+  }, [navigate])
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -222,6 +258,24 @@ export function App() {
           </motion.div>
         )}
       </AnimatePresence>
+      {confirmDialog && (
+        <ConfirmDialog
+          open={true}
+          onOpenChange={() => setConfirmDialog(null)}
+          onConfirm={confirmDialog.onConfirm}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel="Leave"
+          cancelLabel="Stay"
+          variant={confirmDialog.variant ?? "destructive"}
+        />
+      )}
+      {!onboardingComplete && (
+        <OnboardingWizard
+          open={true}
+          onComplete={handleOnboardingComplete}
+        />
+      )}
     </div>
   )
 }

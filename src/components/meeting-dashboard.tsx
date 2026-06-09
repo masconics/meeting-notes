@@ -37,9 +37,10 @@ import {
   SortingAZIcon,
   ArrowDown01Icon,
   AiBrain01Icon,
+  Bookmark01Icon,
 } from "@hugeicons/core-free-icons"
 import type { Meeting } from "@/types"
-import { useState, useMemo, useCallback } from "react"
+import { useState, useMemo, useCallback, useRef, useEffect } from "react"
 import { TemplateIcon } from "@/components/template-icon"
 import { getTemplateById } from "@/lib/templates"
 import { MarkdownView } from "@/components/markdown-view"
@@ -177,8 +178,13 @@ export function MeetingDashboard({
   onSettings,
 }: MeetingDashboardProps) {
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedQuery, setDebouncedQuery] = useState("")
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
-  const [sortKey, setSortKey] = useState<SortKey>("date-desc")
+  const [sortKey, setSortKey] = useState<SortKey>(() => {
+    const saved = localStorage.getItem("meeting-notes-sort-pref")
+    return (saved as SortKey) || "date-desc"
+  })
   const [batchMode, setBatchMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
@@ -187,14 +193,28 @@ export function MeetingDashboard({
   const [briefLoadingId, setBriefLoadingId] = useState<string | null>(null)
   const [briefResult, setBriefResult] = useState<string | null>(null)
   const [briefMeetingId, setBriefMeetingId] = useState<string | null>(null)
+  const [savedSearches, setSavedSearches] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("meeting-notes-saved-searches")
+      return raw ? JSON.parse(raw) : []
+    } catch { return [] }
+  })
 
   const sorted = useMemo(() => sortMeetings(meetings, sortKey), [meetings, sortKey])
 
   const filteredMeetings = useMemo(() => {
-    if (!searchQuery.trim()) return sorted
-    const q = searchQuery.toLowerCase()
+    if (!debouncedQuery.trim()) return sorted
+    const q = debouncedQuery.toLowerCase()
     return sorted.filter((m) => getSearchableText(m).toLowerCase().includes(q))
-  }, [sorted, searchQuery])
+  }, [sorted, debouncedQuery])
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setDebouncedQuery(searchQuery)
+    }, 250)
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
+  }, [searchQuery])
 
   const hasQuery = searchQuery.trim().length > 0
 
@@ -208,6 +228,36 @@ export function MeetingDashboard({
       }
       return next
     })
+  }, [])
+
+  const handleSortChange = useCallback((key: SortKey) => {
+    setSortKey(key)
+    localStorage.setItem("meeting-notes-sort-pref", key)
+  }, [])
+
+  const handleSaveSearch = useCallback(() => {
+    const trimmed = searchQuery.trim()
+    if (!trimmed) return
+    setSavedSearches((prev) => {
+      if (prev.includes(trimmed)) return prev
+      const next = [trimmed, ...prev]
+      localStorage.setItem("meeting-notes-saved-searches", JSON.stringify(next))
+      return next
+    })
+  }, [searchQuery])
+
+  const handleRemoveSavedSearch = useCallback((q: string) => {
+    setSavedSearches((prev) => {
+      const next = prev.filter((s) => s !== q)
+      localStorage.setItem("meeting-notes-saved-searches", JSON.stringify(next))
+      return next
+    })
+  }, [])
+
+  const handleSelectSavedSearch = useCallback((q: string) => {
+    setSearchQuery(q)
+    setDebouncedQuery(q)
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null }
   }, [])
 
   const selectAll = useCallback(() => {
@@ -253,12 +303,13 @@ export function MeetingDashboard({
       const result = await generateBrief(meeting.title, sections, loadMeetings())
       setBriefResult(result)
       setBriefMeetingId(meeting.id)
+      onUpdateMeeting(meeting.id, { brief: result })
     } catch (e) {
       setBriefResult((e as Error).message)
     } finally {
       setBriefLoadingId(null)
     }
-  }, [])
+  }, [onUpdateMeeting])
 
   return (
     <div className="app-page">
@@ -284,47 +335,81 @@ export function MeetingDashboard({
         </div>
       </div>
 
-      <div className="app-toolbar">
-        <InputGroup className="h-8 flex-1 bg-transparent shadow-none ring-0">
-          <InputGroupInput
-            type="search"
-            placeholder="Search notes..."
-            aria-label="Search notes"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-          {hasQuery ? (
-            <InputGroupButton
-              size="icon-sm"
-              onClick={() => setSearchQuery("")}
-              aria-label="Clear search"
-            >
-              <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-            </InputGroupButton>
-          ) : (
-            <InputGroupButton size="icon-sm" tabIndex={-1} className="pointer-events-none" aria-label="Search notes">
-              <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
-            </InputGroupButton>
-          )}
-        </InputGroup>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="shrink-0">
-              <HugeiconsIcon icon={SortingAZIcon} strokeWidth={2} data-icon="inline-start" />
-              {SORT_LABELS[sortKey]}
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
-              <DropdownMenuItem key={key} onClick={() => setSortKey(key)}>
-                {SORT_LABELS[key]}
-                {key === sortKey && (
-                  <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-4 ml-auto" />
-                )}
-              </DropdownMenuItem>
+      <div className="app-toolbar flex-col items-stretch gap-2">
+        <div className="flex items-center gap-2">
+          <InputGroup className="h-8 flex-1 bg-transparent shadow-none ring-0">
+            <InputGroupInput
+              type="search"
+              placeholder="Search notes..."
+              aria-label="Search notes"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {hasQuery ? (
+              <InputGroupButton
+                size="icon-sm"
+                onClick={() => { setSearchQuery(""); setDebouncedQuery("") }}
+                aria-label="Clear search"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+              </InputGroupButton>
+            ) : (
+              <InputGroupButton size="icon-sm" tabIndex={-1} className="pointer-events-none" aria-label="Search notes">
+                <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
+              </InputGroupButton>
+            )}
+          </InputGroup>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleSaveSearch}
+            disabled={!hasQuery}
+            title="Save search"
+            aria-label="Save search"
+          >
+            <HugeiconsIcon icon={Bookmark01Icon} strokeWidth={2} />
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="sm" className="shrink-0">
+                <HugeiconsIcon icon={SortingAZIcon} strokeWidth={2} data-icon="inline-start" />
+                {SORT_LABELS[sortKey]}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+                <DropdownMenuItem key={key} onClick={() => handleSortChange(key)}>
+                  {SORT_LABELS[key]}
+                  {key === sortKey && (
+                    <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-4 ml-auto" />
+                  )}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        {savedSearches.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {savedSearches.map((q) => (
+              <button
+                key={q}
+                type="button"
+                className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
+                onClick={() => handleSelectSavedSearch(q)}
+              >
+                {q}
+                <span
+                  className="inline-flex items-center justify-center size-3.5 rounded-full hover:bg-muted-foreground/20"
+                  onClick={(e) => { e.stopPropagation(); handleRemoveSavedSearch(q) }}
+                  role="button"
+                  aria-label={`Remove saved search "${q}"`}
+                >
+                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-2.5" />
+                </span>
+              </button>
             ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+          </div>
+        )}
       </div>
 
       {pendingDelete && onUndoDelete && (
@@ -356,6 +441,11 @@ export function MeetingDashboard({
               <Button variant="ghost" size="sm" onClick={selectAll}>
                 {selected.size === filteredMeetings.length ? "Deselect All" : "Select All"}
               </Button>
+              {hasQuery && (
+                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(filteredMeetings.map((m) => m.id)))}>
+                  Select All Matching
+                </Button>
+              )}
               <Button
                 variant="destructive"
                 size="sm"
@@ -569,7 +659,7 @@ export function MeetingDashboard({
           <DialogHeader>
             <DialogTitle>Delete Note</DialogTitle>
             <DialogDescription>
-              This action cannot be undone. This note will be permanently removed.
+              This note will be moved to trash. You can undo within 5 seconds.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -595,7 +685,7 @@ export function MeetingDashboard({
           <DialogHeader>
             <DialogTitle>Delete {selected.size} Note{selected.size !== 1 ? "s" : ""}</DialogTitle>
             <DialogDescription>
-              This action cannot be undone. The selected notes will be permanently removed.
+              The selected notes will be moved to trash. You can undo within 5 seconds.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

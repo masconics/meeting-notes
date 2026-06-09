@@ -4,6 +4,8 @@ const MEETINGS_KEY = "meeting-notes"
 const SETTINGS_KEY = "meeting-notes-settings"
 const AI_SETTINGS_KEY = "meeting-notes-ai-settings"
 const TEMPLATES_KEY = "meeting-notes-templates"
+const SORT_PREF_KEY = "meeting-notes-sort-pref"
+const SAVED_SEARCHES_KEY = "meeting-notes-saved-searches"
 
 const ALL_KEYS = [MEETINGS_KEY, SETTINGS_KEY, AI_SETTINGS_KEY, TEMPLATES_KEY]
 
@@ -144,4 +146,35 @@ export function saveTemplates(templates: MeetingTemplate[]): void {
 
 export function saveChatHistory(meetingId: string, messages: ChatMessage[]): void {
   updateMeeting(meetingId, { chatHistory: messages })
+}
+
+export type SortKey = "date-desc" | "date-asc" | "duration-desc" | "duration-asc" | "title-asc" | "title-desc"
+
+export function loadSortPreference(): SortKey {
+  try {
+    const raw = localStorage.getItem(SORT_PREF_KEY)
+    if (raw && ["date-desc", "date-asc", "duration-desc", "duration-asc", "title-asc", "title-desc"].includes(raw)) {
+      return raw as SortKey
+    }
+    return "date-desc"
+  } catch {
+    return "date-desc"
+  }
+}
+
+export function saveSortPreference(key: SortKey): void {
+  localStorage.setItem(SORT_PREF_KEY, key)
+}
+
+export function loadSavedSearches(): string[] {
+  try {
+    const raw = localStorage.getItem(SAVED_SEARCHES_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveSavedSearches(searches: string[]): void {
+  localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(searches))
 }

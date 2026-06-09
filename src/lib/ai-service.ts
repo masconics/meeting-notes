@@ -513,3 +513,27 @@ ${sectionsContext ? `Structured Notes:\n${sectionsContext}` : ""}`
     }
   }
 }
+
+export async function detectSpeakers(transcript: string): Promise<string[]> {
+  if (!transcript.trim()) return []
+
+  const prompt = `Analyze this meeting transcript and extract the names of all speakers/participants. Return ONLY a JSON array of strings. Skip generic labels like "Speaker 1", "Interviewer", "Moderator" — only real person names. If no names are found, return [].
+
+TRANSCRIPT:
+${transcript.slice(0, 4000)}`
+
+  try {
+    const response = await callDeepSeek([
+      { role: "system", content: "Extract speaker names from transcripts. Respond only with a JSON array of strings." },
+      { role: "user", content: prompt },
+    ], { thinking: false })
+
+    const cleaned = response.trim()
+      .replace(/^```(?:json)?\s*\n?/i, "")
+      .replace(/\n?```\s*$/, "")
+    const names: string[] = JSON.parse(cleaned)
+    return Array.isArray(names) ? names.filter((n) => typeof n === "string" && n.trim()) : []
+  } catch {
+    return []
+  }
+}

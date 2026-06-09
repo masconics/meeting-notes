@@ -34,17 +34,9 @@ interface ProseMirrorEditorProps {
 }
 
 function MilkdownEditorInner({
-  value,
-  onChange,
-  className,
-  editorLabel,
-  onEditorReady,
+  value, onChange, className, editorLabel, onEditorReady,
 }: {
-  value: string
-  onChange: (markdown: string) => void
-  className: string
-  editorLabel: string
-  onEditorReady: (editor: Editor) => void
+  value: string; onChange: (markdown: string) => void; className: string; editorLabel: string; onEditorReady: (editor: Editor) => void
 }) {
   const onChangeRef = useRef(onChange)
   const isExternalUpdate = useRef(false)
@@ -52,25 +44,18 @@ function MilkdownEditorInner({
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const editorFactory = useCallback(
-    (root: HTMLElement) => {
-      return Editor.make()
-        .config((ctx) => {
-          ctx.set(rootCtx, root)
-          ctx.set(defaultValueCtx, value)
-          ctx.set(historyProviderConfig.key, { newGroupDelay: 10000 })
-          const listenerManager = ctx.get(listenerCtx)
-          listenerManager.markdownUpdated((_ctx, md) => {
-            if (isExternalUpdate.current) return
-            onChangeRef.current(md)
-          })
+    (root: HTMLElement) => Editor.make()
+      .config((ctx) => {
+        ctx.set(rootCtx, root)
+        ctx.set(defaultValueCtx, value)
+        ctx.set(historyProviderConfig.key, { newGroupDelay: 10000 })
+        const listenerManager = ctx.get(listenerCtx)
+        listenerManager.markdownUpdated((_ctx, md) => {
+          if (isExternalUpdate.current) return
+          onChangeRef.current(md)
         })
-        .use(commonmark)
-        .use(gfm)
-        .use(history)
-        .use(listener)
-        .use(streaming)
-        .use(diff)
-    },
+      })
+      .use(commonmark).use(gfm).use(history).use(listener).use(streaming).use(diff),
     []
   )
 
@@ -102,34 +87,21 @@ function MilkdownEditorInner({
     }
   }, [value, loading, getEditor])
 
-  return (
-    <div className={className}>
-      <Milkdown />
-    </div>
-  )
+  return <div className={className}><Milkdown /></div>
 }
 
 export function ProseMirrorEditor({
-  value,
-  onChange,
-  className = "",
-  editorLabel = "Edit note",
+  value, onChange, className = "", editorLabel = "Edit note",
 }: ProseMirrorEditorProps) {
   const editorRef = useRef<Editor | null>(null)
   const abortRef = useRef<AbortController | null>(null)
   const [aiMenu, setAiMenu] = useState<{ x: number; y: number; from: number; to: number; text: string } | null>(null)
   const [aiStreaming, setAiStreaming] = useState<AiEditAction | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
-
-  const getView = useCallback(() => {
-    const editor = editorRef.current
-    if (!editor) return null
-    return editor.action((ctx) => ctx.get(editorViewCtx))
-  }, [])
+  const [showAiUndo, setShowAiUndo] = useState<{ from: number; to: number; originalText: string } | null>(null)
 
   const handleEditorReady = useCallback((editor: Editor) => {
     editorRef.current = editor
-
     const view = editor.action((ctx) => ctx.get(editorViewCtx))
 
     const handleSelection = () => {
@@ -139,133 +111,80 @@ export function ProseMirrorEditor({
         if (!v || !v.hasFocus()) return
         const { from, to, empty } = v.state.selection
         const text = v.state.doc.textBetween(from, to, "\n").trim()
-        if (empty || text.length < 3) {
-          setAiMenu(null)
-          return
-        }
+        if (empty || text.length < 3) { setAiMenu(null); return }
         const startCoords = v.coordsAtPos(from)
         const endCoords = v.coordsAtPos(to)
-        const selection = window.getSelection()
-        const selectionRect = selection && selection.rangeCount > 0
-          ? selection.getRangeAt(0).getBoundingClientRect()
-          : null
-        const visualTop = selectionRect && selectionRect.height > 0 ? selectionRect.top : startCoords.top
-        const visualBottom = selectionRect && selectionRect.height > 0 ? selectionRect.bottom : endCoords.bottom
-        const visualLeft = selectionRect && selectionRect.width > 0 ? selectionRect.left : startCoords.left
-        const toolbarHeight = 42
-        const toolbarWidth = 340
-        const hasRoomBelow = visualBottom + toolbarHeight + 10 < window.innerHeight
+        const sel = window.getSelection()
+        const selRect = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).getBoundingClientRect() : null
+        const vTop = selRect && selRect.height > 0 ? selRect.top : startCoords.top
+        const vBottom = selRect && selRect.height > 0 ? selRect.bottom : endCoords.bottom
+        const vLeft = selRect && selRect.width > 0 ? selRect.left : startCoords.left
+        const h = 42; const w = 340
+        const room = vBottom + h + 10 < window.innerHeight
         setAiError(null)
-        setAiMenu({
-          x: Math.max(8, Math.min(visualLeft, window.innerWidth - toolbarWidth - 8)),
-          y: hasRoomBelow ? visualBottom + 8 : Math.max(8, visualTop - toolbarHeight - 8),
-          from,
-          to,
-          text,
-        })
+        setAiMenu({ x: Math.max(8, Math.min(vLeft, window.innerWidth - w - 8)), y: room ? vBottom + 8 : Math.max(8, vTop - h - 8), from, to, text })
       }, 0)
     }
 
     view.dom.addEventListener("mouseup", handleSelection)
     view.dom.addEventListener("keyup", handleSelection)
+    return () => {
+      view.dom.removeEventListener("mouseup", handleSelection)
+      view.dom.removeEventListener("keyup", handleSelection)
+    }
   }, [])
 
   const runAiEdit = useCallback(async (action: AiEditAction) => {
-    const editor = editorRef.current
-    const menu = aiMenu
+    const editor = editorRef.current; const menu = aiMenu
     if (!editor || !menu || aiStreaming) return
-
-    const fullContext = editor.action(getMarkdown())
-    const instruction = AI_INSTRUCTIONS[action]
-
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-    setAiStreaming(action)
-    setAiError(null)
-    setAiMenu({ ...menu, text: instruction })
-
+    const orig = { from: menu.from, to: menu.to, originalText: menu.text }
+    setShowAiUndo(null)
+    const fullCtx = editor.action(getMarkdown())
+    abortRef.current?.abort(); const ctrl = new AbortController(); abortRef.current = ctrl
+    setAiStreaming(action); setAiError(null); setAiMenu({ ...menu, text: AI_INSTRUCTIONS[action] })
     try {
       editor.action(callCommand(startStreamingCmd.key, { insertAt: "selection" }))
-
       const { streamRewriteSelection } = await import("@/lib/ai-service")
-
-      for await (const chunk of streamRewriteSelection(
-        menu.text,
-        action,
-        fullContext,
-        controller.signal
-      )) {
+      for await (const chunk of streamRewriteSelection(menu.text, action, fullCtx, ctrl.signal)) {
         editor.action(callCommand(pushChunkCmd.key, chunk))
       }
-
       editor.action(callCommand(endStreamingCmd.key))
+      setShowAiUndo(orig)
     } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") {
-        editor.action(callCommand(abortStreamingCmd.key))
-      } else {
-        setAiError(e instanceof Error ? e.message : "AI edit failed")
-        editor.action(callCommand(abortStreamingCmd.key))
-      }
-    } finally {
-      abortRef.current = null
-      setAiStreaming(null)
-      setAiMenu(null)
-    }
-  }, [aiMenu, aiStreaming, getView])
+      if (e instanceof DOMException && e.name === "AbortError") editor.action(callCommand(abortStreamingCmd.key))
+      else { setAiError(e instanceof Error ? e.message : "AI edit failed"); editor.action(callCommand(abortStreamingCmd.key)) }
+    } finally { abortRef.current = null; setAiStreaming(null); setAiMenu(null) }
+  }, [aiMenu, aiStreaming])
 
-  const cancelAiEdit = useCallback(() => {
-    abortRef.current?.abort()
-    abortRef.current = null
-    setAiStreaming(null)
-    setAiMenu(null)
-  }, [])
+  const cancelAiEdit = useCallback(() => { abortRef.current?.abort(); abortRef.current = null; setAiStreaming(null); setAiMenu(null) }, [])
+  const handleAiUndo = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor || !showAiUndo) return
+    const fullMd = editor.action(getMarkdown())
+    onChange(fullMd.slice(0, showAiUndo.from) + showAiUndo.originalText + fullMd.slice(showAiUndo.to))
+    setShowAiUndo(null)
+  }, [showAiUndo, onChange])
 
   return (
     <>
       <MilkdownProvider>
-        <MilkdownEditorInner
-          value={value}
-          onChange={onChange}
-          className={`pm-editor ${className}`}
-          editorLabel={editorLabel}
-          onEditorReady={handleEditorReady}
-        />
+        <MilkdownEditorInner value={value} onChange={onChange} className={`pm-editor ${className}`} editorLabel={editorLabel} onEditorReady={handleEditorReady} />
       </MilkdownProvider>
       {aiMenu && (
-        <div
-          className="fixed z-50 flex items-center gap-1 rounded-2xl border border-border/70 bg-card/95 p-1 shadow-xl backdrop-blur"
-          style={{ left: aiMenu.x, top: aiMenu.y }}
-          onMouseDown={(e) => e.preventDefault()}
-        >
-          {AI_ACTIONS.map((action) => (
-            <button
-              key={action.id}
-              type="button"
-              disabled={aiStreaming !== null}
-              onClick={() => runAiEdit(action.id)}
-              className="h-7 rounded-xl px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-            >
-              {aiStreaming === action.id ? (
-                <span className="inline-flex items-center gap-1">
-                  <span className="size-1.5 rounded-full bg-primary animate-pulse" />
-                  Writing
-                </span>
-              ) : action.label}
+        <div className="fixed z-50 flex items-center gap-1 rounded-2xl border border-border/70 bg-card/95 p-1 shadow-xl backdrop-blur" style={{ left: aiMenu.x, top: aiMenu.y }} onMouseDown={(e) => e.preventDefault()}>
+          {AI_ACTIONS.map((a) => (
+            <button key={a.id} type="button" disabled={aiStreaming !== null} onClick={() => runAiEdit(a.id)} className="h-7 rounded-xl px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50">
+              {aiStreaming === a.id ? <span className="inline-flex items-center gap-1"><span className="size-1.5 rounded-full bg-primary animate-pulse" />Writing</span> : a.label}
             </button>
           ))}
-          <button
-            type="button"
-            onClick={cancelAiEdit}
-            className="h-7 rounded-xl px-2 text-xs text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            {aiStreaming ? "Stop" : "Close"}
-          </button>
+          <button type="button" onClick={cancelAiEdit} className="h-7 rounded-xl px-2 text-xs text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground">{aiStreaming ? "Stop" : "Close"}</button>
         </div>
       )}
-      {aiError && (
-        <div className="fixed bottom-16 left-1/2 z-50 -translate-x-1/2 rounded-2xl border border-destructive/20 bg-card px-3 py-2 text-xs text-destructive shadow-xl">
-          {aiError}
+      {aiError && <div className="fixed bottom-16 left-1/2 z-50 -translate-x-1/2 rounded-2xl border border-destructive/20 bg-card px-3 py-2 text-xs text-destructive shadow-xl">{aiError}</div>}
+      {showAiUndo && (
+        <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-2xl border border-border/70 bg-card/95 px-3 py-2 shadow-xl backdrop-blur flex items-center gap-2 text-xs" onMouseDown={(e) => e.preventDefault()}>
+          <span className="text-muted-foreground">AI edit applied</span><span className="text-border/40">·</span>
+          <button type="button" onClick={handleAiUndo} className="font-medium text-primary hover:text-primary/80 transition-colors">Undo</button>
         </div>
       )}
     </>

@@ -1,5 +1,73 @@
 import type { Meeting } from "@/types"
 
+export async function exportAllMeetings(): Promise<boolean> {
+  const { loadMeetings } = await import("@/lib/storage")
+  const meetings = loadMeetings()
+  if (meetings.length === 0) return false
+
+  const data = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), meetings }, null, 2)
+  const filename = `meeting-notes-export-${new Date().toISOString().slice(0, 10)}.json`
+
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog")
+    const filePath = await save({
+      defaultPath: filename,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    })
+    if (!filePath) return false
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs")
+    await writeTextFile(filePath, data)
+    return true
+  } catch {
+    const blob = new Blob([data], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    return true
+  }
+}
+
+export async function exportAllMeetingsMarkdown(): Promise<boolean> {
+  const { loadMeetings } = await import("@/lib/storage")
+  const meetings = loadMeetings()
+  if (meetings.length === 0) return false
+
+  const dateStr = new Date().toISOString().slice(0, 10)
+  const content = meetings.map((m, i) => {
+    const md = toMarkdown(m)
+    return i === 0 ? md : `\n\n---\n\n${md}`
+  }).join("")
+  const filename = `meetings-${dateStr}.md`
+
+  try {
+    const { save } = await import("@tauri-apps/plugin-dialog")
+    const filePath = await save({
+      defaultPath: filename,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    })
+    if (!filePath) return false
+    const { writeTextFile } = await import("@tauri-apps/plugin-fs")
+    await writeTextFile(filePath, content)
+    return true
+  } catch {
+    const blob = new Blob([content], { type: "text/markdown" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    return true
+  }
+}
+
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", {
     month: "short",
@@ -82,6 +150,13 @@ export function toPlainText(meeting: Meeting): string {
   }
 
   return parts.join("\n")
+}
+
+export async function copyAllAsJson(): Promise<void> {
+  const { loadMeetings } = await import("@/lib/storage")
+  const meetings = loadMeetings()
+  const data = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), meetings }, null, 2)
+  await navigator.clipboard.writeText(data)
 }
 
 export async function saveToFile(meeting: Meeting, format: "md" | "txt"): Promise<boolean> {

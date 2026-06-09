@@ -807,8 +807,8 @@ __metadata:
   linkType: hard
 
 "@dotenvx/dotenvx@npm:^1.48.4":
-  version: 1.71.1
-  resolution: "@dotenvx/dotenvx@npm:1.71.1"
+  version: 1.71.2
+  resolution: "@dotenvx/dotenvx@npm:1.71.2"
   dependencies:
     commander: "npm:^11.1.0"
     dotenv: "npm:^17.2.1"
@@ -823,7 +823,7 @@ __metadata:
     yocto-spinner: "npm:^1.1.0"
   bin:
     dotenvx: src/cli/dotenvx.js
-  checksum: 10c0/ed02ffe3aaedfa4092bd37bea6eea58f34452f227d078e343cf72fc5adaee4e62d4ed1f2b9064870cc356b83747424f28d69af8ab38f5397e62bf4f01d62b1f2
+  checksum: 10c0/897617c621a4329b0d0989dc595dac4c58b6f1da3d655b46fe64ac072de670f16ab652a6c7bf28014398dddea977fcb0d6d22b13aef31bcd7a419bb910d7a3d9
   languageName: node
   linkType: hard
 
@@ -1794,7 +1794,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@ocavue/utils@npm:^1.0.0":
+"@ocavue/utils@npm:^1.0.0, @ocavue/utils@npm:^1.6.0":
   version: 1.6.0
   resolution: "@ocavue/utils@npm:1.6.0"
   checksum: 10c0/d745e47b2ed047c16291ccd3a32427abb1f5519c7fabf82c720b9c9a9e50a9ae9c783be111fc9d6c00a822a5ed83b836501c05a9814d2f7e6f604de86f42ee02
@@ -1805,6 +1805,38 @@ __metadata:
   version: 0.133.0
   resolution: "@oxc-project/types@npm:0.133.0"
   checksum: 10c0/70c57ba58644f7ec217b670c301801f4d06995f4ccdba6b2bd106ea3e5ee49d616573e6ef8d55530b87571a960696543687f3850e87ad173d3f88965c30cdd63
+  languageName: node
+  linkType: hard
+
+"@prosemirror-adapter/core@npm:0.5.3":
+  version: 0.5.3
+  resolution: "@prosemirror-adapter/core@npm:0.5.3"
+  dependencies:
+    "@ocavue/utils": "npm:^1.6.0"
+    prosemirror-model: "npm:^1.25.4"
+    prosemirror-state: "npm:^1.4.4"
+    prosemirror-view: "npm:^1.41.7"
+  checksum: 10c0/8986edd12f82377ab9152d508cb9bdbc1ab788e2eef7fe12f015659f87b93591978e1f6397452500e6bb6a9ac148c3285c41eb80c9c32686d9844b08e6c4c50c
+  languageName: node
+  linkType: hard
+
+"@prosemirror-adapter/react@npm:^0.5.3":
+  version: 0.5.3
+  resolution: "@prosemirror-adapter/react@npm:0.5.3"
+  dependencies:
+    "@prosemirror-adapter/core": "npm:0.5.3"
+    prosemirror-model: "npm:^1.25.4"
+    prosemirror-state: "npm:^1.4.4"
+    prosemirror-view: "npm:^1.41.7"
+  peerDependencies:
+    react: "*"
+    react-dom: "*"
+  peerDependenciesMeta:
+    react:
+      optional: true
+    react-dom:
+      optional: true
+  checksum: 10c0/6e2fa211767c7f8277ee85a4bb70d39f4d9ac341162415260579243509f1e3c99b7a9c67718aed436e1ef53e63881ee89c78c4889362da7eb5602227f4ba87b0
   languageName: node
   linkType: hard
 
@@ -4714,9 +4746,9 @@ __metadata:
   linkType: hard
 
 "electron-to-chromium@npm:^1.5.328":
-  version: 1.5.368
-  resolution: "electron-to-chromium@npm:1.5.368"
-  checksum: 10c0/229fb871d2b59d3a54129ee9801cd5853258eec1503d9b3b52633a0902589693efa2d17f71c26cf28ec369bc9ed78e609206e8740745c9325d0fc464ac4559d6
+  version: 1.5.369
+  resolution: "electron-to-chromium@npm:1.5.369"
+  checksum: 10c0/53fce091291f04a1c4f143b454143ec8589bfa233ca070564e836735011cd2214a7af2a53c48992c03929016e8271eeeca53027648c8862cc571b62729a4aed7
   languageName: node
   linkType: hard
 
@@ -5511,9 +5543,9 @@ __metadata:
   linkType: hard
 
 "hono@npm:^4.11.4":
-  version: 4.12.24
-  resolution: "hono@npm:4.12.24"
-  checksum: 10c0/1a1394e48618c34b0ea627d7de7e5d59f1d90aedcd518f9d19b987260bbf16c362043e417bbb64290110c3cd54ef51017f7786438a0c2d811af01566d6ca3e94
+  version: 4.12.25
+  resolution: "hono@npm:4.12.25"
+  checksum: 10c0/9216d647fe2f39b17855b0e74913688b837e3fa9519d367c7beeec399265b36608a820928cc33ab926eee58fe2daf7e33296235b52e56dbfac0fbcd51a5e818e
   languageName: node
   linkType: hard
 
@@ -7124,12 +7156,12 @@ __metadata:
   linkType: hard
 
 "postcss-selector-parser@npm:^7.1.0":
-  version: 7.1.1
-  resolution: "postcss-selector-parser@npm:7.1.1"
+  version: 7.1.2
+  resolution: "postcss-selector-parser@npm:7.1.2"
   dependencies:
     cssesc: "npm:^3.0.0"
     util-deprecate: "npm:^1.0.2"
-  checksum: 10c0/02d3b1589ddcddceed4b583b098b95a7266dacd5135f041e5d913ebb48e874fd333a36e564cc9a2ec426a464cb18db11cb192ac76247aced5eba8c951bf59507
+  checksum: 10c0/dcde475e5f11aa5d989697ea93c5364c03e25e647e2ad0189e6f7828b364c01a3d436f725f2b278760e98345c783e957971a86d677c2b82bca9977caec98b151
   languageName: node
   linkType: hard
 
@@ -7334,7 +7366,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"prosemirror-view@npm:^1.0.0, prosemirror-view@npm:^1.1.0, prosemirror-view@npm:^1.27.0, prosemirror-view@npm:^1.31.0, prosemirror-view@npm:^1.33.8, prosemirror-view@npm:^1.41.3, prosemirror-view@npm:^1.41.4":
+"prosemirror-view@npm:^1.0.0, prosemirror-view@npm:^1.1.0, prosemirror-view@npm:^1.27.0, prosemirror-view@npm:^1.31.0, prosemirror-view@npm:^1.33.8, prosemirror-view@npm:^1.41.3, prosemirror-view@npm:^1.41.4, prosemirror-view@npm:^1.41.7":
   version: 1.41.8
   resolution: "prosemirror-view@npm:1.41.8"
   dependencies:
@@ -7910,7 +7942,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"side-channel-list@npm:^1.0.0":
+"side-channel-list@npm:^1.0.1":
   version: 1.0.1
   resolution: "side-channel-list@npm:1.0.1"
   dependencies:
@@ -7946,15 +7978,15 @@ __metadata:
   linkType: hard
 
 "side-channel@npm:^1.1.0":
-  version: 1.1.0
-  resolution: "side-channel@npm:1.1.0"
+  version: 1.1.1
+  resolution: "side-channel@npm:1.1.1"
   dependencies:
     es-errors: "npm:^1.3.0"
-    object-inspect: "npm:^1.13.3"
-    side-channel-list: "npm:^1.0.0"
+    object-inspect: "npm:^1.13.4"
+    side-channel-list: "npm:^1.0.1"
     side-channel-map: "npm:^1.0.1"
     side-channel-weakmap: "npm:^1.0.2"
-  checksum: 10c0/cb20dad41eb032e6c24c0982e1e5a24963a28aa6122b4f05b3f3d6bf8ae7fd5474ef382c8f54a6a3ab86e0cac4d41a23bd64ede3970e5bfb50326ba02a7996e6
+  checksum: 10c0/dc0ab81d67f61bda9247d053ce93f41c3fd8ad2bdcb9cf9d8d2f8540d488f26d87a5e99ebfc07eea49ec025867b2452b705442d974b1478f0395e69f6bfb3270
   languageName: node
   linkType: hard
 
@@ -8483,6 +8515,7 @@ __metadata:
     "@milkdown/plugin-listener": "npm:^7.21.2"
     "@milkdown/plugin-streaming": "npm:^7.21.2"
     "@milkdown/react": "npm:^7.21.2"
+    "@prosemirror-adapter/react": "npm:^0.5.3"
     "@radix-ui/react-toolbar": "npm:^1.1.12"
     "@tailwindcss/vite": "npm:^4.1.17"
     "@tauri-apps/api": "npm:^2"

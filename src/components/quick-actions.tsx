@@ -37,15 +37,22 @@ const ICON_MAP: Record<string, IconSvgElement> = {
   ArrowRight01Icon,
 }
 
-interface QuickActionsProps {
-  meeting: Meeting
+interface ActionResult {
+  id: string
+  label: string
+  content: string
 }
 
-export function QuickActions({ meeting }: QuickActionsProps) {
+interface QuickActionsProps {
+  meeting: Meeting
+  onInsertToNotes?: (content: string) => void
+}
+
+export function QuickActions({ meeting, onInsertToNotes }: QuickActionsProps) {
   const [loading, setLoading] = useState<string | null>(null)
-  const [result, setResult] = useState<string | null>(null)
+  const [results, setResults] = useState<ActionResult[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   const actions = meeting.templateId
     ? (getTemplateById(meeting.templateId)?.quickActions ?? QUICK_ACTIONS)
@@ -54,7 +61,6 @@ export function QuickActions({ meeting }: QuickActionsProps) {
   const handleAction = useCallback(async (action: QuickAction) => {
     setLoading(action.label)
     setError(null)
-    setResult(null)
     try {
       const text = await executeQuickAction(
         meeting.transcript,
@@ -62,7 +68,7 @@ export function QuickActions({ meeting }: QuickActionsProps) {
         meeting.structuredNotes,
         action
       )
-      setResult(text)
+      setResults(prev => [...prev, { id: crypto.randomUUID(), label: action.label, content: text }])
     } catch (e) {
       setError(e instanceof Error ? e.message : "Action failed")
     } finally {
@@ -70,56 +76,57 @@ export function QuickActions({ meeting }: QuickActionsProps) {
     }
   }, [meeting])
 
-  const handleCopy = useCallback(async () => {
-    if (!result) return
-    await navigator.clipboard.writeText(result)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }, [result])
+  const handleDismiss = useCallback((id: string) => {
+    setResults(prev => prev.filter(r => r.id !== id))
+  }, [])
+
+  const handleCopy = useCallback(async (id: string, content: string) => {
+    await navigator.clipboard.writeText(content)
+    setCopiedId(id)
+    setTimeout(() => setCopiedId(null), 2000)
+  }, [])
 
   return (
     <div className="flex flex-col gap-3">
-      {!result && (
-        <div className="flex flex-wrap gap-2">
-          {actions.map((action) => {
-            const Icon = ICON_MAP[action.icon]
-            return (
-              <motion.div key={action.label} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
-              <Button
-                key={action.label}
-                variant="outline"
-                size="sm"
-                onClick={() => handleAction(action)}
-                disabled={loading !== null}
-              >
-                {loading === action.label ? (
-                  <>
-                    <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
-                    Working...
-                  </>
-                ) : (
-                  <>
-                    {Icon && <HugeiconsIcon icon={Icon} strokeWidth={2} data-icon="inline-start" />}
-                    {action.label}
-                  </>
-                )}
-              </Button>
-              </motion.div>
-            )
-          })}
-        </div>
-      )}
+      <div className="flex flex-wrap gap-2">
+        {actions.map((action) => {
+          const Icon = ICON_MAP[action.icon]
+          return (
+            <motion.div key={action.label} whileTap={{ scale: 0.95 }} whileHover={{ scale: 1.02 }}>
+            <Button
+              key={action.label}
+              variant="outline"
+              size="sm"
+              onClick={() => handleAction(action)}
+              disabled={loading !== null}
+            >
+              {loading === action.label ? (
+                <>
+                  <div className="size-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-1.5" />
+                  Working...
+                </>
+              ) : (
+                <>
+                  {Icon && <HugeiconsIcon icon={Icon} strokeWidth={2} data-icon="inline-start" />}
+                  {action.label}
+                </>
+              )}
+            </Button>
+            </motion.div>
+          )
+        })}
+      </div>
 
-      {result && (
-        <div className="flex flex-col gap-2">
+      {results.map((r) => (
+        <div key={r.id} className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <div className="text-xs font-medium text-primary flex items-center gap-1.5">
               <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} className="size-3.5" />
-              AI Response
+              {r.label}
             </div>
             <div className="flex gap-1">
-              <Button variant="ghost" size="icon-sm" onClick={handleCopy}>
-                {copied ? (
+              <Button variant="ghost" size="icon-sm" onClick={() => handleCopy(r.id, r.content)}>
+                {copiedId === r.id ? (
                   <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }}>
                     <span className="text-xs font-medium text-emerald-500">Copied</span>
                   </motion.div>
@@ -127,16 +134,21 @@ export function QuickActions({ meeting }: QuickActionsProps) {
                   <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} className="size-4" />
                 )}
               </Button>
-              <Button variant="ghost" size="icon-sm" onClick={() => setResult(null)}>
+              {onInsertToNotes && (
+                <Button variant="ghost" size="icon-sm" onClick={() => onInsertToNotes(r.content)} title="Insert into notes">
+                  <HugeiconsIcon icon={NoteIcon} strokeWidth={2} className="size-4" />
+                </Button>
+              )}
+              <Button variant="ghost" size="icon-sm" onClick={() => handleDismiss(r.id)}>
                 <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-4" />
               </Button>
             </div>
           </div>
           <div className="bg-muted/60 rounded-2xl p-3 max-h-64 overflow-y-auto">
-            <MarkdownView markdown={result} className="text-sm" />
+            <MarkdownView markdown={r.content} className="text-sm" />
           </div>
         </div>
-      )}
+      ))}
 
       {error && (
         <div className="text-destructive text-sm" role="alert">{error}</div>

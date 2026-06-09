@@ -158,11 +158,11 @@
 
 @layer components {
   .app-page {
-    @apply mx-auto flex min-h-full w-full max-w-2xl flex-col gap-3 px-4 py-5 sm:px-6;
+    @apply mx-auto flex min-h-full w-full max-w-6xl flex-col gap-3 px-6 py-5 sm:px-8 lg:px-12;
   }
 
   .app-page-narrow {
-    @apply max-w-2xl;
+    @apply max-w-3xl;
   }
 
   .app-page-header {
@@ -667,6 +667,7 @@
 .pm-editor .ProseMirror pre code { background: none; padding: 0; font-size: inherit; font-family: "JetBrains Mono", ui-monospace, monospace; }
 .pm-editor .ProseMirror blockquote { border-left: 2px solid color-mix(in oklch, var(--primary) 40%, transparent); padding: 0.25rem 0 0.25rem 1rem; margin: 0.5rem 0; color: color-mix(in oklch, var(--foreground) 55%, transparent); font-style: italic; font-size: 0.9375rem; }
 .pm-editor .ProseMirror code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.8125rem; background: color-mix(in oklch, var(--muted) 50%, transparent); padding: 0.1rem 0.35rem; border-radius: 0.25rem; }
+
 .pm-editor .ProseMirror strong { font-weight: 600; color: var(--foreground); }
 .pm-editor .ProseMirror em { font-style: italic; }
 .pm-editor .ProseMirror a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }

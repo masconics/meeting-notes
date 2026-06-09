@@ -105,6 +105,15 @@ export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void) 
   const lastIsStreaming =
     messages.length > 0 && messages[messages.length - 1].role === "assistant" && streaming
 
+  const resetChat = useCallback(() => {
+    abortRef.current?.abort()
+    setMessages([])
+    setInput("")
+    setError(null)
+    setStreaming(false)
+    streamingRef.current = ""
+  }, [])
+
   return {
     messages,
     input,
@@ -118,5 +127,6 @@ export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void) 
     retryLast,
     copyMessage,
     lastIsStreaming,
+    resetChat,
   }
 }

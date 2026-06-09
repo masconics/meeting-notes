@@ -86,7 +86,7 @@ export function ChatPage({ meeting, allMeetings, onBack, onSettings, onSwitchMee
   }, [])
 
   return (
-    <div className="flex flex-col gap-4 w-full max-w-2xl mx-auto h-[calc(100vh-6rem)]">
+    <div className="flex flex-col gap-4 w-full px-6 sm:px-8 lg:px-12 h-[calc(100vh-6rem)]">
       <div className="flex items-center gap-3 shrink-0">
         <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
@@ -254,7 +254,7 @@ export function ChatPage({ meeting, allMeetings, onBack, onSettings, onSwitchMee
                     {msg.role === "assistant" && msg.content && !(isLast && lastIsStreaming) && (
                       <button
                         onClick={() => copyMessage(msg.content, i)}
-                        className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-1"
+                        className="text-[11px] text-muted-foreground/50 hover:text-foreground inline-flex items-center gap-1 ml-1"
                       >
                         {copiedIdx === i ? (
                           <span className="text-emerald-500">Copied</span>
