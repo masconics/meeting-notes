@@ -6,12 +6,27 @@ interface NoteRendererProps {
   className?: string
   editable?: boolean
   onChange?: (content: string) => void
+  viewMode?: "wysiwyg" | "source"
 }
 
-export function NoteRenderer({ content, className = "", editable = false, onChange }: NoteRendererProps) {
+export function NoteRenderer({ content, className = "", editable = false, onChange, viewMode = "wysiwyg" }: NoteRendererProps) {
   const html = useMemo(() => renderMarkdown(content), [content])
 
   if (editable) {
+    if (viewMode === "source") {
+      return (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <textarea
+            value={content}
+            onChange={(e) => onChange?.(e.target.value)}
+            className={`${className} h-full min-h-0 flex-1 w-full resize-none overflow-auto border-0 bg-transparent outline-none font-mono text-sm leading-relaxed text-foreground placeholder:text-muted-foreground/40`}
+            placeholder="Write markdown..."
+            spellCheck={false}
+          />
+        </div>
+      )
+    }
+
     return (
       <MarkdownView
         markdown={content}

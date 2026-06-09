@@ -64,7 +64,7 @@ export function MarkdownView({
         value={markdown ?? ""}
         onChange={onChange}
         editorLabel={editorLabel}
-        className={`be-editor ${className ?? ""}`}
+        className={`be-editor min-h-0 flex-1 ${className ?? ""}`}
       />
     )
   }

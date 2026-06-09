@@ -225,6 +225,86 @@ ${rawNotes || "(none)"}`
   }
 }
 
+export async function* streamRewriteSelection(
+  selectedText: string,
+  action: "rewrite" | "summarize" | "expand" | "shorten",
+  context: string,
+  signal?: AbortSignal
+): AsyncGenerator<string> {
+  const settings = loadAISettings()
+  const apiKey = await getApiKey()
+
+  const instruction = {
+    rewrite: "Rewrite the selected text to be clearer and more polished while preserving the meaning.",
+    summarize: "Summarize the selected text into a concise, useful version.",
+    expand: "Expand the selected text with helpful detail while staying faithful to the surrounding notes.",
+    shorten: "Make the selected text shorter and sharper while preserving the important meaning.",
+  }[action]
+
+  const prompt = `${instruction}
+
+Return only the replacement text. Use markdown when it improves readability. Do not wrap the answer in code fences.
+
+SELECTED TEXT:
+${selectedText}
+
+FULL NOTE CONTEXT:
+${context.slice(0, 12000)}`
+
+  const res = await fetch(`${DEEPSEEK_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.model || "deepseek-v4-pro",
+      messages: [
+        { role: "system", content: "You are an expert meeting-notes editor. Replace selected text directly and concisely." },
+        { role: "user", content: prompt },
+      ],
+      stream: true,
+      temperature: 0.35,
+      max_tokens: 1024,
+    }),
+    signal,
+  })
+
+  if (!res.ok) {
+    const body = await res.text()
+    if (res.status === 401) throw new Error("Invalid API key.")
+    throw new Error(`DeepSeek API error (${res.status}): ${body}`)
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) throw new Error("No response stream")
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() || ""
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue
+      const data = line.slice(6)
+      if (data === "[DONE]") continue
+      try {
+        const parsed = JSON.parse(data)
+        const delta = parsed.choices?.[0]?.delta?.content
+        if (delta) yield delta
+      } catch {
+        continue
+      }
+    }
+  }
+}
+
 export async function enhanceNotes(
   rawNotes: string,
   transcript: string,

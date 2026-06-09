@@ -355,6 +355,17 @@
   padding-left: 0;
 }
 
+.mdx-content p + ul,
+.mdx-content p + ol {
+  margin-top: 0.6rem;
+}
+
+.mdx-content li ul,
+.mdx-content li ol {
+  padding-left: 1.35rem;
+  margin: 0.25rem 0;
+}
+
 .mdx-content li {
   position: relative;
   margin: 0;
@@ -542,10 +553,13 @@
 
 /* ProseMirror editor */
 .pm-editor {
+  display: flex;
+  min-height: 0;
   outline: none;
   cursor: text;
 }
 .pm-editor .ProseMirror {
+  flex: 1;
   position: relative;
   outline: none;
   min-height: 7rem;
@@ -557,6 +571,44 @@
 }
 .pm-editor .ProseMirror:focus-visible {
   outline: none;
+}
+.pm-editor .ProseMirror.pm-ai-writing {
+  caret-color: var(--primary);
+}
+.pm-editor .ProseMirror.pm-ai-writing::after {
+  content: "";
+  display: inline-block;
+  width: 0.45rem;
+  height: 1em;
+  margin-left: 0.15rem;
+  border-radius: 999px;
+  background: var(--primary);
+  vertical-align: -0.15em;
+  animation: pm-ai-caret 0.85s ease-in-out infinite;
+}
+.pm-editor .ProseMirror .pm-ai-writing-block {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--foreground) 70%, transparent),
+    var(--primary),
+    color-mix(in oklch, var(--foreground) 70%, transparent)
+  );
+  background-size: 220% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent !important;
+  animation: pm-ai-writing-sheen 1.4s ease-in-out infinite;
+}
+.pm-editor .ProseMirror .pm-ai-writing-block * {
+  color: inherit !important;
+}
+@keyframes pm-ai-writing-sheen {
+  from { background-position: 140% 0; }
+  to { background-position: -120% 0; }
+}
+@keyframes pm-ai-caret {
+  0%, 100% { opacity: 0.25; transform: scaleY(0.75); }
+  50% { opacity: 1; transform: scaleY(1); }
 }
 .pm-editor .ProseMirror h1 { font-size: 1.625rem; font-weight: 700; letter-spacing: -0.025em; margin: 1.5rem 0 0.5rem 0; color: var(--foreground); }
 .pm-editor .ProseMirror h2 { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.015em; margin: 1.25rem 0 0.35rem 0; color: var(--foreground); }

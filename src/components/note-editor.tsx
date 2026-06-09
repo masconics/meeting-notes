@@ -10,7 +10,7 @@ import {
   AiChat02Icon, ArrowRight01Icon, ArrowLeft01Icon,
   MicIcon, ComputerIcon,
   Calendar01Icon, Clock01Icon,
-  Copy01Icon, Task01Icon, FileAddIcon,
+  Copy01Icon, Task01Icon, FileAddIcon, CodeIcon,
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { error as logError } from "@tauri-apps/plugin-log"
@@ -19,7 +19,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
 import { TemplateIcon } from "@/components/template-icon"
 import { NoteRenderer } from "@/components/note-renderer"
-import { useSelectionMenu } from "@/components/selection-context-menu"
+import { Waveform } from "@/components/Waveform"
 import { getTemplateById, saveTemplate as persistTemplate } from "@/lib/templates"
 import type { Meeting, AppSettings, MeetingTemplate, ChatMessage } from "@/types"
 
@@ -42,36 +42,6 @@ function formatTime(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   })
-}
-
-const BAR_COUNT = 9
-
-function AudioBars({ active, level }: { active: boolean; level: number }) {
-  const [levels, setLevels] = useState<number[]>(() => new Array(BAR_COUNT).fill(0))
-
-  useEffect(() => {
-    if (!active) {
-      setLevels(new Array(BAR_COUNT).fill(0))
-      return
-    }
-    const base = Math.min(1, Math.pow(level * 6, 0.7))
-    const mid = (BAR_COUNT - 1) / 2
-    setLevels(
-      Array.from({ length: BAR_COUNT }, (_, i) => {
-        const center = 1 - Math.abs(i - mid) / mid
-        const jitter = 0.7 + Math.random() * 0.6
-        return base * (0.5 + center * 0.5) * jitter
-      })
-    )
-  }, [active, level])
-  return (
-    <div className="flex items-end justify-center gap-0.5 h-8" aria-hidden="true">
-      {levels.map((lvl, i) => (
-        <div key={i} className="w-1 bg-primary rounded-full transition-[height] duration-75 ease-out"
-          style={{ height: active ? `${Math.max(6, Math.min(100, lvl * 130))}%` : "14%" }} />
-      ))}
-    </div>
-  )
 }
 
 interface NoteEditorProps {
@@ -108,7 +78,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [copied, setCopied] = useState(false)
   const [silenceSeconds, setSilenceSeconds] = useState(0)
   const [isStreaming, setIsStreaming] = useState(false)
-  const contentRef = useRef<HTMLDivElement>(null)
+  const [viewMode, setViewMode] = useState<"wysiwyg" | "source">("wysiwyg")
 
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const unlistenRef = useRef<Array<() => void>>([])
@@ -408,13 +378,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
   useEffect(() => () => abortRef.current?.abort(), [])
 
-  const { menuElement } = useSelectionMenu({
-    containerRef: contentRef as React.RefObject<HTMLElement>,
-    getSelectedText: () => window.getSelection()?.toString().trim() ?? "",
-    onInsert: (text) => setNotes((prev) => prev + text),
-    onError: (msg) => setError(msg),
-  })
-
   return (
     <main className="flex h-full w-full flex-col bg-background">
       <h1 className="sr-only">{note ? `Edit note: ${note.title}` : "New note"}</h1>
@@ -507,8 +470,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           </div>
         )}
 
-        <div ref={contentRef as React.RefObject<HTMLDivElement>} className="flex-1 min-h-0 flex flex-col">
-          <div className="app-scrollbar-hidden flex-1 min-h-0 overflow-y-auto">
+        <div className="flex-1 min-h-0 flex flex-col">
+          <div className="app-scrollbar-hidden flex flex-1 min-h-0 flex-col overflow-y-auto">
             <div className="border-b border-border/30 mb-6" />
             {isStreaming && (
               <div className="flex items-center gap-2 mb-4 text-xs text-primary">
@@ -516,8 +479,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 Enhancing...
               </div>
             )}
-            <div className="min-h-[40vh] pb-20">
-              <NoteRenderer content={notes} editable onChange={setNotes} />
+            <div className={`flex min-h-0 flex-1 flex-col ${viewMode === "source" ? "pb-0" : "pb-20"}`}>
+              <NoteRenderer content={notes} editable onChange={setNotes} viewMode={viewMode} />
             </div>
 
             {actionItems.length > 0 && (
@@ -534,7 +497,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               </div>
             )}
 
-            {isEmpty && recorderState === "idle" && (
+            {isEmpty && recorderState === "idle" && viewMode !== "source" && (
               <div className="flex flex-col items-center gap-4 py-20 text-center">
                 <p className="text-base text-muted-foreground">Record a meeting or start typing your notes</p>
                 <div className="flex items-center gap-3">
@@ -599,7 +562,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           {recorderState === "recording" ? (
             <div className="flex items-center gap-3">
               <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatDuration(duration)}</motion.span>
-              <div className="min-w-16"><AudioBars active={true} level={audioLevel} /></div>
+              <Waveform active={true} level={audioLevel} className="min-w-[160px]" />
               {isSpeaking ? (
                 <span className="text-xs font-medium text-primary">speaking</span>
               ) : (
@@ -650,6 +613,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         <div data-tauri-drag-region className="min-w-4 flex-1 self-stretch" />
 
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => setViewMode(viewMode === "wysiwyg" ? "source" : "wysiwyg")} className="text-muted-foreground hover:text-foreground">
+            <HugeiconsIcon icon={CodeIcon} strokeWidth={1.5} data-icon="inline-start" />{viewMode === "wysiwyg" ? "Source" : "WYSIWYG"}
+          </Button>
           {notes.trim() && !isEmpty && (
             <>
               <Button variant="ghost" size="sm" onClick={handleCopyMarkdown} className="text-muted-foreground hover:text-foreground">
@@ -678,7 +644,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       </div>
 
       <MeetingTemplateSelector selectedId={selectedTemplate?.id} onSelect={tpl => setSelectedTemplate(tpl)} open={showTemplatePicker} onOpenChange={setShowTemplatePicker} />
-      {menuElement}
     </main>
   )
 }
