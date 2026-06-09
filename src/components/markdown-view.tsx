@@ -15,7 +15,12 @@ function escapeHtml(value: string): string {
 }
 
 function cleanMarkdown(markdown: string): string {
-  return markdown.trim().replace(/^```(?:markdown|md)?\s*\n?/i, "").replace(/\n?```\s*$/i, "")
+  return markdown
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .trim()
+    .replace(/^```(?:markdown|md)?\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
 }
 
 function safeUrl(href: string): string {
@@ -37,6 +42,24 @@ function createRenderer() {
     const safeHref = safeUrl(href ?? "")
     const titleAttr = title ? ` title="${escapeHtml(title)}"` : ""
     return `<img src="${escapeHtml(safeHref)}" alt="${escapeHtml(text ?? "")}"${titleAttr} loading="lazy" />`
+  }
+  renderer.table = function (token) {
+    let headerCells = ""
+    for (let i = 0; i < token.header.length; i++) {
+      headerCells += this.tablecell(token.header[i])
+    }
+    const theadHtml = this.tablerow({ text: headerCells })
+
+    let bodyRows = ""
+    for (let i = 0; i < token.rows.length; i++) {
+      let rowCells = ""
+      for (let j = 0; j < token.rows[i].length; j++) {
+        rowCells += this.tablecell(token.rows[i][j])
+      }
+      bodyRows += this.tablerow({ text: rowCells })
+    }
+
+    return `<div class="mdx-table-wrapper"><table><thead>${theadHtml}</thead><tbody>${bodyRows}</tbody></table></div>`
   }
   return renderer
 }

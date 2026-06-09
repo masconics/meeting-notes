@@ -1,60 +1,14 @@
 import { useCallback, useRef, useEffect, useState } from "react"
-import { EditorState } from "prosemirror-state"
-import { EditorView } from "prosemirror-view"
-import type { Fragment } from "prosemirror-model"
-import "prosemirror-view/style/prosemirror.css"
-import { keymap } from "prosemirror-keymap"
-import { baseKeymap } from "prosemirror-commands"
-import { history, undo, redo } from "prosemirror-history"
-import { defaultMarkdownParser, defaultMarkdownSerializer } from "prosemirror-markdown"
-import { InputRule, inputRules, wrappingInputRule, textblockTypeInputRule, smartQuotes, ellipsis, emDash } from "prosemirror-inputrules"
-
-const markdownSchema = defaultMarkdownParser.schema
-
-const blockInputRules = inputRules({
-  rules: [
-    textblockTypeInputRule(/^#\s$/, markdownSchema.nodes.heading, { level: 1 }),
-    textblockTypeInputRule(/^##\s$/, markdownSchema.nodes.heading, { level: 2 }),
-    textblockTypeInputRule(/^###\s$/, markdownSchema.nodes.heading, { level: 3 }),
-    wrappingInputRule(/^\s*>\s$/, markdownSchema.nodes.blockquote),
-    wrappingInputRule(/^\s*([-+*])\s$/, markdownSchema.nodes.bullet_list),
-    wrappingInputRule(
-      /^(\d+)\.\s$/,
-      markdownSchema.nodes.ordered_list,
-      (match) => ({ order: Number(match[1]) })
-    ),
-    textblockTypeInputRule(/^```$/, markdownSchema.nodes.code_block),
-  ],
-})
-
-function parseMarkdown(value: string) {
-  return defaultMarkdownParser.parse(value.trim()) || markdownSchema.topNodeType.createAndFill()!
-}
-
-function markInputRule(regexp: RegExp, markName: "strong" | "em" | "code" | "link", getAttrs?: (match: RegExpMatchArray) => Record<string, string> | null) {
-  return new InputRule(regexp, (state, match, start, end) => {
-    const text = match[1]
-    if (!text) return null
-    const markType = markdownSchema.marks[markName]
-    const attrs = getAttrs?.(match) ?? null
-    return state.tr
-      .delete(start, end)
-      .insertText(text, start)
-      .addMark(start, start + text.length, markType.create(attrs))
-      .removeStoredMark(markType)
-  })
-}
-
-const inlineMarkdownRules = inputRules({
-  rules: [
-    markInputRule(/\*\*([^*]+)\*\*$/, "strong"),
-    markInputRule(/__([^_]+)__$/, "strong"),
-    markInputRule(/(?<!\*)\*([^*]+)\*$/, "em"),
-    markInputRule(/(?<!_)_([^_]+)_$/, "em"),
-    markInputRule(/`([^`]+)`$/, "code"),
-    markInputRule(/\[([^\]]+)\]\((https?:\/\/[^)\s]+|mailto:[^)\s]+|tel:[^)\s]+|#[^)\s]+|\/[^)\s]*)\)$/, "link", (match) => ({ href: match[2] })),
-  ],
-})
+import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from "@milkdown/kit/core"
+import { commonmark } from "@milkdown/kit/preset/commonmark"
+import { gfm } from "@milkdown/kit/preset/gfm"
+import { history, historyProviderConfig } from "@milkdown/kit/plugin/history"
+import { listener, listenerCtx } from "@milkdown/kit/plugin/listener"
+import { streaming, startStreamingCmd, pushChunkCmd, endStreamingCmd, abortStreamingCmd } from "@milkdown/plugin-streaming"
+import { diff } from "@milkdown/plugin-diff"
+import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react"
+import { replaceAll, getMarkdown, callCommand } from "@milkdown/kit/utils"
+import "@milkdown/kit/prose/view/style/prosemirror.css"
 
 type AiEditAction = "rewrite" | "summarize" | "expand" | "shorten"
 
@@ -65,30 +19,11 @@ const AI_ACTIONS: Array<{ id: AiEditAction; label: string }> = [
   { id: "shorten", label: "Shorten" },
 ]
 
-const AI_THINKING_LABEL = "Thinking..."
-const AI_REVEAL_DELAY_MS = 24
-const AI_INITIAL_DELAY_MS = 220
-
-function wait(ms: number, signal?: AbortSignal) {
-  return new Promise<void>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException("Aborted", "AbortError"))
-      return
-    }
-    const timeout = window.setTimeout(resolve, ms)
-    signal?.addEventListener("abort", () => {
-      window.clearTimeout(timeout)
-      reject(new DOMException("Aborted", "AbortError"))
-    }, { once: true })
-  })
-}
-
-function replacementContent(markdown: string, inline: boolean): Fragment {
-  const doc = parseMarkdown(markdown)
-  if (inline && doc.childCount === 1 && doc.firstChild?.type.name === "paragraph") {
-    return doc.firstChild.content
-  }
-  return doc.content
+const AI_INSTRUCTIONS: Record<AiEditAction, string> = {
+  rewrite: "Rewrite the selected text to be clearer and more polished while preserving the meaning.",
+  summarize: "Summarize the selected text into a concise, useful version.",
+  expand: "Expand the selected text with helpful detail while staying faithful to the surrounding notes.",
+  shorten: "Make the selected text shorter and sharper while preserving the important meaning.",
 }
 
 interface ProseMirrorEditorProps {
@@ -98,239 +33,205 @@ interface ProseMirrorEditorProps {
   editorLabel?: string
 }
 
+function MilkdownEditorInner({
+  value,
+  onChange,
+  className,
+  editorLabel,
+  onEditorReady,
+}: {
+  value: string
+  onChange: (markdown: string) => void
+  className: string
+  editorLabel: string
+  onEditorReady: (editor: Editor) => void
+}) {
+  const onChangeRef = useRef(onChange)
+  const isExternalUpdate = useRef(false)
+  useEffect(() => { onChangeRef.current = onChange })
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const editorFactory = useCallback(
+    (root: HTMLElement) => {
+      return Editor.make()
+        .config((ctx) => {
+          ctx.set(rootCtx, root)
+          ctx.set(defaultValueCtx, value)
+          ctx.set(historyProviderConfig.key, { newGroupDelay: 10000 })
+          const listenerManager = ctx.get(listenerCtx)
+          listenerManager.markdownUpdated((_ctx, md) => {
+            if (isExternalUpdate.current) return
+            onChangeRef.current(md)
+          })
+        })
+        .use(commonmark)
+        .use(gfm)
+        .use(history)
+        .use(listener)
+        .use(streaming)
+        .use(diff)
+    },
+    []
+  )
+
+  const { loading, get: getEditor } = useEditor(editorFactory, [])
+
+  useEffect(() => {
+    if (loading) return
+    const editor = getEditor()
+    if (editor) {
+      onEditorReady(editor)
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        view.dom.style.minHeight = "7rem"
+        view.dom.setAttribute("role", "textbox")
+        view.dom.setAttribute("aria-label", editorLabel)
+        view.dom.setAttribute("aria-multiline", "true")
+      })
+    }
+  }, [loading, getEditor, onEditorReady, editorLabel])
+
+  useEffect(() => {
+    const editor = getEditor()
+    if (!editor || loading) return
+    const currentMd = editor.action(getMarkdown())
+    if (value !== currentMd) {
+      isExternalUpdate.current = true
+      editor.action(replaceAll(value))
+      setTimeout(() => { isExternalUpdate.current = false }, 0)
+    }
+  }, [value, loading, getEditor])
+
+  return (
+    <div className={className}>
+      <Milkdown />
+    </div>
+  )
+}
+
 export function ProseMirrorEditor({
   value,
   onChange,
   className = "",
   editorLabel = "Edit note",
 }: ProseMirrorEditorProps) {
-  const mountRef = useRef<HTMLDivElement>(null)
-  const viewRef = useRef<EditorView | null>(null)
+  const editorRef = useRef<Editor | null>(null)
   const abortRef = useRef<AbortController | null>(null)
-  const aiBlockRef = useRef<HTMLElement | null>(null)
-  const onChangeRef = useRef(onChange)
   const [aiMenu, setAiMenu] = useState<{ x: number; y: number; from: number; to: number; text: string } | null>(null)
   const [aiStreaming, setAiStreaming] = useState<AiEditAction | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
-  useEffect(() => {
-    onChangeRef.current = onChange
-  })
-  const initializedRef = useRef(false)
 
-  const updateAiMenu = useCallback(() => {
-    if (aiStreaming) return
-    const view = viewRef.current
-    if (!view || !view.hasFocus()) return
-    const { from, to, empty } = view.state.selection
-    const text = view.state.doc.textBetween(from, to, "\n").trim()
-    if (empty || text.length < 3) {
-      setAiMenu(null)
-      return
-    }
-    const startCoords = view.coordsAtPos(from)
-    const endCoords = view.coordsAtPos(to)
-    const selection = window.getSelection()
-    const selectionRect = selection && selection.rangeCount > 0
-      ? selection.getRangeAt(0).getBoundingClientRect()
-      : null
-    const visualTop = selectionRect && selectionRect.height > 0 ? selectionRect.top : startCoords.top
-    const visualBottom = selectionRect && selectionRect.height > 0 ? selectionRect.bottom : endCoords.bottom
-    const visualLeft = selectionRect && selectionRect.width > 0 ? selectionRect.left : startCoords.left
-    const toolbarHeight = 42
-    const toolbarWidth = 340
-    const hasRoomBelow = visualBottom + toolbarHeight + 10 < window.innerHeight
-    setAiError(null)
-    setAiMenu({
-      x: Math.max(8, Math.min(visualLeft, window.innerWidth - toolbarWidth - 8)),
-      y: hasRoomBelow ? visualBottom + 8 : Math.max(8, visualTop - toolbarHeight - 8),
-      from,
-      to,
-      text,
-    })
-  }, [aiStreaming])
+  const getView = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return null
+    return editor.action((ctx) => ctx.get(editorViewCtx))
+  }, [])
 
-  const replaceAiRange = useCallback((range: { from: number; to: number; inline: boolean }, markdown: string) => {
-    const view = viewRef.current
-    if (!view) return
-    const content = replacementContent(markdown || " ", range.inline)
-    const tr = view.state.tr.replaceWith(range.from, range.to, content)
-    view.dispatch(tr)
-    range.to = range.from + content.size
-    const domAtRange = view.domAtPos(range.from)
-    const node = domAtRange.node.nodeType === Node.TEXT_NODE
-      ? domAtRange.node.parentElement
-      : domAtRange.node as HTMLElement
-    const block = node?.closest?.("p, li, h1, h2, h3, h4, h5, h6, blockquote, pre") as HTMLElement | null
-    if (block !== aiBlockRef.current) {
-      aiBlockRef.current?.classList.remove("pm-ai-writing-block")
-      aiBlockRef.current = block
+  const handleEditorReady = useCallback((editor: Editor) => {
+    editorRef.current = editor
+
+    const view = editor.action((ctx) => ctx.get(editorViewCtx))
+
+    const handleSelection = () => {
+      window.setTimeout(() => {
+        if (aiStreaming) return
+        const v = editor.action((ctx) => ctx.get(editorViewCtx))
+        if (!v || !v.hasFocus()) return
+        const { from, to, empty } = v.state.selection
+        const text = v.state.doc.textBetween(from, to, "\n").trim()
+        if (empty || text.length < 3) {
+          setAiMenu(null)
+          return
+        }
+        const startCoords = v.coordsAtPos(from)
+        const endCoords = v.coordsAtPos(to)
+        const selection = window.getSelection()
+        const selectionRect = selection && selection.rangeCount > 0
+          ? selection.getRangeAt(0).getBoundingClientRect()
+          : null
+        const visualTop = selectionRect && selectionRect.height > 0 ? selectionRect.top : startCoords.top
+        const visualBottom = selectionRect && selectionRect.height > 0 ? selectionRect.bottom : endCoords.bottom
+        const visualLeft = selectionRect && selectionRect.width > 0 ? selectionRect.left : startCoords.left
+        const toolbarHeight = 42
+        const toolbarWidth = 340
+        const hasRoomBelow = visualBottom + toolbarHeight + 10 < window.innerHeight
+        setAiError(null)
+        setAiMenu({
+          x: Math.max(8, Math.min(visualLeft, window.innerWidth - toolbarWidth - 8)),
+          y: hasRoomBelow ? visualBottom + 8 : Math.max(8, visualTop - toolbarHeight - 8),
+          from,
+          to,
+          text,
+        })
+      }, 0)
     }
-    aiBlockRef.current?.classList.add("pm-ai-writing-block")
+
+    view.dom.addEventListener("mouseup", handleSelection)
+    view.dom.addEventListener("keyup", handleSelection)
   }, [])
 
   const runAiEdit = useCallback(async (action: AiEditAction) => {
-    const view = viewRef.current
+    const editor = editorRef.current
     const menu = aiMenu
-    if (!view || !menu || aiStreaming) return
+    if (!editor || !menu || aiStreaming) return
 
-    const selectedText = menu.text
-    const fullContext = defaultMarkdownSerializer.serialize(view.state.doc)
-    const $from = view.state.doc.resolve(menu.from)
-    const $to = view.state.doc.resolve(menu.to)
-    const range = {
-      from: menu.from,
-      to: menu.to,
-      inline: $from.sameParent($to) && $from.parent.inlineContent,
-    }
+    const fullContext = editor.action(getMarkdown())
+    const instruction = AI_INSTRUCTIONS[action]
 
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
     setAiStreaming(action)
     setAiError(null)
-    setAiMenu({ ...menu, text: AI_THINKING_LABEL })
-    view.dom.classList.add("pm-ai-writing")
-    replaceAiRange(range, AI_THINKING_LABEL)
+    setAiMenu({ ...menu, text: instruction })
 
     try {
+      editor.action(callCommand(startStreamingCmd.key, { insertAt: "selection" }))
+
       const { streamRewriteSelection } = await import("@/lib/ai-service")
-      let generated = ""
-      let visible = ""
-      await wait(AI_INITIAL_DELAY_MS, controller.signal)
 
-      const reveal = async (target: string) => {
-        while (visible.length < target.length) {
-          if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError")
-          const remaining = target.length - visible.length
-          const step = Math.max(1, Math.ceil(remaining / 10))
-          visible = target.slice(0, visible.length + step)
-          replaceAiRange(range, visible || AI_THINKING_LABEL)
-          await wait(AI_REVEAL_DELAY_MS, controller.signal)
-        }
+      for await (const chunk of streamRewriteSelection(
+        menu.text,
+        action,
+        fullContext,
+        controller.signal
+      )) {
+        editor.action(callCommand(pushChunkCmd.key, chunk))
       }
 
-      for await (const chunk of streamRewriteSelection(selectedText, action, fullContext, controller.signal)) {
-        generated += chunk
-        await reveal(generated.trimStart())
-      }
-      if (generated.trim()) {
-        await reveal(generated.trim())
-        visible = generated.trim()
-        replaceAiRange(range, visible)
-      }
-      await wait(120, controller.signal)
-      setAiMenu(null)
+      editor.action(callCommand(endStreamingCmd.key))
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === "AbortError")) {
+      if (e instanceof DOMException && e.name === "AbortError") {
+        editor.action(callCommand(abortStreamingCmd.key))
+      } else {
         setAiError(e instanceof Error ? e.message : "AI edit failed")
-        replaceAiRange(range, selectedText)
+        editor.action(callCommand(abortStreamingCmd.key))
       }
     } finally {
-      view.dom.classList.remove("pm-ai-writing")
-      aiBlockRef.current?.classList.remove("pm-ai-writing-block")
-      aiBlockRef.current = null
       abortRef.current = null
       setAiStreaming(null)
+      setAiMenu(null)
     }
-  }, [aiMenu, aiStreaming, replaceAiRange])
+  }, [aiMenu, aiStreaming, getView])
 
   const cancelAiEdit = useCallback(() => {
     abortRef.current?.abort()
-    aiBlockRef.current?.classList.remove("pm-ai-writing-block")
-    aiBlockRef.current = null
     abortRef.current = null
     setAiStreaming(null)
     setAiMenu(null)
   }, [])
 
-  useEffect(() => {
-    if (!mountRef.current || initializedRef.current) return
-    initializedRef.current = true
-
-    const doc = parseMarkdown(value)
-
-    const state = EditorState.create({
-      doc,
-      plugins: [
-        history(),
-        keymap(baseKeymap),
-        keymap({
-          "Mod-z": undo,
-          "Mod-Shift-z": redo,
-          "Mod-y": redo,
-        }),
-        blockInputRules,
-        inlineMarkdownRules,
-        inputRules({ rules: [...smartQuotes, ellipsis, emDash] }),
-      ],
-    })
-
-    const view = new EditorView(mountRef.current, {
-      state,
-      attributes: {
-        role: "textbox",
-        "aria-label": editorLabel,
-        "aria-multiline": "true",
-      },
-      handlePaste(_view, event) {
-        const text = event.clipboardData?.getData("text/plain")
-        if (text) {
-          const doc = defaultMarkdownParser.parse(text)
-          if (doc && doc.content.size > 0) {
-            const tr = _view.state.tr.replaceSelectionWith(doc)
-            if (tr) {
-              _view.dispatch(tr)
-              return true
-            }
-          }
-        }
-        return false
-      },
-      dispatchTransaction(tr) {
-        const newState = view.state.apply(tr)
-        view.updateState(newState)
-        if (tr.docChanged) {
-          const md = defaultMarkdownSerializer.serialize(newState.doc)
-          onChangeRef.current(md.trim())
-        }
-      },
-    })
-
-    view.dom.style.minHeight = "7rem"
-
-    viewRef.current = view
-
-    const handleSelection = () => window.setTimeout(updateAiMenu, 0)
-    view.dom.addEventListener("mouseup", handleSelection)
-    view.dom.addEventListener("keyup", handleSelection)
-
-    return () => {
-      view.dom.removeEventListener("mouseup", handleSelection)
-      view.dom.removeEventListener("keyup", handleSelection)
-      view.destroy()
-      viewRef.current = null
-      initializedRef.current = false
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    const view = viewRef.current
-    if (!view) return
-    const currentMd = defaultMarkdownSerializer.serialize(view.state.doc)
-    if (value.trim() !== currentMd.trim()) {
-      const doc = parseMarkdown(value)
-      const state = EditorState.create({ doc, plugins: view.state.plugins })
-      view.updateState(state)
-    }
-  }, [value])
-
   return (
     <>
-      <div
-        ref={mountRef}
-        className={`pm-editor ${className}`}
-      />
+      <MilkdownProvider>
+        <MilkdownEditorInner
+          value={value}
+          onChange={onChange}
+          className={`pm-editor ${className}`}
+          editorLabel={editorLabel}
+          onEditorReady={handleEditorReady}
+        />
+      </MilkdownProvider>
       {aiMenu && (
         <div
           className="fixed z-50 flex items-center gap-1 rounded-2xl border border-border/70 bg-card/95 p-1 shadow-xl backdrop-blur"

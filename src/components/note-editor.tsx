@@ -19,6 +19,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
 import { TemplateIcon } from "@/components/template-icon"
 import { NoteRenderer } from "@/components/note-renderer"
+import { MarkdownView } from "@/components/markdown-view"
 import { Waveform } from "@/components/Waveform"
 import { getTemplateById, saveTemplate as persistTemplate } from "@/lib/templates"
 import type { Meeting, AppSettings, MeetingTemplate, ChatMessage } from "@/types"
@@ -74,7 +75,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [isTitling, setIsTitling] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
-  const [actionItems, setActionItems] = useState<string[]>([])
   const [copied, setCopied] = useState(false)
   const [silenceSeconds, setSilenceSeconds] = useState(0)
   const [isStreaming, setIsStreaming] = useState(false)
@@ -295,25 +295,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setTimeout(() => setError(null), 3000)
   }, [title, notes])
 
-  const handleExtractActionItems = useCallback(async () => {
-    const content = notes.trim()
-    if (!content) return
-    setError(null)
-    try {
-      const { isAIConfigured, executeQuickAction } = await import("@/lib/ai-service")
-      if (!isAIConfigured()) { setError("AI is not configured."); return }
-      const result = await executeQuickAction(
-        content,
-        content,
-        note?.structuredNotes,
-        { label: "actions", icon: "", prompt: "Extract all action items and to-dos as a clean checklist using markdown. For each item note who is responsible if mentioned. Return ONLY the checklist, one item per line, in this exact format:\n- [ ] Action item description @Owner Name" }
-      )
-      setActionItems(result.trim().split("\n").filter(line => line.trim()))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Extraction failed")
-    }
-  }, [notes])
-
   useEffect(() => {
     const handler = () => { if (recorderStateRef.current === "recording") stopRecording(); else if (recorderStateRef.current === "idle") startRecording() }
     window.addEventListener("toggle-recording", handler)
@@ -356,7 +337,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const handleAI = useCallback(async (prompt: string) => {
     if (!prompt.trim()) return
     setShowAIPanel(true)
-    setActionItems([])
     const msgs: ChatMessage[] = [...aiMessages, { role: "user", content: prompt, timestamp: new Date().toISOString() }]
     setAiMessages(msgs); setAiInput(""); setAiStreaming(true); setAiStreamContent("")
     const controller = new AbortController(); abortRef.current = controller
@@ -483,20 +463,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               <NoteRenderer content={notes} editable onChange={setNotes} viewMode={viewMode} />
             </div>
 
-            {actionItems.length > 0 && (
-              <div className="mt-4 mb-4 p-3 rounded-2xl bg-muted/40">
-                <p className="text-xs font-medium text-muted-foreground mb-2">Action Items</p>
-                <div className="flex flex-col gap-1">
-                  {actionItems.map((item, i) => (
-                    <label key={i} className="flex items-start gap-2 text-sm cursor-pointer hover:text-foreground transition-colors">
-                      <input type="checkbox" className="mt-1 shrink-0" defaultChecked={false} />
-                      <span className="text-muted-foreground leading-relaxed">{item.replace(/^-\s*\[ \]\s*/, "")}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {isEmpty && recorderState === "idle" && viewMode !== "source" && (
               <div className="flex flex-col items-center gap-4 py-20 text-center">
                 <p className="text-base text-muted-foreground">Record a meeting or start typing your notes</p>
@@ -535,12 +501,14 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       </Button>
                     ))}
                   </div>
-                  {aiMessages.map((msg, i) => (
-                    <div key={i} className={`text-sm ${msg.role === "user" ? "text-muted-foreground/60 italic" : "text-foreground"} whitespace-pre-wrap leading-relaxed`}>
-                      {msg.content}
-                    </div>
-                  ))}
-                  {aiStreaming && <div className="text-sm text-foreground whitespace-pre-wrap leading-relaxed">{aiStreamContent}<motion.span className="inline-block w-1.5 h-4 bg-current ml-0.5 align-middle" animate={{ opacity: [1, 0.4, 1] }} transition={{ repeat: Infinity, duration: 0.8 }} /></div>}
+                  {aiMessages.map((msg, i) =>
+                    msg.role === "user" ? (
+                      <div key={i} className="text-sm text-muted-foreground/60 italic leading-relaxed">{msg.content}</div>
+                    ) : (
+                      <MarkdownView key={i} markdown={msg.content} className="text-sm" />
+                    )
+                  )}
+                  {aiStreaming && <MarkdownView markdown={aiStreamContent} className="text-sm" />}
                   <div className="flex items-center gap-2">
                     <Input value={aiInput} onChange={e => setAiInput(e.target.value)} placeholder="Ask anything..."
                       className="flex-1 h-8 text-sm border-none shadow-none bg-transparent focus-visible:ring-0" disabled={aiStreaming}
@@ -621,9 +589,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               <Button variant="ghost" size="sm" onClick={handleCopyMarkdown} className="text-muted-foreground hover:text-foreground">
                 <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} data-icon="inline-start" />Copy MD
               </Button>
-              <Button variant="ghost" size="sm" onClick={handleExtractActionItems} className="text-muted-foreground hover:text-foreground">
-                <HugeiconsIcon icon={Task01Icon} strokeWidth={1.5} data-icon="inline-start" />Actions
-              </Button>
               <Button variant="ghost" size="sm" onClick={handleSaveAsTemplate} className="text-muted-foreground hover:text-foreground">
                 <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} data-icon="inline-start" />Save Tmpl
               </Button>
@@ -634,7 +599,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} data-icon="inline-start" />Enhance
             </Button>
           )}
-          <Button variant="ghost" onClick={() => { setShowAIPanel(!showAIPanel); setActionItems([]) }} className={`${showAIPanel ? "text-foreground" : "text-muted-foreground"} hover:text-foreground`}>
+          <Button variant="ghost" onClick={() => { setShowAIPanel(!showAIPanel) }} className={`${showAIPanel ? "text-foreground" : "text-muted-foreground"} hover:text-foreground`}>
             <HugeiconsIcon icon={AiChat02Icon} strokeWidth={1.5} data-icon="inline-start" />AI
           </Button>
           <Button variant="ghost" size="icon" onClick={onSettings} className="text-muted-foreground/50 hover:text-muted-foreground" aria-label="Settings">

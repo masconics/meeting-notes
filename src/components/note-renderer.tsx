@@ -1,5 +1,4 @@
-import { useMemo } from "react"
-import { MarkdownView, renderMarkdown } from "@/components/markdown-view"
+import { MarkdownView } from "@/components/markdown-view"
 
 interface NoteRendererProps {
   content: string
@@ -10,8 +9,6 @@ interface NoteRendererProps {
 }
 
 export function NoteRenderer({ content, className = "", editable = false, onChange, viewMode = "wysiwyg" }: NoteRendererProps) {
-  const html = useMemo(() => renderMarkdown(content), [content])
-
   if (editable) {
     if (viewMode === "source") {
       return (
@@ -46,10 +43,5 @@ export function NoteRenderer({ content, className = "", editable = false, onChan
     )
   }
 
-  return (
-    <div
-      className={`mdx-content ${className}`}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
-  )
+  return <MarkdownView markdown={content} className={className} />
 }

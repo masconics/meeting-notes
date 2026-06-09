@@ -21,6 +21,7 @@ import {
 } from "@hugeicons/core-free-icons"
 import { useChat } from "@/lib/use-chat"
 import { isAIConfigured } from "@/lib/ai-service"
+import { MarkdownView } from "@/components/markdown-view"
 import type { Meeting } from "@/types"
 
 const SUGGESTED_QUESTIONS = [
@@ -144,18 +145,18 @@ export function AIChatPanel({
                     key={i}
                     className={`group flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}
                   >
-                    <div
-                      className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
-                        msg.role === "user"
-                          ? "bg-primary text-primary-foreground rounded-br-md"
-                          : "bg-muted text-foreground rounded-bl-md"
-                      }`}
-                    >
-                      {msg.content || (isLast && lastIsStreaming ? "" : "")}
-                      {isLast && lastIsStreaming && (
-                        <span className="inline-block w-1.5 h-4 bg-current ml-0.5 animate-pulse align-middle" />
-                      )}
-                    </div>
+                    {msg.role === "user" ? (
+                      <div className="max-w-[85%] rounded-2xl rounded-br-md px-3 py-2 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground">
+                        {msg.content}
+                      </div>
+                    ) : (
+                      <div className="max-w-[85%] rounded-2xl rounded-bl-md px-3 py-2 bg-muted">
+                        <MarkdownView markdown={msg.content || (isLast && lastIsStreaming ? "" : "")} />
+                        {isLast && lastIsStreaming && (
+                          <span className="inline-block w-1.5 h-4 bg-current ml-0.5 animate-pulse align-middle" />
+                        )}
+                      </div>
+                    )}
                     {msg.role === "assistant" && msg.content && !(isLast && lastIsStreaming) && (
                       <button
                         onClick={() => copyMessage(msg.content, i)}

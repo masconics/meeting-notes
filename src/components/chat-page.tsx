@@ -168,7 +168,7 @@ export function ChatPage({ meeting, allMeetings, onBack, onSettings, onSwitchMee
                   {meeting.structuredNotes.map((s, i) => (
                     <div key={i} className="text-sm">
                       <span className="font-medium">{s.title}: </span>
-                      <span className="text-foreground whitespace-pre-wrap">{s.content}</span>
+                      <MarkdownView markdown={s.content} className="text-sm" />
                     </div>
                   ))}
                 </div>
@@ -235,22 +235,22 @@ export function ChatPage({ meeting, allMeetings, onBack, onSettings, onSwitchMee
                     transition={{ duration: 0.2 }}
                     className={`group flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}
                   >
-                    <div
-                      className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap break-words ${
-                        msg.role === "user"
-                          ? "bg-primary text-primary-foreground rounded-br-md"
-                          : "bg-muted text-foreground rounded-bl-md"
-                      }`}
-                    >
-                      {msg.content || (isLast && lastIsStreaming ? "" : "")}
-                      {isLast && lastIsStreaming && (
-                        <motion.span
-                          className="inline-block w-1.5 h-4 bg-current ml-0.5 align-middle"
-                          animate={{ opacity: [1, 0.4, 1] }}
-                          transition={{ repeat: Infinity, duration: 0.8 }}
-                        />
-                      )}
-                    </div>
+                    {msg.role === "user" ? (
+                      <div className="max-w-[85%] rounded-2xl rounded-br-md px-3 py-2 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground">
+                        {msg.content}
+                      </div>
+                    ) : (
+                      <div className="max-w-[85%] rounded-2xl rounded-bl-md px-3 py-2 bg-muted">
+                        <MarkdownView markdown={msg.content || (isLast && lastIsStreaming ? "" : "")} />
+                        {isLast && lastIsStreaming && (
+                          <motion.span
+                            className="inline-block w-1.5 h-4 bg-current ml-0.5 align-middle"
+                            animate={{ opacity: [1, 0.4, 1] }}
+                            transition={{ repeat: Infinity, duration: 0.8 }}
+                          />
+                        )}
+                      </div>
+                    )}
                     {msg.role === "assistant" && msg.content && !(isLast && lastIsStreaming) && (
                       <button
                         onClick={() => copyMessage(msg.content, i)}

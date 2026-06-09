@@ -42,7 +42,7 @@ import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback } from "react"
 import { TemplateIcon } from "@/components/template-icon"
 import { getTemplateById } from "@/lib/templates"
-import { renderMarkdown } from "@/components/markdown-view"
+import { MarkdownView } from "@/components/markdown-view"
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", {
@@ -547,10 +547,9 @@ export function MeetingDashboard({
                   </div>
                 </CardHeader>
                 <CardContent className="pt-0">
-                  <div
-                    className="mdx-brief text-xs leading-relaxed text-muted-foreground max-h-48 overflow-y-auto"
-                    dangerouslySetInnerHTML={{ __html: renderMarkdown(briefResult) }}
-                  />
+                  <div className="mdx-brief text-xs leading-relaxed text-muted-foreground max-h-48 overflow-y-auto">
+                    <MarkdownView markdown={briefResult} />
+                  </div>
                 </CardContent>
               </Card>
             )}

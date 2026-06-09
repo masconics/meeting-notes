@@ -15,6 +15,7 @@ import {
   Copy01Icon,
 } from "@hugeicons/core-free-icons"
 import { executeQuickAction } from "@/lib/ai-service"
+import { MarkdownView } from "@/components/markdown-view"
 import { getTemplateById } from "@/lib/templates"
 import type { Meeting, QuickAction } from "@/types"
 
@@ -131,8 +132,8 @@ export function QuickActions({ meeting }: QuickActionsProps) {
               </Button>
             </div>
           </div>
-          <div className="text-sm text-foreground bg-muted/60 rounded-2xl p-3 whitespace-pre-wrap max-h-64 overflow-y-auto">
-            {result}
+          <div className="bg-muted/60 rounded-2xl p-3 max-h-64 overflow-y-auto">
+            <MarkdownView markdown={result} className="text-sm" />
           </div>
         </div>
       )}
