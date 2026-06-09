@@ -51,12 +51,14 @@ struct AudioLevel {
 // replaced on each update).
 #[derive(Clone, Serialize)]
 struct TranscriptStream {
+    source: String,
     confirmed: String,
     volatile: String,
 }
 
 #[derive(serde::Deserialize)]
 struct StreamUpdate {
+    source: String,
     confirmed: String,
     volatile: String,
 }
@@ -81,7 +83,7 @@ fn slot() -> &'static Mutex<Option<Capture>> {
 }
 
 #[tauri::command]
-pub async fn start_continuous(app: AppHandle, language: Option<String>, model: Option<String>) -> Result<(), String> {
+pub async fn start_continuous(app: AppHandle, language: Option<String>, model: Option<String>, source: Option<String>) -> Result<(), String> {
     log::debug!("start_continuous called");
     let mut guard = slot().lock().map_err(|_| "lock poisoned".to_string())?;
     if guard.is_some() {
@@ -89,20 +91,28 @@ pub async fn start_continuous(app: AppHandle, language: Option<String>, model: O
         return Ok(());
     }
 
+    // mic | system | both. System output audio is captured inside the streaming
+    // sidecar (ScreenCaptureKit); the mic is captured here via cpal.
+    let source = source.unwrap_or_else(|| "mic".to_string());
+    let mic_active = source != "system";
+
     let stop = Arc::new(AtomicBool::new(false));
     let shared = Arc::new(Mutex::new(Vec::<f32>::new()));
     let src_rate = Arc::new(Mutex::new(0u32));
 
-    let app2 = app.clone();
-    let thread = {
+    // Only open the mic (and prompt for mic permission) when it's actually needed.
+    let thread = if mic_active {
+        let app2 = app.clone();
         let stop = stop.clone();
         let shared = shared.clone();
         let src_rate = src_rate.clone();
-        std::thread::spawn(move || {
+        Some(std::thread::spawn(move || {
             if let Err(e) = run_capture(app2, stop, shared, src_rate) {
                 log::error!("[capture] error: {e}");
             }
-        })
+        }))
+    } else {
+        None
     };
 
     {
@@ -114,8 +124,10 @@ pub async fn start_continuous(app: AppHandle, language: Option<String>, model: O
         let mdl = model.unwrap_or_default();
         let sensevoice = mdl == "sensevoice";
         let use_v2 = !sensevoice && (lang.is_empty() || lang == "en");
-        if sensevoice {
-            // SenseVoice has no streaming manager: keep the batch segment path.
+        // System audio only exists in the streaming sidecar, so anything other than
+        // mic-only forces the streaming (Parakeet) path even if SenseVoice is selected.
+        if sensevoice && source == "mic" {
+            // SenseVoice has no streaming manager: batch mic path only (no system audio).
             log::debug!("spawning batch run_processor (sensevoice, lang={})", if lang.is_empty() { "auto" } else { &lang });
             let app2 = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -125,18 +137,15 @@ pub async fn start_continuous(app: AppHandle, language: Option<String>, model: O
                 run_processor(app, stop, shared, src_rate, lang, mdl).await;
             });
         } else {
-            // Parakeet: live-caption streaming path.
-            log::debug!("spawning stream processor (parakeet v{}, lang={})", if use_v2 { "2" } else { "3" }, if lang.is_empty() { "auto" } else { &lang });
+            // Parakeet: live-caption streaming path (mic, system, or both).
+            log::debug!("spawning stream processor (parakeet v{}, source={}, lang={})", if use_v2 { "2" } else { "3" }, source, if lang.is_empty() { "auto" } else { &lang });
             tauri::async_runtime::spawn(async move {
-                run_stream_processor(app, stop, shared, src_rate, lang, use_v2).await;
+                run_stream_processor(app, stop, shared, src_rate, lang, use_v2, source, mic_active).await;
             });
         }
     }
 
-    *guard = Some(Capture {
-        stop,
-        thread: Some(thread),
-    });
+    *guard = Some(Capture { stop, thread });
     log::debug!("start_continuous complete");
     Ok(())
 }
@@ -439,20 +448,27 @@ async fn run_stream_processor(
     src_rate: Arc<Mutex<u32>>,
     language: String,
     use_v2: bool,
+    source: String,
+    mic_active: bool,
 ) {
-    // Wait for the capture thread to report the device sample rate.
-    let rate = loop {
-        if stop.load(Ordering::Relaxed) {
-            return;
+    // The config frame carries the mic sample rate; only relevant when capturing mic.
+    // For system-only there's no cpal thread, so use a placeholder rate.
+    let rate = if mic_active {
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            let r = src_rate.lock().map(|r| *r).unwrap_or(0);
+            if r != 0 {
+                break r;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let r = src_rate.lock().map(|r| *r).unwrap_or(0);
-        if r != 0 {
-            break r;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    } else {
+        16000
     };
 
-    let (mut sidecar, mut stdout) = match fluid::spawn_stream_sidecar(&app, use_v2, rate, &language).await {
+    let (mut sidecar, mut stdout) = match fluid::spawn_stream_sidecar(&app, use_v2, rate, &language, &source).await {
         Ok(s) => s,
         Err(e) => {
             log::error!("stream sidecar failed: {e}");
@@ -488,7 +504,7 @@ async fn run_stream_processor(
                             Ok(u) => {
                                 let _ = reader_app.emit(
                                     "transcript-stream",
-                                    TranscriptStream { confirmed: u.confirmed, volatile: u.volatile },
+                                    TranscriptStream { source: u.source, confirmed: u.confirmed, volatile: u.volatile },
                                 );
                             }
                             Err(e) => log::debug!("stream update parse error: {e} (line={t})"),

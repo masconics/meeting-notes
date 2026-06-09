@@ -209,6 +209,58 @@ pub async fn fluid_loaded() -> Result<bool, String> {
     Ok(guard.is_some())
 }
 
+// ---- Screen Recording permission (for system audio capture) -----------------
+//
+// ScreenCaptureKit runs inside the sidecar, so the TCC permission is attributed to
+// the sidecar binary — the probe must run there too (not in the main app process).
+
+// The probe must run in *this* process (the main app), not the sidecar: macOS
+// attributes a child process's screen-capture to its responsible parent, so the
+// grant the user sees and gives is "Notes" — and that's the grant the sidecar's
+// ScreenCaptureKit capture runs under.
+#[cfg(target_os = "macos")]
+mod screen_access {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGPreflightScreenCaptureAccess() -> bool;
+        fn CGRequestScreenCaptureAccess() -> bool;
+    }
+    /// Current grant state, no prompt.
+    pub fn preflight() -> bool {
+        unsafe { CGPreflightScreenCaptureAccess() }
+    }
+    /// Prompts when undetermined; returns the resulting grant.
+    pub fn request() -> bool {
+        unsafe { CGRequestScreenCaptureAccess() }
+    }
+}
+
+/// Current Screen Recording grant state (does not prompt).
+#[tauri::command]
+pub async fn check_screen_permission() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(screen_access::preflight())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(true)
+    }
+}
+
+/// Request Screen Recording access (prompts when undetermined). Returns the result.
+#[tauri::command]
+pub async fn request_screen_permission() -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        Ok(screen_access::request())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(true)
+    }
+}
+
 // ---- Streaming live-caption mode -------------------------------------------
 //
 // Separate from the batch request/response path above. The sidecar is launched
@@ -274,20 +326,36 @@ pub async fn spawn_stream_sidecar(
     use_v2: bool,
     rate: u32,
     language: &str,
+    source: &str,
 ) -> Result<(StreamSidecar, BufReader<tokio::process::ChildStdout>), String> {
     let bin = binary_path(app);
-    log::debug!("spawning stream sidecar: {} --stream {}", bin.display(), if use_v2 { "--v2" } else { "" });
+    log::debug!("spawning stream sidecar: {} --stream --source {} {}", bin.display(), source, if use_v2 { "--v2" } else { "" });
     let mut cmd = Command::new(&bin);
     cmd.arg("--stream")
+        .arg("--source")
+        .arg(source)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     if use_v2 {
         cmd.arg("--v2");
     }
     let mut child = cmd.spawn().map_err(|e| format!("spawn {}: {}", bin.display(), e))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let mut stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
+
+    // Surface sidecar diagnostics (system-audio capture state, errors) in the app log.
+    if let Some(stderr) = child.stderr.take() {
+        tauri::async_runtime::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                // eprintln! is unconditional to the terminal running `tauri dev`;
+                // log::info! also routes it through the app log targets/file.
+                eprintln!("[sidecar] {line}");
+                log::info!("[sidecar] {line}");
+            }
+        });
+    }
 
     // The sidecar reads the config frame before emitting READY, so send it first.
     let cfg = format!("{}\t{}", rate, language);

@@ -24,6 +24,7 @@ import { TemplateIcon } from "@/components/template-icon"
 import { NoteRenderer } from "@/components/note-renderer"
 import { MarkdownView } from "@/components/markdown-view"
 import { Waveform } from "@/components/Waveform"
+import { newStreamMerge, consumeConfirmed, consumeVolatile, normalizeSource, appendStream } from "@/lib/stream-transcript"
 import { saveTemplate as persistTemplate } from "@/lib/templates"
 import { saveMeetings, loadMeetings } from "@/lib/storage"
 import { useChat } from "@/lib/use-chat"
@@ -141,8 +142,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const titleRef = useRef(title); titleRef.current = title
   const silenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isPausedRef = useRef(false)
-  // Cumulative confirmed text from the streaming ASR path; used to append only the delta.
-  const streamConfirmedRef = useRef("")
+  // Merges the mic + system streaming feeds into one interleaved transcript.
+  const streamMergeRef = useRef(newStreamMerge())
   const enhancedNotesRef = useRef<string>("")
   const previousNotesRef = useRef<string>("")
   const chatHistoryRef = useRef<ChatMessage[]>(note?.chatHistory ?? [])
@@ -210,7 +211,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setSilenceSeconds(0)
     setIsPaused(false)
     isPausedRef.current = false
-    streamConfirmedRef.current = ""
+    streamMergeRef.current = newStreamMerge()
     setVolatileText("")
 
     try {
@@ -224,16 +225,15 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           return prev ? prev + "\n" + prefix + t : t
         })
       })
-      // Streaming path (Parakeet): `confirmed` is cumulative — append only the new
-      // tail to the note; `volatile` is the in-progress preview shown muted.
-      const unStream = await listen<{ confirmed: string; volatile: string }>("transcript-stream", (e) => {
+      // Streaming path (Parakeet): each source's `confirmed` is cumulative. In "both"
+      // mode we interleave mic/system with Me/Them labels; otherwise plain append.
+      const unStream = await listen<{ source: string; confirmed: string; volatile: string }>("transcript-stream", (e) => {
         setSilenceSeconds(0)
-        const confirmed = e.payload.confirmed
-        const prev = streamConfirmedRef.current
-        const delta = confirmed.startsWith(prev) ? confirmed.slice(prev.length) : confirmed
-        streamConfirmedRef.current = confirmed
-        if (delta) setNotes((p) => (p ? p + delta : delta.replace(/^\s+/, "")))
-        setVolatileText(e.payload.volatile.trim())
+        const labeled = audioSource === "both"
+        const src = normalizeSource(e.payload.source)
+        const add = consumeConfirmed(streamMergeRef.current, src, e.payload.confirmed, labeled)
+        if (add) setNotes((p) => appendStream(p, add))
+        setVolatileText(consumeVolatile(streamMergeRef.current, src, e.payload.volatile, labeled))
       })
       const unLevel = await listen<{ rms: number }>("audio-level", (e) => {
         const rms = e.payload.rms
@@ -247,7 +247,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       })
       unlistenRef.current = [unTranscript, unStream, unLevel, unErr]
 
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, source: audioSource })
 
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
       silenceTimerRef.current = setInterval(() => {
@@ -271,13 +271,13 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       teardownListeners()
       setError(err instanceof Error ? err.message : typeof err === "string" ? err : "Failed to start recording")
     }
-  }, [teardownListeners, settings.speechLang, settings.asrModel])
+  }, [teardownListeners, settings.speechLang, settings.asrModel, audioSource])
 
   const pauseRecording = useCallback(async () => {
     setIsPaused(true)
     isPausedRef.current = true
     setVolatileText("")
-    streamConfirmedRef.current = "" // next session's confirmed restarts from empty
+    streamMergeRef.current = newStreamMerge() // next session's confirmed restarts from empty
     await invoke("stop_continuous").catch(() => {})
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
     if (silenceTimerRef.current) { clearInterval(silenceTimerRef.current); silenceTimerRef.current = null }
@@ -287,7 +287,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setIsPaused(false)
     isPausedRef.current = false
     try {
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, source: audioSource })
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
       silenceTimerRef.current = setInterval(() => {
         setSilenceSeconds(s => {
@@ -306,7 +306,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       teardownListeners()
       setError(err instanceof Error ? err.message : typeof err === "string" ? err : "Failed to resume recording")
     }
-  }, [teardownListeners, settings.speechLang, settings.asrModel])
+  }, [teardownListeners, settings.speechLang, settings.asrModel, audioSource])
 
   const autoDetectSpeakers = useCallback(async (transcript: string) => {
     if (speakerLabels.length > 0) return
@@ -904,8 +904,15 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 >
                   <HugeiconsIcon icon={ComputerIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />System
                 </button>
+                <button
+                  className="app-control-item"
+                  data-active={audioSource === "both"}
+                  onClick={() => setAudioSource("both")}
+                >
+                  Both
+                </button>
               </div>
-              {devices.length > 1 && (
+              {audioSource !== "system" && devices.length > 1 && (
                 <Select value={selectedDevice} onValueChange={setSelectedDevice}>
                   <SelectTrigger className="h-8 max-w-[160px] rounded-2xl border-border bg-background text-sm text-muted-foreground">
                     <SelectValue />

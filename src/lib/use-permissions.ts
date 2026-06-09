@@ -80,3 +80,62 @@ export function useMicrophonePermission() {
     reset,
   }
 }
+
+// Check Screen Recording permission and prompt if needed. Returns whether it's
+// granted. Use before starting a recording that captures system audio.
+export async function ensureScreenPermission(): Promise<boolean> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core")
+    if (await invoke<boolean>("check_screen_permission")) return true
+    return await invoke<boolean>("request_screen_permission")
+  } catch {
+    return false
+  }
+}
+
+// Screen Recording permission, required for system-audio capture. The actual TCC
+// check/request runs in the sidecar binary (which is what uses ScreenCaptureKit),
+// exposed via Tauri commands.
+export function useScreenRecordingPermission() {
+  const [permission, setPermission] = useState<PermissionState>("idle")
+
+  const check = useCallback(async (): Promise<PermissionState> => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core")
+      const granted = await invoke<boolean>("check_screen_permission")
+      const state: PermissionState = granted ? "granted" : "denied"
+      setPermission(state)
+      return state
+    } catch {
+      setPermission("denied")
+      return "denied"
+    }
+  }, [])
+
+  const request = useCallback(async (): Promise<PermissionState> => {
+    setPermission("requesting")
+    try {
+      const { invoke } = await import("@tauri-apps/api/core")
+      const granted = await invoke<boolean>("request_screen_permission")
+      const state: PermissionState = granted ? "granted" : "denied"
+      setPermission(state)
+      return state
+    } catch {
+      setPermission("denied")
+      return "denied"
+    }
+  }, [])
+
+  const openSystemSettings = useCallback(async () => {
+    try {
+      const { openUrl } = await import("@tauri-apps/plugin-opener")
+      await openUrl("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+    } catch {
+      // Fallback: cannot open system settings
+    }
+  }, [])
+
+  const reset = useCallback(() => setPermission("idle"), [])
+
+  return { permission, check, request, openSystemSettings, reset }
+}

@@ -304,10 +304,23 @@ export function SettingsPage({
                 <HugeiconsIcon icon={HeadsetIcon} strokeWidth={2} data-icon="inline-start" />
                 System Audio
               </Button>
+              <Button
+                variant={settings.audioSource === "both" ? "default" : "outline"}
+                size="sm"
+                onClick={() => update({ audioSource: "both" })}
+                className="flex-1"
+              >
+                Both
+              </Button>
             </div>
+            {settings.audioSource !== "mic" && (
+              <p className="text-xs text-muted-foreground">
+                System audio is captured directly (Core Audio tap — no screen recording) and uses the Parakeet model. Requires macOS 14.4+.
+              </p>
+            )}
           </div>
 
-          {devices.length > 0 && (
+          {settings.audioSource !== "system" && devices.length > 0 && (
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
                 <label className="text-xs font-medium">Preferred Input Device</label>
@@ -342,25 +355,27 @@ export function SettingsPage({
             </div>
           )}
 
-          <div className="flex flex-col gap-2">
-            {!micTesting ? (
-              <Button variant="outline" size="sm" onClick={startMicTest} className="w-fit">
-                <HugeiconsIcon icon={Mic01Icon} strokeWidth={2} data-icon="inline-start" />
-                Test Microphone
-              </Button>
-            ) : (
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <Button variant="destructive" size="sm" onClick={stopMicTest}>
-                    Stop Testing
-                  </Button>
-                  <div className="size-2 rounded-full bg-green-500 animate-pulse" />
-                  <span className="text-xs text-muted-foreground">Listening...</span>
+          {settings.audioSource !== "system" && (
+            <div className="flex flex-col gap-2">
+              {!micTesting ? (
+                <Button variant="outline" size="sm" onClick={startMicTest} className="w-fit">
+                  <HugeiconsIcon icon={Mic01Icon} strokeWidth={2} data-icon="inline-start" />
+                  Test Microphone
+                </Button>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <Button variant="destructive" size="sm" onClick={stopMicTest}>
+                      Stop Testing
+                    </Button>
+                    <div className="size-2 rounded-full bg-green-500 animate-pulse" />
+                    <span className="text-xs text-muted-foreground">Listening...</span>
+                  </div>
+                  <Waveform active={micTesting} level={micTestLevel} className="min-w-[160px]" />
                 </div>
-                <Waveform active={micTesting} level={micTestLevel} className="min-w-[160px]" />
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 

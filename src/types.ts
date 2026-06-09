@@ -73,7 +73,7 @@ export type AsrEngine = "fluid"
 export type AsrModel = "parakeet" | "sensevoice"
 
 export interface AppSettings {
-  audioSource: "mic" | "system"
+  audioSource: "mic" | "system" | "both"
   preferredDeviceId: string
   speechLang: string
   titlePrefix: string

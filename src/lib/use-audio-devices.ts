@@ -6,7 +6,7 @@ export interface AudioDevice {
   kind: string
 }
 
-export type AudioSource = "mic" | "system"
+export type AudioSource = "mic" | "system" | "both"
 
 export function useAudioDevices() {
   const [devices, setDevices] = useState<AudioDevice[]>([])

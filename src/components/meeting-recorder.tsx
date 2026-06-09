@@ -33,6 +33,7 @@ import { useAudioDevices } from "@/lib/use-audio-devices"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
 import { NoteEnhancer } from "@/components/note-enhancer"
 import { TemplateIcon } from "@/components/template-icon"
+import { newStreamMerge, consumeConfirmed, consumeVolatile, normalizeSource, appendStream } from "@/lib/stream-transcript"
 import type { Meeting, AppSettings, MeetingTemplate, MeetingSection } from "@/types"
 
 function formatDuration(seconds: number): string {
@@ -108,6 +109,8 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const unlistenRef = useRef<Array<() => void>>([])
   const transcriptRef = useRef("")
+  // Merges the mic + system streaming feeds into one interleaved transcript.
+  const streamMergeRef = useRef(newStreamMerge())
   const notesRef = useRef(notes); notesRef.current = notes
   const recorderStateRef = useRef(recorderState)
   recorderStateRef.current = recorderState
@@ -151,6 +154,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     setError(null)
     setTranscript("")
     setVolatileText("")
+    streamMergeRef.current = newStreamMerge()
     transcriptRef.current = ""
     setDuration(0)
     setIsSpeaking(false)
@@ -163,10 +167,14 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
         if (!t) return
         setTranscript((prev) => (prev ? prev + "\n" + t : t))
       })
-      // Streaming path (Parakeet): confirmed text is cumulative; volatile is the live tail.
-      const unStream = await listen<{ confirmed: string; volatile: string }>("transcript-stream", (e) => {
-        setTranscript(e.payload.confirmed.trim())
-        setVolatileText(e.payload.volatile.trim())
+      // Streaming path (Parakeet): each source's confirmed is cumulative. In "both"
+      // mode interleave mic/system with Me/Them labels; otherwise plain append.
+      const unStream = await listen<{ source: string; confirmed: string; volatile: string }>("transcript-stream", (e) => {
+        const labeled = audioSource === "both"
+        const src = normalizeSource(e.payload.source)
+        const add = consumeConfirmed(streamMergeRef.current, src, e.payload.confirmed, labeled)
+        if (add) setTranscript((p) => appendStream(p, add))
+        setVolatileText(consumeVolatile(streamMergeRef.current, src, e.payload.volatile, labeled))
       })
       const unLevel = await listen<{ rms: number }>("audio-level", (e) => {
         const rms = e.payload.rms
@@ -178,7 +186,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       })
       unlistenRef.current = [unTranscript, unStream, unLevel, unErr]
 
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, source: audioSource })
 
       timerRef.current = setInterval(() => {
         setDuration((d) => d + 1)
@@ -192,7 +200,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
       const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "Failed to start recording"
       setError(msg)
     }
-  }, [settings.asrModel, settings.speechLang, teardownListeners])
+  }, [settings.asrModel, settings.speechLang, audioSource, teardownListeners])
 
   const stopRecording = useCallback(async () => {
     teardownListeners()
@@ -468,8 +476,8 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
             onClick={() => setShowOptions(!showOptions)}
           >
             <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} className="size-3.5" />
-            {selectedTemplate ? `${selectedTemplate.name} · ` : ""}{audioSource === "mic" ? "Microphone" : "System Audio"}
-            {devices.length > 0 ? ` · ${devices.find((d) => d.deviceId === selectedDevice)?.label || "Default"}` : ""}
+            {selectedTemplate ? `${selectedTemplate.name} · ` : ""}{audioSource === "mic" ? "Microphone" : audioSource === "system" ? "System Audio" : "Mic + System"}
+            {audioSource !== "system" && devices.length > 0 ? ` · ${devices.find((d) => d.deviceId === selectedDevice)?.label || "Default"}` : ""}
             <HugeiconsIcon icon={showOptions ? ArrowUp01Icon : ArrowDown01Icon} strokeWidth={1.5} className="size-3 ml-auto" />
           </button>
 
@@ -500,12 +508,15 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
                   <Button variant={audioSource === "system" ? "default" : "outline"} size="sm" onClick={() => setAudioSource("system")} className="flex-1">
                     <HugeiconsIcon icon={HeadsetIcon} strokeWidth={2} data-icon="inline-start" />System
                   </Button>
+                  <Button variant={audioSource === "both" ? "default" : "outline"} size="sm" onClick={() => setAudioSource("both")} className="flex-1">
+                    Both
+                  </Button>
                 </div>
               </div>
 
-              {devices.length > 0 && (
+              {audioSource !== "system" && devices.length > 0 && (
                 <div className="flex flex-col gap-1">
-                  <label className="text-xs font-medium text-muted-foreground">Device</label>
+                  <label className="text-xs font-medium text-muted-foreground">{audioSource === "both" ? "Mic Device" : "Device"}</label>
                   <Select value={selectedDevice} onValueChange={setSelectedDevice}>
                     <SelectTrigger size="sm"><SelectValue placeholder="Select device..." /></SelectTrigger>
                     <SelectContent><SelectGroup>{devices.map((d) => (<SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>))}</SelectGroup></SelectContent>

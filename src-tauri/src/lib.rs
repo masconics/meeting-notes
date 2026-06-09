@@ -104,6 +104,8 @@ pub fn run() {
             fluid::setup_fluid,
             fluid::unload_fluid,
             fluid::fluid_loaded,
+            fluid::check_screen_permission,
+            fluid::request_screen_permission,
             capture::start_continuous,
             capture::stop_continuous,
         ])
