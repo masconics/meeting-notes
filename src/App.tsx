@@ -165,6 +165,11 @@ export function App() {
     const isNew = !meetingsRef.current.find(m => m.id === meeting.id)
     const updated = isNew ? [meeting, ...meetingsRef.current] : meetingsRef.current.map(m => m.id === meeting.id ? meeting : m)
     saveMeetings(updated); setMeetings(updated)
+
+    import("@/lib/ai-service").then(({ indexMeetingInMemory }) => {
+      indexMeetingInMemory(meeting).catch(() => {})
+    })
+
     if (isNew) {
       if (stayOnEditor) {
         setEditorNote(undefined)
@@ -180,6 +185,10 @@ export function App() {
     saveMeetings(updated); setMeetings(updated); setPendingDelete(meeting)
     if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current)
     deleteTimerRef.current = setTimeout(() => setPendingDelete(null), 5000)
+
+    import("@/lib/context-memory").then(({ unindexMeeting }) => {
+      unindexMeeting(id)
+    })
   }, [])
 
   const handleUndoDelete = useCallback(() => {

@@ -47,6 +47,20 @@ export interface Meeting {
   speakerLabels?: SpeakerLabel[]
   transcriptSegments?: TranscriptSegment[]
   brief?: string
+  memoryDigest?: string
+  memoryIndexedAt?: string
+}
+
+export interface MemoryEntry {
+  meetingId: string
+  digest: string
+  tf: Record<string, number>
+  indexedAt: string
+}
+
+export interface RelatedMeeting {
+  meetingId: string
+  score: number
 }
 
 export interface AISettings {

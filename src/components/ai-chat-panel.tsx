@@ -35,6 +35,7 @@ const SUGGESTED_QUESTIONS = [
 
 interface AIChatPanelProps {
   meeting: Meeting
+  allMeetings?: Meeting[]
   open: boolean
   onOpenChange: (open: boolean) => void
   onUpdate: (meeting: Meeting) => void
@@ -43,6 +44,7 @@ interface AIChatPanelProps {
 
 export function AIChatPanel({
   meeting,
+  allMeetings,
   open,
   onOpenChange,
   onUpdate,
@@ -61,7 +63,7 @@ export function AIChatPanel({
     retryLast,
     copyMessage,
     lastIsStreaming,
-  } = useChat(meeting, onUpdate)
+  } = useChat(meeting, onUpdate, allMeetings)
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const configured = isAIConfigured()

@@ -7,7 +7,9 @@ const TEMPLATES_KEY = "meeting-notes-templates"
 const SORT_PREF_KEY = "meeting-notes-sort-pref"
 const SAVED_SEARCHES_KEY = "meeting-notes-saved-searches"
 
-const ALL_KEYS = [MEETINGS_KEY, SETTINGS_KEY, AI_SETTINGS_KEY, TEMPLATES_KEY]
+const MEMORY_KEY = "meeting-notes-memory"
+
+const ALL_KEYS = [MEETINGS_KEY, SETTINGS_KEY, AI_SETTINGS_KEY, TEMPLATES_KEY, MEMORY_KEY]
 
 export async function hydrateFromVault(): Promise<void> {
   await initDatabase()
@@ -33,7 +35,7 @@ async function persistRemove(key: string): Promise<void> {
   await dbRemove(key)
 }
 
-import type { Meeting, AppSettings, AISettings, MeetingTemplate, ChatMessage } from "@/types"
+import type { Meeting, AppSettings, AISettings, MeetingTemplate, ChatMessage, MemoryEntry } from "@/types"
 import { DEFAULT_SETTINGS, DEFAULT_AI_SETTINGS } from "@/types"
 
 export function loadMeetings(): Meeting[] {
@@ -177,4 +179,37 @@ export function loadSavedSearches(): string[] {
 
 export function saveSavedSearches(searches: string[]): void {
   localStorage.setItem(SAVED_SEARCHES_KEY, JSON.stringify(searches))
+}
+
+export function loadMemory(): MemoryEntry[] {
+  try {
+    const raw = localStorage.getItem(MEMORY_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+export function saveMemory(entries: MemoryEntry[]): void {
+  const raw = JSON.stringify(entries)
+  localStorage.setItem(MEMORY_KEY, raw)
+  persist(MEMORY_KEY, raw)
+}
+
+export function upsertMemoryEntry(entry: MemoryEntry): MemoryEntry[] {
+  const entries = loadMemory()
+  const idx = entries.findIndex((e) => e.meetingId === entry.meetingId)
+  if (idx >= 0) {
+    entries[idx] = entry
+  } else {
+    entries.push(entry)
+  }
+  saveMemory(entries)
+  return entries
+}
+
+export function removeMemoryEntry(meetingId: string): MemoryEntry[] {
+  const entries = loadMemory().filter((e) => e.meetingId !== meetingId)
+  saveMemory(entries)
+  return entries
 }

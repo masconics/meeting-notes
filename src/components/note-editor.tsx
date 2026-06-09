@@ -24,11 +24,12 @@ import { TemplateIcon } from "@/components/template-icon"
 import { NoteRenderer } from "@/components/note-renderer"
 import { MarkdownView } from "@/components/markdown-view"
 import { Waveform } from "@/components/Waveform"
-import { getTemplateById, saveTemplate as persistTemplate } from "@/lib/templates"
+import { saveTemplate as persistTemplate } from "@/lib/templates"
 import { saveMeetings, loadMeetings } from "@/lib/storage"
 import { useChat } from "@/lib/use-chat"
 import { cn } from "@/lib/utils"
 import type { Meeting, AppSettings, MeetingTemplate, ChatMessage, SpeakerLabel } from "@/types"
+import { findRelatedMeetings } from "@/lib/context-memory"
 
 function formatDuration(seconds: number): string {
   const m = Math.floor(seconds / 60)
@@ -153,21 +154,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   }, [])
 
   const relatedMeetings = useMemo(() => {
-    if (!title.trim()) return []
-    const keywords = title.toLowerCase().split(/\s+/).filter(w => w.length > 2)
-    if (keywords.length === 0) return []
-    return meetings
-      .filter(m => m.id !== note?.id)
-      .map(m => {
-        const text = `${m.title} ${m.templateId ? getTemplateById(m.templateId)?.name ?? "" : ""}`.toLowerCase()
-        const score = keywords.filter(k => text.includes(k)).length
-        return { meeting: m, score }
-      })
-      .filter(r => r.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 3)
-      .map(r => r.meeting)
-  }, [title, meetings, note?.id])
+    if (!note) return []
+    return findRelatedMeetings(note, meetings, 3)
+      .map(r => meetings.find(m => m.id === r.meetingId))
+      .filter((m): m is Meeting => Boolean(m))
+  }, [note, meetings])
 
   const isDirty = title !== (note?.title ?? settings.titlePrefix) ||
     notes !== (note?.notes || note?.transcript || "")
@@ -200,7 +191,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     retryLast,
     copyMessage,
     lastIsStreaming,
-  } = useChat(chatMeeting, chatOnUpdate)
+  } = useChat(chatMeeting, chatOnUpdate, meetings)
 
   const teardownListeners = useCallback(() => {
     unlistenRef.current.forEach((u) => u())
@@ -539,9 +530,13 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   }, [teardownListeners])
 
   useEffect(() => {
-    const dirty = title.trim().length > 0 || notes.trim().length > 0
+    const originalTitle = note?.title ?? settings.titlePrefix
+    const originalNotes = note?.notes || note?.transcript || ""
+    const titleChanged = title !== originalTitle
+    const notesChanged = notes !== originalNotes
+    const dirty = titleChanged || notesChanged
     window.dispatchEvent(new CustomEvent("recorder-dirty", { detail: { dirty } }))
-  }, [title, notes])
+  }, [title, notes, note?.title, note?.notes, note?.transcript, settings.titlePrefix])
 
   return (
     <main className="flex h-full w-full flex-col bg-background">

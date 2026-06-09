@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect } from "react"
 import { streamChatResponse } from "@/lib/ai-service"
 import type { Meeting, ChatMessage } from "@/types"
 
-export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void) {
+export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void, allMeetings?: Meeting[]) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => meeting.chatHistory || [])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -11,6 +11,11 @@ export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void) 
   const scrollRef = useRef<HTMLDivElement>(null)
   const streamingRef = useRef("")
   const abortRef = useRef<AbortController | null>(null)
+  const allMeetingsRef = useRef(allMeetings)
+
+  useEffect(() => {
+    allMeetingsRef.current = allMeetings
+  }, [allMeetings])
 
   const persistHistory = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs)
@@ -45,9 +50,8 @@ export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void) 
     try {
       const gen = streamChatResponse(
         base,
-        meeting.transcript,
-        meeting.notes,
-        meeting.structuredNotes,
+        meeting,
+        allMeetingsRef.current,
         controller.signal
       )
       for await (const chunk of gen) {

@@ -74,7 +74,7 @@ export function ChatPage({ meeting, allMeetings, onBack, onSettings, onSwitchMee
     retryLast,
     copyMessage,
     lastIsStreaming,
-  } = useChat(meeting, onUpdate)
+  } = useChat(meeting, onUpdate, allMeetings)
 
   const inputRef = useRef<HTMLInputElement>(null)
   const configured = isAIConfigured()

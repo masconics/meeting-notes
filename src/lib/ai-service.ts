@@ -1,5 +1,6 @@
 import type { MeetingSection, ChatMessage, QuickAction, Meeting } from "@/types"
 import { loadAISettings, loadApiKey } from "@/lib/storage"
+import { findRelatedMeetings, buildMemoryContextBlock } from "@/lib/context-memory"
 
 const DEEPSEEK_BASE = "https://api.deepseek.com"
 
@@ -348,49 +349,38 @@ Rules:
 }
 
 export async function generateBrief(
-  title: string,
-  templateSections: string[],
+  meeting: Meeting,
   pastMeetings: Meeting[]
 ): Promise<string> {
+  const templateSections = meeting.templateId
+    ? (() => {
+        try {
+          const raw = localStorage.getItem("meeting-notes-templates")
+          if (!raw) return []
+          const templates = JSON.parse(raw) as { id: string; sections: string[] }[]
+          return templates.find((t) => t.id === meeting.templateId)?.sections ?? []
+        } catch {
+          return []
+        }
+      })()
+    : []
+
   const sectionList = templateSections.length > 0
     ? templateSections.map((s) => `- ${s}`).join("\n")
     : "(no template sections)"
 
-  const related = pastMeetings
-    .map((m) => {
-      let score = 0
-      if (title) {
-        const titleWords = title.toLowerCase().split(/\s+/).filter((w) => w.length > 2)
-        const meetingWords = m.title.toLowerCase().split(/\s+/)
-        score += titleWords.filter((w) => meetingWords.includes(w)).length * 2
-      }
-      if (m.notes) score += 1
-      return { meeting: m, score }
-    })
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
-
-  const pastContext = related.length > 0
-    ? related.map(({ meeting: m }) => {
-        let entry = `### ${m.title} (${new Date(m.date).toLocaleDateString()})`
-        if (m.notes) entry += `\nNotes: ${m.notes.slice(0, 500)}`
-        if (m.transcript) entry += `\nTranscript excerpt: ${m.transcript.slice(0, 500)}`
-        if (m.structuredNotes) {
-          entry += `\nStructured:\n${m.structuredNotes.map((s) => `${s.title}: ${s.content.slice(0, 200)}`).join("\n")}`
-        }
-        return entry
-      }).join("\n\n---\n\n")
-    : "(no related past meetings found)"
+  const related = findRelatedMeetings(meeting, pastMeetings, 5)
+  const pastContext = buildMemoryContextBlock(related, pastMeetings)
 
   const prompt = `You are a professional meeting preparation assistant. Generate a concise pre-meeting brief.
 
-MEETING TITLE: ${title || "(not yet specified)"}
+MEETING TITLE: ${meeting.title || "(not yet specified)"}
 
 TEMPLATE SECTIONS:
 ${sectionList}
 
 RELATED PAST MEETINGS:
-${pastContext}
+${pastContext || "(no related past meetings found)"}
 
 Generate a pre-meeting brief with these sections. Use markdown formatting — headings (###), bullet points (-), bold (**) for names and key terms, tables for comparisons or multi-column data:
 
@@ -412,11 +402,19 @@ export async function executeQuickAction(
   transcript: string,
   notes: string,
   structuredNotes: MeetingSection[] | undefined,
-  action: QuickAction
+  action: QuickAction,
+  meeting?: Meeting,
+  allMeetings?: Meeting[]
 ): Promise<string> {
   const sectionsContext = structuredNotes
     ? structuredNotes.map((s) => `${s.title}:\n${s.content}`).join("\n\n")
     : ""
+
+  let memoryContext = ""
+  if (meeting && allMeetings) {
+    const related = findRelatedMeetings(meeting, allMeetings, 3)
+    memoryContext = buildMemoryContextBlock(related, allMeetings, 1500)
+  }
 
   const system = `You are a professional meeting assistant. Answer concisely with actionable, specific information based only on the meeting data provided. Use markdown formatting in your response — headings, bullet points, tables, and bold for emphasis where appropriate.`
 
@@ -429,7 +427,8 @@ MEETING NOTES:
 ${notes || "(none)"}
 
 STRUCTURED NOTES:
-${sectionsContext || "(none)"}`
+${sectionsContext || "(none)"}
+${memoryContext ? `\nRELATED PAST MEETING CONTEXT:\n${memoryContext}` : ""}`
 
   return await callDeepSeek([
     { role: "system", content: system },
@@ -439,24 +438,34 @@ ${sectionsContext || "(none)"}`
 
 export async function* streamChatResponse(
   messages: ChatMessage[],
-  transcript: string,
-  notes: string,
-  structuredNotes: MeetingSection[] | undefined,
+  meeting: Meeting,
+  allMeetings?: Meeting[],
   signal?: AbortSignal
 ): AsyncGenerator<string> {
   const settings = loadAISettings()
   const apiKey = await getApiKey()
 
+  const transcript = meeting.transcript
+  const notes = meeting.notes
+  const structuredNotes = meeting.structuredNotes
+
   const sectionsContext = structuredNotes
     ? structuredNotes.map((s) => `${s.title}:\n${s.content}`).join("\n\n")
     : ""
 
-  const systemMsg = `You are a helpful AI meeting assistant. You have access to the full meeting transcript, notes, and structured notes. Answer questions based on this context. Be concise and specific. Use markdown formatting in your responses — headings, bullet points, tables, and bold for emphasis where appropriate.
+  let memoryContext = ""
+  if (allMeetings && allMeetings.length > 0) {
+    const related = findRelatedMeetings(meeting, allMeetings, 5)
+    memoryContext = buildMemoryContextBlock(related, allMeetings, 2000)
+  }
 
-MEETING CONTEXT:
+  const systemMsg = `You are a helpful AI meeting assistant. You have access to the full meeting transcript, notes, structured notes, and context from related past meetings. Answer questions based on this context. Be concise and specific. Use markdown formatting in your responses — headings, bullet points, tables, and bold for emphasis where appropriate.
+
+CURRENT MEETING CONTEXT:
 Transcript: ${transcript || "(none)"}
 Notes: ${notes || "(none)"}
-${sectionsContext ? `Structured Notes:\n${sectionsContext}` : ""}`
+${sectionsContext ? `Structured Notes:\n${sectionsContext}` : ""}
+${memoryContext ? `\nRELATED PAST MEETINGS:\n${memoryContext}` : ""}`
 
   const apiMessages = [
     { role: "system", content: systemMsg },
@@ -535,5 +544,133 @@ ${transcript.slice(0, 4000)}`
     return Array.isArray(names) ? names.filter((n) => typeof n === "string" && n.trim()) : []
   } catch {
     return []
+  }
+}
+
+function buildMeetingContent(meeting: Meeting): string {
+  const parts = [meeting.title]
+  if (meeting.notes) parts.push(meeting.notes)
+  if (meeting.transcript) parts.push(meeting.transcript.slice(0, 2000))
+  if (meeting.structuredNotes) {
+    for (const section of meeting.structuredNotes) {
+      parts.push(section.title, section.content)
+    }
+  }
+  if (meeting.enhancedNotes) parts.push(meeting.enhancedNotes)
+  if (meeting.brief) parts.push(meeting.brief)
+  return parts.join(" ")
+}
+
+export async function generateMeetingDigest(meeting: Meeting): Promise<string> {
+  const content = buildMeetingContent(meeting)
+  if (!content.trim()) return meeting.title || "Untitled meeting"
+
+  const prompt = `Generate a concise semantic digest of this meeting (3-5 sentences). Capture: key topics discussed, decisions made, action items assigned, people mentioned, and the overall purpose. This digest will be used for semantic similarity search against other meetings.
+
+MEETING:
+Title: ${meeting.title}
+${content.slice(0, 6000)}`
+
+  try {
+    const response = await callDeepSeek([
+      { role: "system", content: "You generate concise meeting digests for semantic search. Be factual and specific. Include key terms, names, and concepts that would help match related meetings." },
+      { role: "user", content: prompt },
+    ], { thinking: false })
+    return response.trim()
+  } catch {
+    return content.slice(0, 500)
+  }
+}
+
+export async function indexMeetingInMemory(meeting: Meeting): Promise<string> {
+  const digest = await generateMeetingDigest(meeting)
+  const { indexMeeting } = await import("@/lib/context-memory")
+  indexMeeting(meeting, digest)
+  return digest
+}
+
+export async function* streamGlobalChat(
+  query: string,
+  chatHistory: ChatMessage[],
+  allMeetings: Meeting[],
+  signal?: AbortSignal
+): AsyncGenerator<string> {
+  const settings = loadAISettings()
+  const apiKey = await getApiKey()
+
+  const { findRelatedMeetings, buildMemoryContextBlock } = await import("@/lib/context-memory")
+
+  const queryMeeting: Meeting = {
+    id: "__global__",
+    title: query.slice(0, 100),
+    date: new Date().toISOString(),
+    duration: 0,
+    transcript: query,
+    notes: query,
+  }
+
+  const related = findRelatedMeetings(queryMeeting, allMeetings, 10)
+  const context = buildMemoryContextBlock(related, allMeetings, 6000)
+
+  const systemMsg = `You are a helpful assistant with access to context from the user's past meetings. Answer questions based on this context. If the answer cannot be found in the meeting context, say so honestly. Be concise and specific. Use markdown formatting — headings, bullet points, tables, and bold for emphasis where appropriate.
+
+AVAILABLE MEETING CONTEXT (${allMeetings.length} total, showing most relevant):
+${context || "(no relevant meetings found)"}
+
+The user's question: ${query}`
+
+  const apiMessages = [
+    { role: "system", content: systemMsg },
+    ...chatHistory.map((m) => ({ role: m.role, content: m.content })),
+  ]
+
+  const res = await fetch(`${DEEPSEEK_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: settings.model || "deepseek-v4-pro",
+      messages: apiMessages,
+      stream: true,
+      temperature: 0.7,
+      max_tokens: 4096,
+    }),
+    signal,
+  })
+
+  if (!res.ok) {
+    const body = await res.text()
+    if (res.status === 401) throw new Error("Invalid API key.")
+    throw new Error(`DeepSeek API error (${res.status}): ${body}`)
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) throw new Error("No response stream")
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() || ""
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue
+      const data = line.slice(6)
+      if (data === "[DONE]") continue
+      try {
+        const parsed = JSON.parse(data)
+        const delta = parsed.choices?.[0]?.delta?.content
+        if (delta) yield delta
+      } catch {
+        continue
+      }
+    }
   }
 }

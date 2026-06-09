@@ -45,10 +45,11 @@ interface ActionResult {
 
 interface QuickActionsProps {
   meeting: Meeting
+  allMeetings?: Meeting[]
   onInsertToNotes?: (content: string) => void
 }
 
-export function QuickActions({ meeting, onInsertToNotes }: QuickActionsProps) {
+export function QuickActions({ meeting, allMeetings, onInsertToNotes }: QuickActionsProps) {
   const [loading, setLoading] = useState<string | null>(null)
   const [results, setResults] = useState<ActionResult[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -66,7 +67,9 @@ export function QuickActions({ meeting, onInsertToNotes }: QuickActionsProps) {
         meeting.transcript,
         meeting.notes,
         meeting.structuredNotes,
-        action
+        action,
+        meeting,
+        allMeetings
       )
       setResults(prev => [...prev, { id: crypto.randomUUID(), label: action.label, content: text }])
     } catch (e) {
@@ -74,7 +77,7 @@ export function QuickActions({ meeting, onInsertToNotes }: QuickActionsProps) {
     } finally {
       setLoading(null)
     }
-  }, [meeting])
+  }, [meeting, allMeetings])
 
   const handleDismiss = useCallback((id: string) => {
     setResults(prev => prev.filter(r => r.id !== id))

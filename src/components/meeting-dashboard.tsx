@@ -33,6 +33,7 @@ import {
   Clock01Icon,
   Settings02Icon,
   AiMagicIcon,
+  AiChat02Icon,
   Search01Icon,
   SortingAZIcon,
   ArrowDown01Icon,
@@ -44,6 +45,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from "react"
 import { TemplateIcon } from "@/components/template-icon"
 import { getTemplateById } from "@/lib/templates"
 import { MarkdownView } from "@/components/markdown-view"
+import { GlobalChat } from "@/components/global-chat"
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", {
@@ -193,6 +195,7 @@ export function MeetingDashboard({
   const [briefLoadingId, setBriefLoadingId] = useState<string | null>(null)
   const [briefResult, setBriefResult] = useState<string | null>(null)
   const [briefMeetingId, setBriefMeetingId] = useState<string | null>(null)
+  const [showGlobalChat, setShowGlobalChat] = useState(false)
   const [savedSearches, setSavedSearches] = useState<string[]>(() => {
     try {
       const raw = localStorage.getItem("meeting-notes-saved-searches")
@@ -325,6 +328,9 @@ export function MeetingDashboard({
           </p>
         </div>
         <div className="app-toolbar shrink-0">
+          <Button variant="ghost" size="icon-sm" onClick={() => setShowGlobalChat(true)} title="Ask about all meetings" aria-label="Ask about all meetings">
+            <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} />
+          </Button>
           <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
             <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
           </Button>
@@ -697,6 +703,12 @@ export function MeetingDashboard({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <GlobalChat
+        meetings={meetings}
+        open={showGlobalChat}
+        onClose={() => setShowGlobalChat(false)}
+        onOpenSettings={onSettings}
+      />
     </div>
   )
 }

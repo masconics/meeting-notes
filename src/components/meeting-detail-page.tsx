@@ -522,7 +522,7 @@ export function MeetingDetailPage({
               </section>
               <section>
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">Quick Actions</h3>
-                <QuickActions meeting={viewing} onInsertToNotes={(content) => update({ notes: viewing.notes ? viewing.notes + "\n\n" + content : content })} />
+                <QuickActions meeting={viewing} allMeetings={allMeetings} onInsertToNotes={(content) => update({ notes: viewing.notes ? viewing.notes + "\n\n" + content : content })} />
               </section>
             </div>
           ) : (
