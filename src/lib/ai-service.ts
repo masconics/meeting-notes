@@ -153,20 +153,25 @@ export async function* streamGenerateNotes(
   const settings = loadAISettings()
   const apiKey = await getApiKey()
 
-  const hasExistingNotes = rawNotes.trim().length > 0
   const hasTemplate = templateSections && templateSections.length > 0
+  const prompt = hasTemplate
+    ? `You are a professional meeting assistant. Take the raw notes and transcript below, and create clean, organized meeting notes. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, tables for comparisons or multi-column data, and clear section structure.
 
-  const sectionsHeader = hasTemplate
-    ? `\nSECTIONS:\n${templateSections.map((s) => `## ${s}`).join("\n")}`
-    : ""
+SECTIONS:
+${templateSections!.map((s) => `## ${s}`).join("\n")}
 
-  const systemPrompt = hasExistingNotes
-    ? `You are a professional meeting assistant. Enhance the EXISTING meeting notes below by incorporating new information from the transcript. Preserve all existing content — do not delete or replace anything that's already there. Only add new insights, decisions, action items, or clarifying details from the transcript. If the transcript adds nothing new, return the existing notes unchanged. Use structured markdown — headings (##), bullet points (-), bold (**) for key terms, tables for comparisons.${sectionsHeader}`
-    : `You are a professional meeting assistant. Create clean, organized meeting notes from the transcript below. Use structured markdown — headings (##), bullet points (-), bold (**) for key terms, tables for comparisons or multi-column data, and clear section structure.${sectionsHeader}`
+TRANSCRIPT:
+${transcript || "(none)"}
 
-  const userPrompt = hasExistingNotes
-    ? `EXISTING NOTES (preserve all of this):\n${rawNotes}\n\nNEW TRANSCRIPT (extract new info from this to add):\n${transcript || "(none)"}`
-    : `TRANSCRIPT:\n${transcript || "(none)"}\n\nRAW NOTES:\n${rawNotes || "(none)"}`
+RAW NOTES:
+${rawNotes || "(none)"}`
+    : `You are a professional meeting assistant. Create clean, organized meeting notes from the raw notes and transcript below. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, tables for comparisons or multi-column data, and clear section structure.
+
+TRANSCRIPT:
+${transcript || "(none)"}
+
+RAW NOTES:
+${rawNotes || "(none)"}`
 
   const res = await fetch(`${DEEPSEEK_BASE}/chat/completions`, {
     method: "POST",
@@ -177,8 +182,8 @@ export async function* streamGenerateNotes(
     body: JSON.stringify({
       model: settings.model || "deepseek-v4-pro",
       messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
+        { role: "system", content: "You are a professional meeting notes organizer. Output clean, well-structured markdown with headings, bullet points, tables, and bold for emphasis." },
+        { role: "user", content: prompt },
       ],
       stream: true,
       temperature: 0.3,

@@ -106,8 +106,6 @@ pub fn run() {
             fluid::fluid_loaded,
             capture::start_continuous,
             capture::stop_continuous,
-            capture::start_mic_test,
-            capture::stop_mic_test,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

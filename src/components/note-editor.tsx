@@ -89,6 +89,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [justSaved, setJustSaved] = useState(false)
   const [copied, setCopied] = useState(false)
   const [silenceSeconds, setSilenceSeconds] = useState(0)
+  const [volatileText, setVolatileText] = useState("")
   const [isStreaming, setIsStreaming] = useState(false)
   const [viewMode, setViewMode] = useState<"wysiwyg" | "source">("wysiwyg")
   const [isPaused, setIsPaused] = useState(false)
@@ -140,13 +141,13 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const titleRef = useRef(title); titleRef.current = title
   const silenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const isPausedRef = useRef(false)
+  // Cumulative confirmed text from the streaming ASR path; used to append only the delta.
+  const streamConfirmedRef = useRef("")
   const enhancedNotesRef = useRef<string>("")
   const previousNotesRef = useRef<string>("")
-  const preRecordNotesRef = useRef<string>("")
-  const speakingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const chatHistoryRef = useRef<ChatMessage[]>(note?.chatHistory ?? [])
 
-  const { devices, selectedDevice, setSelectedDevice, audioSource, setAudioSource, getDeviceLabel } = useAudioDevices()
+  const { devices, selectedDevice, setSelectedDevice, audioSource, setAudioSource } = useAudioDevices()
 
   useEffect(() => {
     if (settings.audioSource) setAudioSource(settings.audioSource)
@@ -200,7 +201,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     unlistenRef.current = []
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
     if (silenceTimerRef.current) { clearInterval(silenceTimerRef.current); silenceTimerRef.current = null }
-    if (speakingDebounceRef.current) { clearTimeout(speakingDebounceRef.current); speakingDebounceRef.current = null }
   }, [])
 
   const startRecording = useCallback(async () => {
@@ -210,9 +210,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setSilenceSeconds(0)
     setIsPaused(false)
     isPausedRef.current = false
-    preRecordNotesRef.current = notesRef.current
+    streamConfirmedRef.current = ""
+    setVolatileText("")
 
     try {
+      // Batch path (SenseVoice): one finished segment per event.
       const unTranscript = await listen<{ text: string; hasBreak?: boolean }>("transcript-segment", (e) => {
         const t = e.payload.text.trim()
         if (!t) return
@@ -222,30 +224,30 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           return prev ? prev + "\n" + prefix + t : t
         })
       })
+      // Streaming path (Parakeet): `confirmed` is cumulative — append only the new
+      // tail to the note; `volatile` is the in-progress preview shown muted.
+      const unStream = await listen<{ confirmed: string; volatile: string }>("transcript-stream", (e) => {
+        setSilenceSeconds(0)
+        const confirmed = e.payload.confirmed
+        const prev = streamConfirmedRef.current
+        const delta = confirmed.startsWith(prev) ? confirmed.slice(prev.length) : confirmed
+        streamConfirmedRef.current = confirmed
+        if (delta) setNotes((p) => (p ? p + delta : delta.replace(/^\s+/, "")))
+        setVolatileText(e.payload.volatile.trim())
+      })
       const unLevel = await listen<{ rms: number }>("audio-level", (e) => {
         const rms = e.payload.rms
         setAudioLevel(rms)
         const speaking = rms > 0.012
-        if (speaking) {
-          if (speakingDebounceRef.current) {
-            clearTimeout(speakingDebounceRef.current)
-            speakingDebounceRef.current = null
-          }
-          setIsSpeaking(true)
-          setSilenceSeconds(0)
-        } else if (!speakingDebounceRef.current) {
-          speakingDebounceRef.current = setTimeout(() => {
-            setIsSpeaking(false)
-            speakingDebounceRef.current = null
-          }, 80)
-        }
+        setIsSpeaking(speaking)
+        if (speaking) setSilenceSeconds(0)
       })
       const unErr = await listen<{ text: string }>("capture-error", (e) => {
         setError(`Transcription: ${e.payload.text}`)
       })
-      unlistenRef.current = [unTranscript, unLevel, unErr]
+      unlistenRef.current = [unTranscript, unStream, unLevel, unErr]
 
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, deviceId: settings.preferredDeviceId !== "default" ? getDeviceLabel(settings.preferredDeviceId) : null })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
 
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
       silenceTimerRef.current = setInterval(() => {
@@ -274,6 +276,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const pauseRecording = useCallback(async () => {
     setIsPaused(true)
     isPausedRef.current = true
+    setVolatileText("")
+    streamConfirmedRef.current = "" // next session's confirmed restarts from empty
     await invoke("stop_continuous").catch(() => {})
     if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
     if (silenceTimerRef.current) { clearInterval(silenceTimerRef.current); silenceTimerRef.current = null }
@@ -282,9 +286,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const resumeRecording = useCallback(async () => {
     setIsPaused(false)
     isPausedRef.current = false
-    preRecordNotesRef.current = notesRef.current
     try {
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, deviceId: settings.preferredDeviceId === "default" ? null : getDeviceLabel(settings.preferredDeviceId) })
+      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null })
       timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
       silenceTimerRef.current = setInterval(() => {
         setSilenceSeconds(s => {
@@ -331,6 +334,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setIsSpeaking(false)
     setAudioLevel(0)
     setSilenceSeconds(0)
+    setVolatileText("")
     setIsPaused(false)
     isPausedRef.current = false
     setIsTranscribing(true)
@@ -343,8 +347,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
       const content = notesRef.current.trim()
       if (content) {
-        const preRecord = preRecordNotesRef.current.trim()
-        const newTranscript = preRecord ? content.slice(preRecord.length).trim() : content
         setRawTranscript(content)
         previousNotesRef.current = notesRef.current
 
@@ -352,8 +354,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         if (isAIConfigured()) {
           try {
             setIsStreaming(true)
-            let streamed = preRecord || ""
-            const gen = streamGenerateNotes(preRecord, newTranscript, selectedTemplate?.sections)
+            let streamed = ""
+            const gen = streamGenerateNotes(content, content, selectedTemplate?.sections)
             for await (const chunk of gen) {
               streamed += chunk
               setNotes(streamed)
@@ -365,17 +367,16 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             const defaultTitle = titleRef.current.trim() === "" || titleRef.current === settings.titlePrefix
             if (defaultTitle) {
               const { generateTitle } = await import("@/lib/ai-service")
-              const autoTitle = await generateTitle(newTranscript, preRecord)
+              const autoTitle = await generateTitle(content, content)
               if (autoTitle) setTitle(autoTitle)
             }
           } catch { /* ignore title generation failure during auto-enhance */ }
         }
-        autoDetectSpeakers(newTranscript)
+        autoDetectSpeakers(content)
       }
     } finally {
       setIsTranscribing(false)
     }
-    preRecordNotesRef.current = ""
     window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
     emit("recording-state", { recording: false }).catch((e) => logError(String(e)))
   }, [teardownListeners, selectedTemplate, settings.titlePrefix])
@@ -391,7 +392,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       const sections = selectedTemplate?.sections
       setIsStreaming(true)
       let streamed = ""
-      const gen = streamGenerateNotes("", content, sections)
+      const gen = streamGenerateNotes(content, content, sections)
       for await (const chunk of gen) {
         streamed += chunk
         setNotes(streamed)
@@ -876,6 +877,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       {silenceSeconds > 10 ? `silence ${silenceSeconds}s` : "listening"}
                     </span>
                   )}
+                  {volatileText && (
+                    <span className="max-w-[280px] truncate text-xs italic text-muted-foreground/70" title={volatileText}>{volatileText}</span>
+                  )}
                   <Button variant="ghost" size="sm" onClick={pauseRecording} className="text-amber-500 hover:text-amber-600">Pause</Button>
                   <Button variant="ghost" size="sm" onClick={stopRecording} className="text-destructive hover:text-destructive">Stop</Button>
                 </>
@@ -893,8 +897,15 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 >
                   <HugeiconsIcon icon={MicIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />Mic
                 </button>
+                <button
+                  className="app-control-item"
+                  data-active={audioSource === "system"}
+                  onClick={() => setAudioSource("system")}
+                >
+                  <HugeiconsIcon icon={ComputerIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />System
+                </button>
               </div>
-              {devices.length > 0 && (
+              {devices.length > 1 && (
                 <Select value={selectedDevice} onValueChange={setSelectedDevice}>
                   <SelectTrigger className="h-8 max-w-[160px] rounded-2xl border-border bg-background text-sm text-muted-foreground">
                     <SelectValue />
