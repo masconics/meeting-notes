@@ -15,6 +15,9 @@ export interface UseRecordingOptions {
   speechLang: string
   /** Receives the live transcript text. Compatible with a React state setter. */
   setText: React.Dispatch<React.SetStateAction<string>>
+  /** Returns the current editor text (a ref read, not state). Used to detect
+   *  manual edits between stream updates; must stay in sync with `setText`. */
+  getText: () => string
   /** Capture/transcription errors (start failures, sidecar errors). */
   onError?: (message: string) => void
   /** Stop automatically after this many seconds of continuous silence. */
@@ -32,6 +35,7 @@ export function useRecording({
   audioSource,
   speechLang,
   setText,
+  getText,
   onError,
   silenceLimitSecs,
   onSilenceLimit,
@@ -100,10 +104,31 @@ export function useRecording({
     setSilenceSeconds(0)
   }, [])
 
+  // Single-source editing support. The note shows `base + stream tail`:
+  // `base` is whatever was in the editor at session start — or, after a manual
+  // edit, the user's edited text (which embeds the stream text rendered so
+  // far). `offset` skips the stream characters already baked into the base,
+  // and `rendered` detects manual edits between updates so we re-anchor
+  // instead of clobbering them. This works because with zeroed confirmation
+  // gates the stream text (confirmed + volatile) is strictly append-only.
+  const baseRef = useRef("")
+  const streamOffsetRef = useRef(0)
+  const lastStreamLenRef = useRef(0)
+  const renderedRef = useRef<string | null>(null)
+
+  const anchorText = useCallback(() => {
+    streamOffsetRef.current = 0
+    lastStreamLenRef.current = 0
+    const p = getText()
+    baseRef.current = p
+    renderedRef.current = p
+  }, [getText])
+
   const attachListeners = useCallback(async () => {
-    // Each source's `confirmed` is cumulative. Single source uses the stream
-    // text verbatim (exactly what the live caption shows); "both" mode
-    // interleaves mic/system with Me/Them labels via deltas.
+    // Each source's `confirmed` is cumulative. Single source appends the
+    // stream text after the editor's existing content (re-anchoring around
+    // manual edits); "both" mode interleaves mic/system with Me/Them labels
+    // via deltas.
     const unStream = await listen<{ source: string; confirmed: string; volatile: string }>("transcript-stream", (e) => {
       markActivity()
       const labeled = audioSource === "both"
@@ -112,11 +137,25 @@ export function useRecording({
         const add = consumeConfirmed(streamMergeRef.current, src, e.payload.confirmed, labeled)
         if (add) setText((p) => appendStream(p, add))
       } else {
-        // The text IS the live stream — cumulative confirmed plus the
-        // in-progress volatile tail, replaced wholesale on every update so
-        // revisions self-correct and it keeps pace with the live caption.
         const { confirmed, volatile } = e.payload
-        setText(volatile ? (confirmed ? confirmed + " " + volatile : volatile) : confirmed)
+        const full = volatile ? (confirmed ? confirmed + " " + volatile : volatile) : confirmed
+        // All ref bookkeeping happens here, outside the state updater — React
+        // (StrictMode) may invoke updaters more than once, so they must stay pure.
+        const p = getText()
+        if (renderedRef.current !== null && p !== renderedRef.current) {
+          // Manual edit since our last render: the edited text becomes the
+          // new base (it already contains the stream text rendered so far);
+          // only stream text beyond that point appends after it.
+          baseRef.current = p
+          streamOffsetRef.current = lastStreamLenRef.current
+        }
+        const tail = full.slice(streamOffsetRef.current).replace(/^\s+/, "")
+        const base = baseRef.current
+        const sep = base && tail ? (/\s$/.test(base) ? "" : " ") : ""
+        const next = base + sep + tail
+        lastStreamLenRef.current = full.length
+        renderedRef.current = next
+        setText(next)
       }
       setVolatileText(consumeVolatile(streamMergeRef.current, src, e.payload.volatile, labeled))
     })
@@ -134,7 +173,7 @@ export function useRecording({
       onError?.(`Transcription: ${e.payload.text}`)
     })
     unlistenRef.current = [unStream, unLevel, unErr]
-  }, [audioSource, setText, onError, markActivity])
+  }, [audioSource, setText, getText, onError, markActivity])
 
   const invokeStart = useCallback(
     () =>
@@ -149,6 +188,9 @@ export function useRecording({
     streamMergeRef.current = newStreamMerge()
     resetLiveState()
     setDuration(0)
+    // Existing editor content stays as the prefix; the session's stream text
+    // appends after it.
+    anchorText()
     try {
       await attachListeners()
       await invokeStart()
@@ -160,7 +202,7 @@ export function useRecording({
       onError?.(msg)
       throw err
     }
-  }, [attachListeners, invokeStart, beginTick, teardown, resetLiveState, onError])
+  }, [attachListeners, invokeStart, beginTick, teardown, resetLiveState, anchorText, onError])
 
   /** Stop and wait `flushMs` for the backend to flush the final transcript
    *  before detaching listeners — detaching first would lose the tail. */
@@ -186,6 +228,9 @@ export function useRecording({
   }, [clearTick])
 
   const resume = useCallback(async () => {
+    // The resumed sidecar session restarts its confirmed text from empty, so
+    // re-anchor: text from before the pause is kept as the new base.
+    anchorText()
     try {
       await invokeStart()
       beginTick()
@@ -195,7 +240,7 @@ export function useRecording({
       onError?.(msg)
       throw err
     }
-  }, [invokeStart, beginTick, teardown, onError])
+  }, [invokeStart, beginTick, teardown, anchorText, onError])
 
   return { volatileText, audioLevel, isSpeaking, duration, silenceSeconds, start, stop, pause, resume, abort }
 }

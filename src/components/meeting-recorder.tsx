@@ -98,14 +98,10 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const [reviewEnhancedNotes, setReviewEnhancedNotes] = useState<string | null>(null)
   const [showOptions, setShowOptions] = useState(false)
   const [quickActionResult, setQuickActionResult] = useState<string | null>(null)
-  const transcriptRef = useRef("")
+  const transcriptRef = useRef(""); transcriptRef.current = transcript
   const notesRef = useRef(notes); notesRef.current = notes
   const recorderStateRef = useRef(recorderState)
   recorderStateRef.current = recorderState
-
-  // Mirror transcript/notes into refs so async stop handlers read latest values.
-  useEffect(() => { transcriptRef.current = transcript }, [transcript])
-  useEffect(() => { notesRef.current = notes }, [notes])
 
   const {
     devices,
@@ -119,6 +115,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     audioSource,
     speechLang: settings.speechLang,
     setText: setTranscript,
+    getText: () => transcriptRef.current,
     onError: setError,
   })
 

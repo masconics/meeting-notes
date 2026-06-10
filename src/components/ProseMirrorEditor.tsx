@@ -8,6 +8,7 @@ import { streaming, startStreamingCmd, pushChunkCmd, endStreamingCmd, abortStrea
 import { diff } from "@milkdown/plugin-diff"
 import { Milkdown, MilkdownProvider, useEditor } from "@milkdown/react"
 import { replaceAll, getMarkdown, callCommand } from "@milkdown/kit/utils"
+import { TextSelection } from "@milkdown/kit/prose/state"
 import "@milkdown/kit/prose/view/style/prosemirror.css"
 
 type AiEditAction = "rewrite" | "summarize" | "expand" | "shorten"
@@ -87,7 +88,24 @@ function MilkdownEditorInner({
     }
   }, [value, loading, getEditor])
 
-  return <div className={className}><Milkdown /></div>
+  // The ProseMirror DOM only grows with content; clicks on the empty space
+  // below it should still focus the editor (cursor at the end) so the note
+  // is writable anywhere in the pane.
+  const focusEditor = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.target !== e.currentTarget) return
+      const editor = getEditor()
+      editor?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const end = view.state.doc.content.size
+        view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(end))))
+        view.focus()
+      })
+    },
+    [getEditor],
+  )
+
+  return <div className={`${className} h-full cursor-text`} onClick={focusEditor}><Milkdown /></div>
 }
 
 export function ProseMirrorEditor({

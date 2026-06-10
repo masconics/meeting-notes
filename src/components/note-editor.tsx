@@ -158,6 +158,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     audioSource,
     speechLang: settings.speechLang,
     setText: setNotes,
+    getText: () => notesRef.current,
     onError: setError,
     silenceLimitSecs: 120,
     onSilenceLimit,

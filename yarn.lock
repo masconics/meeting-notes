@@ -6354,6 +6354,59 @@ __metadata:
   languageName: node
   linkType: hard
 
+"meeting-notes@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "meeting-notes@workspace:."
+  dependencies:
+    "@base-ui/react": "npm:^1.5.0"
+    "@eslint/js": "npm:^9.39.1"
+    "@fontsource-variable/inter": "npm:^5.2.8"
+    "@fontsource-variable/jetbrains-mono": "npm:^5.2.8"
+    "@hugeicons/core-free-icons": "npm:^4.2.0"
+    "@hugeicons/react": "npm:^1.1.6"
+    "@milkdown/kit": "npm:^7.21.2"
+    "@milkdown/plugin-diff": "npm:^7.21.2"
+    "@milkdown/plugin-history": "npm:^7.21.2"
+    "@milkdown/plugin-listener": "npm:^7.21.2"
+    "@milkdown/plugin-streaming": "npm:^7.21.2"
+    "@milkdown/react": "npm:^7.21.2"
+    "@prosemirror-adapter/react": "npm:^0.5.3"
+    "@radix-ui/react-toolbar": "npm:^1.1.12"
+    "@tailwindcss/vite": "npm:^4.1.17"
+    "@tauri-apps/api": "npm:^2"
+    "@tauri-apps/cli": "npm:^2"
+    "@tauri-apps/plugin-dialog": "npm:^2.7.1"
+    "@tauri-apps/plugin-fs": "npm:^2.5.1"
+    "@tauri-apps/plugin-log": "npm:^2.8.0"
+    "@tauri-apps/plugin-opener": "npm:^2.5.4"
+    "@tauri-apps/plugin-store": "npm:^2.4.3"
+    "@tauri-apps/plugin-stronghold": "npm:^2.3.1"
+    "@types/node": "npm:^24.10.1"
+    "@types/react": "npm:^19.2.5"
+    "@types/react-dom": "npm:^19.2.3"
+    "@vitejs/plugin-react": "npm:^5.1.1"
+    class-variance-authority: "npm:^0.7.1"
+    clsx: "npm:^2.1.1"
+    eslint: "npm:^9.39.1"
+    eslint-plugin-react-hooks: "npm:^7.0.1"
+    eslint-plugin-react-refresh: "npm:^0.4.24"
+    framer-motion: "npm:^12.40.0"
+    globals: "npm:^16.5.0"
+    lucide-react: "npm:^1.17.0"
+    marked: "npm:^18.0.5"
+    radix-ui: "npm:^1.5.0"
+    react: "npm:^19.2.0"
+    react-dom: "npm:^19.2.0"
+    shadcn: "npm:^4.10.0"
+    tailwind-merge: "npm:^3.6.0"
+    tailwindcss: "npm:^4.1.17"
+    tw-animate-css: "npm:^1.4.0"
+    typescript: "npm:~5.9.3"
+    typescript-eslint: "npm:^8.46.4"
+    vite: "npm:^8.0.16"
+  languageName: unknown
+  linkType: soft
+
 "merge-descriptors@npm:^2.0.0":
   version: 2.0.0
   resolution: "merge-descriptors@npm:2.0.0"
@@ -8498,59 +8551,6 @@ __metadata:
   checksum: 10c0/e5d9eb4810623f23758cfc2205323e33552fb5972e5c2e6587babe08fe4d24859866277404fb9e2a20afb71013860d96ec806cb257536ae463c87d70022ab9ef
   languageName: node
   linkType: hard
-
-"vite-app@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "vite-app@workspace:."
-  dependencies:
-    "@base-ui/react": "npm:^1.5.0"
-    "@eslint/js": "npm:^9.39.1"
-    "@fontsource-variable/inter": "npm:^5.2.8"
-    "@fontsource-variable/jetbrains-mono": "npm:^5.2.8"
-    "@hugeicons/core-free-icons": "npm:^4.2.0"
-    "@hugeicons/react": "npm:^1.1.6"
-    "@milkdown/kit": "npm:^7.21.2"
-    "@milkdown/plugin-diff": "npm:^7.21.2"
-    "@milkdown/plugin-history": "npm:^7.21.2"
-    "@milkdown/plugin-listener": "npm:^7.21.2"
-    "@milkdown/plugin-streaming": "npm:^7.21.2"
-    "@milkdown/react": "npm:^7.21.2"
-    "@prosemirror-adapter/react": "npm:^0.5.3"
-    "@radix-ui/react-toolbar": "npm:^1.1.12"
-    "@tailwindcss/vite": "npm:^4.1.17"
-    "@tauri-apps/api": "npm:^2"
-    "@tauri-apps/cli": "npm:^2"
-    "@tauri-apps/plugin-dialog": "npm:^2.7.1"
-    "@tauri-apps/plugin-fs": "npm:^2.5.1"
-    "@tauri-apps/plugin-log": "npm:^2.8.0"
-    "@tauri-apps/plugin-opener": "npm:^2.5.4"
-    "@tauri-apps/plugin-store": "npm:^2.4.3"
-    "@tauri-apps/plugin-stronghold": "npm:^2.3.1"
-    "@types/node": "npm:^24.10.1"
-    "@types/react": "npm:^19.2.5"
-    "@types/react-dom": "npm:^19.2.3"
-    "@vitejs/plugin-react": "npm:^5.1.1"
-    class-variance-authority: "npm:^0.7.1"
-    clsx: "npm:^2.1.1"
-    eslint: "npm:^9.39.1"
-    eslint-plugin-react-hooks: "npm:^7.0.1"
-    eslint-plugin-react-refresh: "npm:^0.4.24"
-    framer-motion: "npm:^12.40.0"
-    globals: "npm:^16.5.0"
-    lucide-react: "npm:^1.17.0"
-    marked: "npm:^18.0.5"
-    radix-ui: "npm:^1.5.0"
-    react: "npm:^19.2.0"
-    react-dom: "npm:^19.2.0"
-    shadcn: "npm:^4.10.0"
-    tailwind-merge: "npm:^3.6.0"
-    tailwindcss: "npm:^4.1.17"
-    tw-animate-css: "npm:^1.4.0"
-    typescript: "npm:~5.9.3"
-    typescript-eslint: "npm:^8.46.4"
-    vite: "npm:^8.0.16"
-  languageName: unknown
-  linkType: soft
 
 "vite@npm:^8.0.16":
   version: 8.0.16
