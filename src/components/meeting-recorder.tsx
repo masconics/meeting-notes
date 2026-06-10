@@ -295,7 +295,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
           )}
 
           <div className="flex items-center gap-2 justify-end pt-2 shrink-0">
-            <Button variant="outline" onClick={() => { setTranscript(""); setDuration(0); startRecording() }}>
+            <Button variant="outline" onClick={() => { setTranscript(""); startRecording() }}>
               <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />Record Again
             </Button>
             <Button onClick={handleSave}>
