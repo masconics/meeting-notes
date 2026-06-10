@@ -16,15 +16,12 @@ import {
   UserAdd02Icon, Add01Icon,
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
-import { error as logError } from "@tauri-apps/plugin-log"
-import { listen, emit } from "@tauri-apps/api/event"
-import { invoke } from "@tauri-apps/api/core"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
 import { TemplateIcon } from "@/components/template-icon"
 import { NoteRenderer } from "@/components/note-renderer"
 import { MarkdownView } from "@/components/markdown-view"
 import { Waveform } from "@/components/Waveform"
-import { newStreamMerge, consumeConfirmed, consumeVolatile, normalizeSource, appendStream } from "@/lib/stream-transcript"
+import { useRecording } from "@/lib/use-recording"
 import { saveTemplate as persistTemplate } from "@/lib/templates"
 import { saveMeetings, loadMeetings } from "@/lib/storage"
 import { useChat } from "@/lib/use-chat"
@@ -76,12 +73,9 @@ type RecorderState = "idle" | "recording" | "reviewing"
 export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, settings }: NoteEditorProps) {
   const [title, setTitle] = useState(note?.title ?? settings.titlePrefix)
   const [notes, setNotes] = useState(note?.notes || note?.transcript || "")
-  const [duration, setDuration] = useState(0)
   const [recorderState, setRecorderState] = useState<RecorderState>("idle")
   const [error, setError] = useState<string | null>(null)
   const [isTranscribing, setIsTranscribing] = useState(false)
-  const [isSpeaking, setIsSpeaking] = useState(false)
-  const [audioLevel, setAudioLevel] = useState(0)
   const [selectedTemplate, setSelectedTemplate] = useState<MeetingTemplate | undefined>(undefined)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [showAIPanel, setShowAIPanel] = useState(false)
@@ -89,8 +83,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [isTitling, setIsTitling] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [silenceSeconds, setSilenceSeconds] = useState(0)
-  const [volatileText, setVolatileText] = useState("")
   const [isStreaming, setIsStreaming] = useState(false)
   const [viewMode, setViewMode] = useState<"wysiwyg" | "source">("wysiwyg")
   const [isPaused, setIsPaused] = useState(false)
@@ -134,16 +126,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     }
   }, [])
 
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const unlistenRef = useRef<Array<() => void>>([])
   const notesRef = useRef(notes); notesRef.current = notes
   const recorderStateRef = useRef(recorderState); recorderStateRef.current = recorderState
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const titleRef = useRef(title); titleRef.current = title
-  const silenceTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const isPausedRef = useRef(false)
-  // Merges the mic + system streaming feeds into one interleaved transcript.
-  const streamMergeRef = useRef(newStreamMerge())
   const enhancedNotesRef = useRef<string>("")
   const previousNotesRef = useRef<string>("")
   const chatHistoryRef = useRef<ChatMessage[]>(note?.chatHistory ?? [])
@@ -156,6 +142,26 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       setSelectedDevice(settings.preferredDeviceId)
     }
   }, [])
+
+  const onSilenceLimit = useCallback(() => setRecorderState("idle"), [])
+  const {
+    audioLevel,
+    isSpeaking,
+    duration,
+    silenceSeconds,
+    start: startCapture,
+    stop: stopCapture,
+    pause: pauseCapture,
+    resume: resumeCapture,
+    abort: abortCapture,
+  } = useRecording({
+    audioSource,
+    speechLang: settings.speechLang,
+    setText: setNotes,
+    onError: setError,
+    silenceLimitSecs: 120,
+    onSilenceLimit,
+  })
 
   const relatedMeetings = useMemo(() => {
     if (!note) return []
@@ -197,116 +203,30 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     lastIsStreaming,
   } = useChat(chatMeeting, chatOnUpdate, meetings)
 
-  const teardownListeners = useCallback(() => {
-    unlistenRef.current.forEach((u) => u())
-    unlistenRef.current = []
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-    if (silenceTimerRef.current) { clearInterval(silenceTimerRef.current); silenceTimerRef.current = null }
-  }, [])
-
   const startRecording = useCallback(async () => {
     setError(null)
-    setDuration(0)
-    setIsSpeaking(false)
-    setSilenceSeconds(0)
     setIsPaused(false)
-    isPausedRef.current = false
-    streamMergeRef.current = newStreamMerge()
-    setVolatileText("")
-
     try {
-      // Batch path (SenseVoice): one finished segment per event.
-      const unTranscript = await listen<{ text: string; hasBreak?: boolean }>("transcript-segment", (e) => {
-        const t = e.payload.text.trim()
-        if (!t) return
-        setSilenceSeconds(0)
-        setNotes((prev) => {
-          const prefix = e.payload.hasBreak && prev ? "\n\n" : ""
-          return prev ? prev + "\n" + prefix + t : t
-        })
-      })
-      // Streaming path (Parakeet): each source's `confirmed` is cumulative. In "both"
-      // mode we interleave mic/system with Me/Them labels; otherwise plain append.
-      const unStream = await listen<{ source: string; confirmed: string; volatile: string }>("transcript-stream", (e) => {
-        setSilenceSeconds(0)
-        const labeled = audioSource === "both"
-        const src = normalizeSource(e.payload.source)
-        const add = consumeConfirmed(streamMergeRef.current, src, e.payload.confirmed, labeled)
-        if (add) setNotes((p) => appendStream(p, add))
-        setVolatileText(consumeVolatile(streamMergeRef.current, src, e.payload.volatile, labeled))
-      })
-      const unLevel = await listen<{ rms: number }>("audio-level", (e) => {
-        const rms = e.payload.rms
-        setAudioLevel(rms)
-        const speaking = rms > 0.012
-        setIsSpeaking(speaking)
-        if (speaking) setSilenceSeconds(0)
-      })
-      const unErr = await listen<{ text: string }>("capture-error", (e) => {
-        setError(`Transcription: ${e.payload.text}`)
-      })
-      unlistenRef.current = [unTranscript, unStream, unLevel, unErr]
-
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, source: audioSource })
-
-      timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
-      silenceTimerRef.current = setInterval(() => {
-        setSilenceSeconds(s => {
-          const next = s + 1
-          if (next > 120) {
-            setRecorderState("idle")
-            setIsSpeaking(false)
-            setAudioLevel(0)
-            invoke("stop_continuous").catch(() => {})
-            teardownListeners()
-          }
-          return next > 120 ? s : next
-        })
-      }, 1000)
-
+      await startCapture()
       setRecorderState("recording")
-      window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: true } }))
-      emit("recording-state", { recording: true }).catch((e) => logError(String(e)))
-    } catch (err) {
-      teardownListeners()
-      setError(err instanceof Error ? err.message : typeof err === "string" ? err : "Failed to start recording")
+    } catch {
+      // useRecording already surfaced the error via onError.
     }
-  }, [teardownListeners, settings.speechLang, settings.asrModel, audioSource])
+  }, [startCapture])
 
   const pauseRecording = useCallback(async () => {
     setIsPaused(true)
-    isPausedRef.current = true
-    setVolatileText("")
-    streamMergeRef.current = newStreamMerge() // next session's confirmed restarts from empty
-    await invoke("stop_continuous").catch(() => {})
-    if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null }
-    if (silenceTimerRef.current) { clearInterval(silenceTimerRef.current); silenceTimerRef.current = null }
-  }, [])
+    await pauseCapture()
+  }, [pauseCapture])
 
   const resumeRecording = useCallback(async () => {
     setIsPaused(false)
-    isPausedRef.current = false
     try {
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, source: audioSource })
-      timerRef.current = setInterval(() => setDuration(d => d + 1), 1000)
-      silenceTimerRef.current = setInterval(() => {
-        setSilenceSeconds(s => {
-          const next = s + 1
-          if (next > 120) {
-            setRecorderState("idle")
-            setIsSpeaking(false)
-            setAudioLevel(0)
-            invoke("stop_continuous").catch(() => {})
-            teardownListeners()
-          }
-          return next > 120 ? s : next
-        })
-      }, 1000)
-    } catch (err) {
-      teardownListeners()
-      setError(err instanceof Error ? err.message : typeof err === "string" ? err : "Failed to resume recording")
+      await resumeCapture()
+    } catch {
+      // useRecording already surfaced the error via onError.
     }
-  }, [teardownListeners, settings.speechLang, settings.asrModel, audioSource])
+  }, [resumeCapture])
 
   const autoDetectSpeakers = useCallback(async (transcript: string) => {
     if (speakerLabels.length > 0) return
@@ -331,38 +251,21 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
   const stopRecording = useCallback(async () => {
     setRecorderState("idle")
-    setIsSpeaking(false)
-    setAudioLevel(0)
-    setSilenceSeconds(0)
-    setVolatileText("")
     setIsPaused(false)
-    isPausedRef.current = false
     setIsTranscribing(true)
 
     try {
-      await invoke("stop_continuous").catch((e) => logError(String(e)))
-      await new Promise((r) => setTimeout(r, 800))
+      await stopCapture(800)
 
-      teardownListeners()
-
+      // The live transcript is written directly — no automatic AI rewrite of the
+      // note text. Enhancement stays opt-in via the Enhance button.
       const content = notesRef.current.trim()
       if (content) {
         setRawTranscript(content)
         previousNotesRef.current = notesRef.current
 
-        const { streamGenerateNotes, isAIConfigured } = await import("@/lib/ai-service")
+        const { isAIConfigured } = await import("@/lib/ai-service")
         if (isAIConfigured()) {
-          try {
-            setIsStreaming(true)
-            let streamed = ""
-            const gen = streamGenerateNotes(content, content, selectedTemplate?.sections)
-            for await (const chunk of gen) {
-              streamed += chunk
-              setNotes(streamed)
-            }
-            enhancedNotesRef.current = streamed
-            setIsStreaming(false)
-          } catch { setIsStreaming(false) }
           try {
             const defaultTitle = titleRef.current.trim() === "" || titleRef.current === settings.titlePrefix
             if (defaultTitle) {
@@ -370,16 +273,14 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               const autoTitle = await generateTitle(content, content)
               if (autoTitle) setTitle(autoTitle)
             }
-          } catch { /* ignore title generation failure during auto-enhance */ }
+          } catch { /* ignore title generation failure */ }
         }
         autoDetectSpeakers(content)
       }
     } finally {
       setIsTranscribing(false)
     }
-    window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
-    emit("recording-state", { recording: false }).catch((e) => logError(String(e)))
-  }, [teardownListeners, selectedTemplate, settings.titlePrefix])
+  }, [stopCapture, settings.titlePrefix, autoDetectSpeakers])
 
   const handleEnhance = useCallback(async () => {
     const content = notes.trim()
@@ -520,7 +421,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     saveMeetings(updated)
     setTitle(settings.titlePrefix)
     setNotes("")
-    setDuration(0)
     setRawTranscript("")
     setShowRawTranscript(false)
     setSelectedTemplate(undefined)
@@ -530,7 +430,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     chatHistoryRef.current = []
     setRecorderState("idle")
     setIsPaused(false)
-    isPausedRef.current = false
     setError(null)
     setJustSaved(true)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
@@ -544,10 +443,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   }, [startRecording, stopRecording])
 
   useEffect(() => () => {
-    teardownListeners()
-    invoke("stop_continuous").catch((e) => logError(String(e)))
-    window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
-  }, [teardownListeners])
+    abortCapture()
+  }, [abortCapture])
 
   useEffect(() => {
     const originalTitle = note?.title ?? settings.titlePrefix
@@ -876,9 +773,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     <span className="text-xs text-muted-foreground/60">
                       {silenceSeconds > 10 ? `silence ${silenceSeconds}s` : "listening"}
                     </span>
-                  )}
-                  {volatileText && (
-                    <span className="max-w-[280px] truncate text-xs italic text-muted-foreground/70" title={volatileText}>{volatileText}</span>
                   )}
                   <Button variant="ghost" size="sm" onClick={pauseRecording} className="text-amber-500 hover:text-amber-600">Pause</Button>
                   <Button variant="ghost" size="sm" onClick={stopRecording} className="text-destructive hover:text-destructive">Stop</Button>

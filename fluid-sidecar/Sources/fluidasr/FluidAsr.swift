@@ -27,6 +27,7 @@ final class SystemAudioCapturer: @unchecked Sendable {
     private var bufferCount = 0
     private var sampleCount = 0
     private var blockPeak: Float = 0
+    var onLevel: ((Float) -> Void)?
 
     init() {
         var cont: AsyncStream<[Float]>.Continuation!
@@ -168,6 +169,7 @@ final class SystemAudioCapturer: @unchecked Sendable {
             // silence/zeros" — the key diagnostic when nothing is detected.
             var peak: Float = 0
             for s in out { let a = abs(s); if a > peak { peak = a } }
+            onLevel?(peak)
             if peak > blockPeak { blockPeak = peak }
             if bufferCount == 1 { sysLog("sys: first audio block (\(out.count) samples @16k), peak \(peak)") }
             else if bufferCount % 200 == 0 {
@@ -184,7 +186,10 @@ final class SystemAudioCapturer: @unchecked Sendable {
 @main
 struct FluidAsr {
     static func emit(_ s: String) {
-        FileHandle.standardOutput.write((s + "\n").data(using: .utf8)!)
+        // Leading newline: CoreML/E5RT sometimes prints diagnostics to stdout
+        // without a trailing newline, which would otherwise glue itself onto our
+        // protocol line. The Rust readers skip blank lines.
+        FileHandle.standardOutput.write(("\n" + s + "\n").data(using: .utf8)!)
     }
 
     static func main() async {
@@ -415,8 +420,26 @@ struct FluidAsr {
                 ? AsrModels.downloadAndLoad(version: .v2)
                 : AsrModels.downloadAndLoad(version: .v3))
 
+            // `.default` waits chunk+rightContext (17s) of audio before the first
+            // update — far too laggy for live captions. Smaller windows trade a
+            // little accuracy for ~4s update cadence on both mic and system.
+            //
+            // Confirmation gates are zeroed deliberately: the manager *drops* a
+            // window's text when it isn't promoted to confirmed (the next window
+            // overwrites volatile), so any non-zero confidence threshold loses
+            // words whenever a window decodes below it. Promoting every window
+            // keeps the transcript lossless; the UI renders confirmed+volatile
+            // the same way regardless.
+            let liveConfig = SlidingWindowAsrConfig(
+                chunkSeconds: 3.0,
+                hypothesisChunkSeconds: 1.0,
+                leftContextSeconds: 5.0,
+                rightContextSeconds: 1.0,
+                minContextForConfirmation: 0.0,
+                confirmationThreshold: 0.0
+            )
             func makeStream(_ src: AudioSource) async throws -> SlidingWindowAsrManager {
-                let m = SlidingWindowAsrManager(config: .default)
+                let m = SlidingWindowAsrManager(config: liveConfig)
                 try await m.loadModels(models)
                 try await m.startStreaming(source: src)
                 return m
@@ -449,6 +472,9 @@ struct FluidAsr {
             if let m = sysMgr {
                 if #available(macOS 14.4, *) {
                     let cap = SystemAudioCapturer()
+                    cap.onLevel = { peak in
+                        emit("{\"source\":\"system\",\"rms\":\(peak)}")
+                    }
                     do {
                         try cap.start()
                         let feed = Task {
@@ -484,16 +510,32 @@ struct FluidAsr {
             }
 
             // EOF: stop system capture, flush each stream, emit finals.
+            // Don't use finish()'s return value: it re-decodes ALL accumulated
+            // tokens in one pass, producing text that differs from the incremental
+            // per-chunk decode we've been streaming. The frontend appends by
+            // prefix-delta against the streamed text, so a divergent final would
+            // be appended wholesale (duplicated transcript). Instead emit the
+            // streamed confirmed text plus the leftover volatile tail — finish()
+            // still runs first so the remaining buffered audio gets flushed into
+            // that state.
+            func finalState(_ m: SlidingWindowAsrManager) async -> String {
+                let confirmed = await m.confirmedTranscript
+                let vol = await m.volatileTranscript
+                if vol.isEmpty { return confirmed }
+                return confirmed.isEmpty ? vol : confirmed + " " + vol
+            }
             stopSystem?()
+            // Flush both streams, then cancel the relays *before* emitting finals so
+            // a late relay update can't land after (and get re-appended over) them.
+            if let m = micMgr { _ = try await m.finish() }
+            if let m = sysMgr { _ = try await m.finish() }
+            updateTasks.forEach { $0.cancel() }
             if let m = micMgr {
-                let finalText = try await m.finish()
-                emitState(source: "mic", confirmed: finalText, vol: "")
+                emitState(source: "mic", confirmed: await finalState(m), vol: "")
             }
             if let m = sysMgr {
-                let finalText = try await m.finish()
-                emitState(source: "system", confirmed: finalText, vol: "")
+                emitState(source: "system", confirmed: await finalState(m), vol: "")
             }
-            updateTasks.forEach { $0.cancel() }
             emit("DONE")
         } catch {
             emit("FATAL\t\(error.localizedDescription)")

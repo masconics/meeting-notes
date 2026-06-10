@@ -33,6 +33,9 @@ export function consumeConfirmed(
   labeled: boolean,
 ): string {
   const prev = state.confirmed[source]
+  // Stale/out-of-order update (shorter than what we already consumed): ignore,
+  // otherwise the whole cumulative string would be re-appended as "new" text.
+  if (prev.startsWith(confirmed)) return ""
   const delta = confirmed.startsWith(prev) ? confirmed.slice(prev.length) : confirmed
   state.confirmed[source] = confirmed
   if (!delta.trim()) return ""

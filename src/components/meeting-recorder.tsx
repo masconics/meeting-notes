@@ -13,9 +13,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { error as logError } from "@tauri-apps/plugin-log"
-import { listen, emit } from "@tauri-apps/api/event"
-import { invoke } from "@tauri-apps/api/core"
 import {
   AiVoiceIcon,
   StopIcon,
@@ -33,7 +30,7 @@ import { useAudioDevices } from "@/lib/use-audio-devices"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
 import { NoteEnhancer } from "@/components/note-enhancer"
 import { TemplateIcon } from "@/components/template-icon"
-import { newStreamMerge, consumeConfirmed, consumeVolatile, normalizeSource, appendStream } from "@/lib/stream-transcript"
+import { useRecording } from "@/lib/use-recording"
 import type { Meeting, AppSettings, MeetingTemplate, MeetingSection } from "@/types"
 
 function formatDuration(seconds: number): string {
@@ -92,25 +89,16 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
   const [recorderState, setRecorderState] = useState<RecorderState>("idle")
   const [title, setTitle] = useState(settings.titlePrefix)
   const [transcript, setTranscript] = useState("")
-  // In-progress tail from the streaming ASR path (shown muted, replaced live).
-  const [volatileText, setVolatileText] = useState("")
   const [notes, setNotes] = useState("")
-  const [duration, setDuration] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [isTranscribing, setIsTranscribing] = useState(false)
-  const [isSpeaking, setIsSpeaking] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<MeetingTemplate | undefined>(undefined)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
   const [reviewStructuredNotes, setReviewStructuredNotes] = useState<MeetingSection[] | null>(null)
   const [reviewEnhancedNotes, setReviewEnhancedNotes] = useState<string | null>(null)
   const [showOptions, setShowOptions] = useState(false)
   const [quickActionResult, setQuickActionResult] = useState<string | null>(null)
-  const [audioLevel, setAudioLevel] = useState(0)
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const unlistenRef = useRef<Array<() => void>>([])
   const transcriptRef = useRef("")
-  // Merges the mic + system streaming feeds into one interleaved transcript.
-  const streamMergeRef = useRef(newStreamMerge())
   const notesRef = useRef(notes); notesRef.current = notes
   const recorderStateRef = useRef(recorderState)
   recorderStateRef.current = recorderState
@@ -127,6 +115,13 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     setAudioSource,
   } = useAudioDevices()
 
+  const { audioLevel, isSpeaking, duration, start, stop, abort } = useRecording({
+    audioSource,
+    speechLang: settings.speechLang,
+    setText: setTranscript,
+    onError: setError,
+  })
+
   useEffect(() => {
     if (settings.audioSource) setAudioSource(settings.audioSource)
     if (settings.preferredDeviceId && settings.preferredDeviceId !== "default") {
@@ -134,109 +129,29 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
     }
   }, [])
 
-  const teardownListeners = useCallback(() => {
-    unlistenRef.current.forEach((u) => u())
-    unlistenRef.current = []
-    if (timerRef.current) {
-      clearInterval(timerRef.current)
-      timerRef.current = null
-    }
-  }, [])
-
-  const cleanupRecording = useCallback(() => {
-    teardownListeners()
-    invoke("stop_continuous").catch((e) => logError(String(e)))
-    window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
-    emit("recording-state", { recording: false }).catch((e) => logError(String(e)))
-  }, [teardownListeners])
-
   const startRecording = useCallback(async () => {
     setError(null)
     setTranscript("")
-    setVolatileText("")
-    streamMergeRef.current = newStreamMerge()
     transcriptRef.current = ""
-    setDuration(0)
-    setIsSpeaking(false)
-    setAudioLevel(0)
-
     try {
-      // Batch path (SenseVoice): each finished segment arrives as a transcript-segment.
-      const unTranscript = await listen<{ text: string }>("transcript-segment", (e) => {
-        const t = e.payload.text.trim()
-        if (!t) return
-        setTranscript((prev) => (prev ? prev + "\n" + t : t))
-      })
-      // Streaming path (Parakeet): each source's confirmed is cumulative. In "both"
-      // mode interleave mic/system with Me/Them labels; otherwise plain append.
-      const unStream = await listen<{ source: string; confirmed: string; volatile: string }>("transcript-stream", (e) => {
-        const labeled = audioSource === "both"
-        const src = normalizeSource(e.payload.source)
-        const add = consumeConfirmed(streamMergeRef.current, src, e.payload.confirmed, labeled)
-        if (add) setTranscript((p) => appendStream(p, add))
-        setVolatileText(consumeVolatile(streamMergeRef.current, src, e.payload.volatile, labeled))
-      })
-      const unLevel = await listen<{ rms: number }>("audio-level", (e) => {
-        const rms = e.payload.rms
-        setAudioLevel(rms)
-        setIsSpeaking(rms > 0.012)
-      })
-      const unErr = await listen<{ text: string }>("capture-error", (e) => {
-        setError(`Transcription: ${e.payload.text}`)
-      })
-      unlistenRef.current = [unTranscript, unStream, unLevel, unErr]
-
-      await invoke("start_continuous", { language: settings.speechLang === "auto" ? null : settings.speechLang || null, model: settings.asrModel || null, source: audioSource })
-
-      timerRef.current = setInterval(() => {
-        setDuration((d) => d + 1)
-      }, 1000)
-
+      await start()
       setRecorderState("recording")
-      window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: true } }))
-      emit("recording-state", { recording: true }).catch((e) => logError(String(e)))
-    } catch (err) {
-      teardownListeners()
-      const msg = err instanceof Error ? err.message : typeof err === "string" ? err : "Failed to start recording"
-      setError(msg)
+    } catch {
+      // useRecording already surfaced the error via onError.
     }
-  }, [settings.asrModel, settings.speechLang, audioSource, teardownListeners])
+  }, [start])
 
   const stopRecording = useCallback(async () => {
-    teardownListeners()
-    setIsSpeaking(false)
-    setAudioLevel(0)
-    setVolatileText("")
-    window.dispatchEvent(new CustomEvent("recording-state", { detail: { recording: false } }))
-    emit("recording-state", { recording: false }).catch((e) => logError(String(e)))
-
     setIsTranscribing(true)
     try {
-      await invoke("stop_continuous").catch((e) => logError(String(e)))
-      // Give the backend a moment to flush + transcribe the trailing segment.
-      await new Promise((r) => setTimeout(r, 1200))
-
-      const finalTranscript = transcriptRef.current.trim()
-      if (finalTranscript) {
-        const { streamGenerateNotes, isAIConfigured } = await import("@/lib/ai-service")
-        if (isAIConfigured()) {
-          try {
-            let streamed = ""
-            const gen = streamGenerateNotes(notesRef.current, finalTranscript, selectedTemplate?.sections)
-            for await (const chunk of gen) {
-              streamed += chunk
-              setNotes(streamed)
-            }
-          } catch {
-            // silently fail — AI enhancement is optional
-          }
-        }
-      }
+      // The live transcript is the result — no automatic AI rewrite on stop.
+      // (Enhancement is available as an explicit action instead.)
+      await stop(1200)
     } finally {
       setIsTranscribing(false)
       setRecorderState("reviewing")
     }
-  }, [teardownListeners, selectedTemplate])
+  }, [stop])
 
   useEffect(() => {
     const handler = () => {
@@ -267,9 +182,9 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
 
   useEffect(() => {
     return () => {
-      cleanupRecording()
+      abort()
     }
-  }, [cleanupRecording])
+  }, [abort])
 
   useEffect(() => {
     const dirty = title.trim().length > 0 || notes.trim().length > 0 || transcript.trim().length > 0
@@ -435,11 +350,7 @@ export function MeetingRecorder({ onSave, onCancel, onSettings, settings }: Meet
                   Live Transcript
                 </span>
                 <p className="text-sm leading-relaxed whitespace-pre-wrap transcript-text text-foreground">
-                  {transcript}
-                  {volatileText && (
-                    <span className="text-muted-foreground">{transcript ? " " : ""}{volatileText}</span>
-                  )}
-                  {!transcript && !volatileText && (
+                  {transcript || (
                     <span className="text-muted-foreground">Listening… speak and pause; text appears as you go.</span>
                   )}
                 </p>

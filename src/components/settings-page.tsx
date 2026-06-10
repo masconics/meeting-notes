@@ -59,7 +59,7 @@ import { invoke } from "@tauri-apps/api/core"
 import { testConnection } from "@/lib/ai-service"
 import { exportAllMeetings, exportAllMeetingsMarkdown } from "@/lib/export"
 import type { AppSettings, AISettings } from "@/types"
-import { SPEECH_LANGS, AI_MODELS, ASR_MODELS } from "@/types"
+import { SPEECH_LANGS, AI_MODELS } from "@/types"
 import { TemplateEditor } from "@/components/template-editor"
 import { Waveform } from "@/components/Waveform"
 
@@ -399,28 +399,6 @@ export function SettingsPage({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-
-          <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium">Model</label>
-            <Select
-              value={settings.asrModel || "parakeet"}
-              onValueChange={(v) => update({ asrModel: v as "parakeet" | "sensevoice" })}
-            >
-              <SelectTrigger>
-                <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} data-icon="inline-start" />
-                <SelectValue placeholder="Select model..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {Object.entries(ASR_MODELS).map(([key, name]) => (
-                    <SelectItem key={key} value={key}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium">Language</label>

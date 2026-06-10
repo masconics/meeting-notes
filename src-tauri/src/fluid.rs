@@ -57,19 +57,15 @@ fn binary_present(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-async fn spawn_sidecar(app: &AppHandle, sensevoice: bool, use_v2: bool) -> Result<Sidecar, String> {
+// Single-model setup: every path uses Parakeet v3, so the sidecar is spawned
+// with no model-selection flags.
+async fn spawn_sidecar(app: &AppHandle) -> Result<Sidecar, String> {
     let bin = binary_path(app);
-    log::debug!("spawning sidecar: {} {}{}", bin.display(), if sensevoice { "--sensevoice" } else { "" }, if use_v2 { " --v2" } else { "" });
+    log::debug!("spawning sidecar: {}", bin.display());
     let mut cmd = Command::new(&bin);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    if sensevoice {
-        cmd.arg("--sensevoice");
-    }
-    if use_v2 {
-        cmd.arg("--v2");
-    }
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn {}: {}", bin.display(), e))?;
@@ -87,7 +83,8 @@ async fn spawn_sidecar(app: &AppHandle, sensevoice: bool, use_v2: bool) -> Resul
                 return Err("sidecar exited before READY".into());
             }
             let line = line.trim();
-            if line == "READY" {
+            // See spawn_stream_sidecar: CoreML diagnostics can glue to READY.
+            if line == "READY" || line.ends_with("READY") {
                 return Ok(());
             }
             if let Some(msg) = line.strip_prefix("FATAL\t") {
@@ -134,48 +131,40 @@ async fn request(sc: &mut Sidecar, wav_path: &str, language: &str) -> Result<Str
         .map_err(|e| format!("flush: {}", e))?;
 
     log::debug!("request: waiting for response...");
-    let mut line = String::new();
-    let read_result = tokio::time::timeout(
-        Duration::from_secs(REQUEST_TIMEOUT_SECS),
-        sc.stdout.read_line(&mut line),
-    )
-    .await;
-
-    match read_result {
-        Ok(Ok(n)) => {
+    // CoreML/E5RT can print diagnostics to the sidecar's stdout between protocol
+    // lines — keep reading until an OK/ERR response (or timeout) instead of
+    // failing on the first unexpected line.
+    let read_result = tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), async {
+        loop {
+            let mut line = String::new();
+            let n = sc
+                .stdout
+                .read_line(&mut line)
+                .await
+                .map_err(|e| format!("read resp: {}", e))?;
             if n == 0 {
                 log::debug!("request: sidecar closed (n=0)");
-                return Err("sidecar closed".into());
+                return Err("sidecar closed".to_string());
             }
             let line = line.trim_end_matches(['\r', '\n']);
             log::debug!("request: got response: {:?}", line);
             if let Some(text) = line.strip_prefix("OK\t") {
-                Ok(text.to_string())
-            } else if let Some(msg) = line.strip_prefix("ERR\t") {
-                Err(format!("transcription error: {}", msg))
-            } else {
-                Err(format!("unexpected response: {}", line))
+                return Ok(text.to_string());
             }
+            if let Some(msg) = line.strip_prefix("ERR\t") {
+                return Err(format!("transcription error: {}", msg));
+            }
+            log::debug!("request: skipping non-protocol line");
         }
-        Ok(Err(e)) => {
-            log::error!("request: read error: {e}");
-            Err(format!("read resp: {}", e))
-        }
+    })
+    .await;
+
+    match read_result {
+        Ok(r) => r,
         Err(_) => {
             log::debug!("request: timed out");
             Err("sidecar request timed out".into())
         }
-    }
-}
-
-pub async fn prewarm_fluid(app: &AppHandle, sensevoice: bool, use_v2: bool) {
-    if !binary_present(app) { return; }
-    let mut guard = slot().lock().await;
-    if guard.is_some() { return; }
-    log::debug!("prewarming sidecar (sensevoice={}, v2={})", sensevoice, use_v2);
-    match spawn_sidecar(app, sensevoice, use_v2).await {
-        Ok(s) => { *guard = Some(s); }
-        Err(e) => { log::error!("prewarm failed: {e}"); }
     }
 }
 
@@ -191,7 +180,7 @@ pub async fn setup_fluid(app: AppHandle) -> Result<bool, String> {
     }
     let mut guard = slot().lock().await;
     if guard.is_none() {
-        *guard = Some(spawn_sidecar(&app, false, false).await?);
+        *guard = Some(spawn_sidecar(&app).await?);
     }
     Ok(true)
 }
@@ -323,13 +312,12 @@ pub fn samples_to_le_bytes(samples: &[f32]) -> Vec<u8> {
 /// for READY. Returns the handle (holds stdin) and a reader over its stdout lines.
 pub async fn spawn_stream_sidecar(
     app: &AppHandle,
-    use_v2: bool,
     rate: u32,
     language: &str,
     source: &str,
 ) -> Result<(StreamSidecar, BufReader<tokio::process::ChildStdout>), String> {
     let bin = binary_path(app);
-    log::debug!("spawning stream sidecar: {} --stream --source {} {}", bin.display(), source, if use_v2 { "--v2" } else { "" });
+    log::debug!("spawning stream sidecar: {} --stream --source {}", bin.display(), source);
     let mut cmd = Command::new(&bin);
     cmd.arg("--stream")
         .arg("--source")
@@ -337,9 +325,6 @@ pub async fn spawn_stream_sidecar(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if use_v2 {
-        cmd.arg("--v2");
-    }
     let mut child = cmd.spawn().map_err(|e| format!("spawn {}: {}", bin.display(), e))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let mut stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
@@ -369,7 +354,9 @@ pub async fn spawn_stream_sidecar(
                 return Err("stream sidecar exited before READY".to_string());
             }
             let line = line.trim();
-            if line == "READY" {
+            // CoreML/E5RT sometimes prints diagnostics to stdout without a trailing
+            // newline, gluing itself to our READY marker — accept a suffix match.
+            if line == "READY" || line.ends_with("READY") {
                 return Ok(());
             }
             if let Some(msg) = line.strip_prefix("FATAL\t") {
@@ -394,7 +381,6 @@ pub async fn transcribe_audio_fluid(
     app: AppHandle,
     audio_data: Vec<u8>,
     language: Option<String>,
-    model: Option<String>,
 ) -> Result<String, String> {
     if !binary_present(&app) {
         return Err("ASR sidecar not installed.".into());
@@ -419,16 +405,14 @@ pub async fn transcribe_audio_fluid(
         .await
         .map_err(|e| format!("write wav: {}", e))?;
 
-    let sensevoice = model.as_deref() == Some("sensevoice");
     let lang = language.as_deref().unwrap_or("");
-    let use_v2 = !sensevoice && (lang.is_empty() || lang == "en");
     let path_str = path.to_string_lossy().to_string();
-    log::debug!("transcribe_audio_fluid: wav={}, size={} bytes, lang={}, model={}", path_str, audio_data.len(), if lang.is_empty() { "auto" } else { lang }, if sensevoice { "sensevoice" } else if use_v2 { "parakeet-v2" } else { "parakeet-v3" });
+    log::debug!("transcribe_audio_fluid: wav={}, size={} bytes, lang={}", path_str, audio_data.len(), if lang.is_empty() { "auto" } else { lang });
     let result = {
         let mut guard = slot().lock().await;
         if guard.is_none() {
             log::debug!("no sidecar in slot, spawning...");
-            *guard = Some(spawn_sidecar(&app, sensevoice, use_v2).await?);
+            *guard = Some(spawn_sidecar(&app).await?);
         }
         match request(guard.as_mut().unwrap(), &path_str, lang).await {
             Ok(t) => {
@@ -437,7 +421,7 @@ pub async fn transcribe_audio_fluid(
             }
             Err(e) => {
                 log::error!("sidecar request failed: {e}, respawning...");
-                *guard = Some(spawn_sidecar(&app, sensevoice, use_v2).await?);
+                *guard = Some(spawn_sidecar(&app).await?);
                 log::debug!("sidecar respawned, retrying request...");
                 let r = request(guard.as_mut().unwrap(), &path_str, lang).await;
                 log::debug!("retry result: {:?}", r.as_ref().map(|s| s.len()));

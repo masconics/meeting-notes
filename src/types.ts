@@ -69,26 +69,14 @@ export interface AISettings {
   enabled: boolean
 }
 
-export type AsrEngine = "fluid"
-export type AsrModel = "parakeet" | "sensevoice"
-
+// Transcription is fixed to one on-device engine/model (Parakeet v3), so there
+// is no engine/model setting. Stale keys in stored settings are ignored.
 export interface AppSettings {
   audioSource: "mic" | "system" | "both"
   preferredDeviceId: string
   speechLang: string
   titlePrefix: string
   theme: "light" | "dark" | "system"
-  asrEngine: AsrEngine
-  asrModel: AsrModel
-}
-
-export const ASR_ENGINES: Record<AsrEngine, string> = {
-  fluid: "On-device transcription",
-}
-
-export const ASR_MODELS: Record<AsrModel, string> = {
-  parakeet: "Standard — 25 European languages, best accuracy",
-  sensevoice: "Multilingual — 50+ languages, faster",
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
@@ -103,8 +91,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   speechLang: "auto",
   titlePrefix: "",
   theme: "system",
-  asrEngine: "fluid",
-  asrModel: "parakeet",
 }
 
 export const AI_MODELS: Record<string, string> = {
