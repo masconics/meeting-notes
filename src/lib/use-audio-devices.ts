@@ -15,10 +15,9 @@ export function useAudioDevices() {
   const streamRef = useRef<MediaStream | null>(null)
 
   const enumerate = useCallback(async () => {
-    if (!navigator.mediaDevices?.enumerateDevices) {
-      setDevices([])
-      return
-    }
+    // No enumerateDevices support means no devices; state already starts
+    // empty, so bail without a synchronous setState (effect-safe).
+    if (!navigator.mediaDevices?.enumerateDevices) return
     try {
       const allDevices = await navigator.mediaDevices.enumerateDevices()
       const audioInputs = allDevices
@@ -60,6 +59,9 @@ export function useAudioDevices() {
   }, [selectedDevice, stopStream])
 
   useEffect(() => {
+    // Initial enumeration reads an external system (media devices); setState
+    // only happens after an await inside enumerate, not synchronously.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     enumerate()
     if (navigator.mediaDevices) {
       navigator.mediaDevices.addEventListener("devicechange", enumerate)

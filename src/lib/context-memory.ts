@@ -53,6 +53,7 @@ function stemPorter(word: string): string {
   if (word.endsWith("sses") || word.endsWith("ies")) {
     word = word.slice(0, -2)
   } else if (word.endsWith("ss")) {
+    // Keep "ss" endings as-is (Porter step 1a).
   } else if (word.endsWith("s")) {
     word = word.slice(0, -1)
   }

@@ -1,3 +1,26 @@
+// Reduce markdown to readable plain text: drop code fences and images, keep
+// link labels, strip emphasis/heading/quote markers. Used for plain-text
+// export and the editor's word count so both agree on what counts as prose.
+export function stripMarkdown(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/`[^`]*`/g, " ")
+    .replace(/[#>*_~]+/g, " ")
+    .trim()
+}
+
+// AI responses sometimes arrive wrapped in a single ```markdown code fence.
+// Strip that outer fence (only when it wraps the whole document) so the text
+// stored in notes is plain markdown for both the editor and the read views.
+export function stripMarkdownFence(markdown: string): string {
+  return markdown
+    .trim()
+    .replace(/^```(?:markdown|md)?\s*\n?/i, "")
+    .replace(/\n?```\s*$/i, "")
+}
+
 export function formatDate(dateStr: string): string {
   const date = new Date(dateStr)
   if (isNaN(date.getTime())) return dateStr

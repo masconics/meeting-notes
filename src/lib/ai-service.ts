@@ -290,6 +290,33 @@ ${memoryContext ? `\nRELATED PAST MEETINGS:\n${memoryContext}` : ""}`
   }
 }
 
+/** Suggest chat questions grounded in this meeting's actual content. Returns
+ *  [] on any failure — suggestions are decoration, never worth an error. */
+export async function suggestQuestions(transcript: string, notes: string): Promise<string[]> {
+  if (!`${transcript}${notes}`.trim()) return []
+
+  const prompt = `Based on this meeting's content, suggest 4-6 short questions the user is most likely to ask about THIS specific meeting. Reference the actual topics, people, decisions, numbers, and open threads — no generic questions that could apply to any meeting. Keep each question under 60 characters. Return ONLY a JSON array of strings.
+
+NOTES:
+${notes.slice(0, 4000)}
+
+TRANSCRIPT:
+${transcript.slice(0, 4000)}`
+
+  try {
+    const response = await callDeepSeek([
+      { role: "system", content: "You suggest concise, content-specific questions about a meeting. Respond only with a JSON array of strings." },
+      { role: "user", content: prompt },
+    ])
+    const questions: string[] = JSON.parse(cleanJsonResponse(response))
+    return Array.isArray(questions)
+      ? questions.filter((q) => typeof q === "string" && q.trim()).slice(0, 6)
+      : []
+  } catch {
+    return []
+  }
+}
+
 export async function detectSpeakers(transcript: string): Promise<string[]> {
   if (!transcript.trim()) return []
 

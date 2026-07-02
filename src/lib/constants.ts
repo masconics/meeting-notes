@@ -1,12 +1,3 @@
-export const SUGGESTED_QUESTIONS: string[] = [
-  "What were the key decisions made?",
-  "List all action items with owners",
-  "What was their budget?",
-  "What objections or concerns were raised?",
-  "Summarize the main points in 3 sentences",
-  "What are the next steps?",
-]
-
 export const GLOBAL_SUGGESTED_QUESTIONS: string[] = [
   "What were the key decisions across all meetings?",
   "List all action items that are still open",

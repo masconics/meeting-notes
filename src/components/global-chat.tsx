@@ -42,11 +42,10 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
     }
   }, [open, configured])
 
+  // Closing the panel aborts any in-flight stream; sendMessage's finally
+  // block resets the streaming flag, so no state update is needed here.
   useEffect(() => {
-    if (!open) {
-      abortRef.current?.abort()
-      setStreaming(false)
-    }
+    if (!open) abortRef.current?.abort()
   }, [open])
 
   useEffect(() => {
@@ -187,7 +186,9 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
               <div className="flex flex-col gap-3">
                 {messages.map((msg, i) => (
                   <motion.div
-                    key={msg.timestamp}
+                    // Timestamps can collide (user msg + assistant placeholder
+                    // are created in the same tick), so key by position.
+                    key={i}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.15 }}
@@ -201,9 +202,9 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
                       }`}
                     >
                       {msg.role === "user" ? (
-                        <p className="text-xs whitespace-pre-wrap">{msg.content}</p>
+                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                       ) : (
-                        <div className="text-xs">
+                        <div>
                           {msg.content ? (
                             <MarkdownView markdown={msg.content} />
                           ) : streaming && i === messages.length - 1 ? (
@@ -253,7 +254,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
                 placeholder={configured ? "Ask about all meetings..." : "Configure AI in Settings"}
                 disabled={!configured || streaming || meetings.length === 0}
                 rows={2}
-                className="min-h-0 resize-none text-xs"
+                className="min-h-0 resize-none text-sm"
               />
               <div className="flex items-center shrink-0">
                 {streaming ? (

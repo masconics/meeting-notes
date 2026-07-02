@@ -42,7 +42,7 @@ export function NoteRenderer({ content, className = "", editable = false, onChan
   if (!content?.trim()) {
     return (
       <div className={`${className} text-muted-foreground/40 italic`}>
-        Start writing...
+        {placeholder}
       </div>
     )
   }

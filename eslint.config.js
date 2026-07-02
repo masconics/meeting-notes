@@ -6,7 +6,7 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'src-tauri', 'fluid-sidecar', 'scripts']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -18,6 +18,14 @@ export default defineConfig([
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
+    },
+  },
+  {
+    // shadcn/ui components export variant helpers alongside components by
+    // convention; fast-refresh purity doesn't apply to this vendored code.
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
     },
   },
 ])

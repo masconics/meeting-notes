@@ -223,62 +223,29 @@
   text-autospace: ideograph-alpha ideograph-numeric;
 }
 
-.mdx-content {
+/* ── Note typography ─────────────────────────────────────────────────
+   Single source of truth for how note content looks. Every rule below
+   targets BOTH the read-only renderer (.mdx-content) and the WYSIWYG
+   editor (.pm-editor .ProseMirror) via :is(), so the writing and
+   reading experiences can never drift apart. Editor-only interaction
+   styles (caret, placeholder, AI streaming, task checkboxes, table
+   chrome) live in the "ProseMirror editor" block further down. */
+:is(.mdx-content, .pm-editor .ProseMirror) {
   color: var(--foreground);
   font-size: 0.9375rem;
   line-height: 1.72;
   overflow-wrap: anywhere;
 }
 
-.mdx-editable {
-  min-height: 7rem;
-  cursor: text;
-  outline: none;
-}
+:is(.mdx-content, .pm-editor .ProseMirror) > *:first-child { margin-top: 0; }
+:is(.mdx-content, .pm-editor .ProseMirror) > *:last-child { margin-bottom: 0; }
 
-.mdx-editable:hover {
-  box-shadow: none;
-}
-
-.mdx-editable:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.mdx-placeholder {
-  color: var(--muted-foreground);
-  font-style: italic;
-}
-
-.mdx-editor {
-  width: 100%;
-  min-height: 7rem;
-  resize: vertical;
-  border: 0;
-  outline: none;
-  color: var(--foreground);
-  caret-color: var(--primary);
-  font: inherit;
-  line-height: 1.72;
-  box-shadow:
-    inset 0 0 0 1px var(--ring),
-    0 0 0 3px color-mix(in oklch, var(--ring) 22%, transparent);
-}
-
-.mdx-editor::placeholder {
-  color: var(--muted-foreground);
-  font-style: italic;
-}
-
-.mdx-content > *:first-child { margin-top: 0; }
-.mdx-content > *:last-child { margin-bottom: 0; }
-
-.mdx-content h1,
-.mdx-content h2,
-.mdx-content h3,
-.mdx-content h4,
-.mdx-content h5,
-.mdx-content h6 {
+:is(.mdx-content, .pm-editor .ProseMirror) h1,
+:is(.mdx-content, .pm-editor .ProseMirror) h2,
+:is(.mdx-content, .pm-editor .ProseMirror) h3,
+:is(.mdx-content, .pm-editor .ProseMirror) h4,
+:is(.mdx-content, .pm-editor .ProseMirror) h5,
+:is(.mdx-content, .pm-editor .ProseMirror) h6 {
   color: var(--foreground);
   font-family: var(--font-heading);
   font-weight: 650;
@@ -286,54 +253,58 @@
   line-height: 1.2;
 }
 
-.mdx-content h1 {
+:is(.mdx-content, .pm-editor .ProseMirror) h1 {
   margin: 0 0 1rem;
   font-size: 1.75rem;
   font-weight: 700;
 }
 
-.mdx-content h2 {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  margin: 1.75rem 0 0.75rem;
-  font-size: 1.25rem;
+:is(.mdx-content, .pm-editor .ProseMirror) h2 {
+  margin: 1.85rem 0 0.75rem;
+  font-size: 1.35rem;
+  font-weight: 680;
 }
 
-.mdx-content h2::before {
-  content: "";
-  width: 0.25rem;
-  height: 1.1em;
-  border-radius: 999px;
-  background: var(--primary);
-  opacity: 0.78;
+:is(.mdx-content, .pm-editor .ProseMirror) h3 { margin: 1.4rem 0 0.55rem; font-size: 1.08rem; }
+:is(.mdx-content, .pm-editor .ProseMirror) h4 { margin: 1.2rem 0 0.45rem; font-size: 1rem; }
+:is(.mdx-content, .pm-editor .ProseMirror) h5 {
+  margin: 1.05rem 0 0.4rem;
+  color: color-mix(in oklch, var(--foreground) 82%, var(--muted-foreground));
+  font-size: 0.92rem;
 }
-
-.mdx-content h3 { margin: 1.25rem 0 0.5rem; font-size: 1.05rem; }
-.mdx-content h4 { margin: 1rem 0 0.35rem; font-size: 0.98rem; }
-.mdx-content h5,
-.mdx-content h6 {
-  margin: 0.875rem 0 0.25rem;
-  font-size: 0.78rem;
-  text-transform: uppercase;
+:is(.mdx-content, .pm-editor .ProseMirror) h6 {
+  margin: 0.95rem 0 0.35rem;
   color: var(--muted-foreground);
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
-.mdx-content p {
+:is(.mdx-content, .pm-editor .ProseMirror) :is(h1, h2, h3, h4, h5, h6) > a {
+  color: inherit;
+  text-decoration: none;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) p {
   margin: 0 0 0.8rem;
   color: color-mix(in oklch, var(--foreground) 82%, var(--muted-foreground));
 }
 
-.mdx-content strong {
+:is(.mdx-content, .pm-editor .ProseMirror) strong {
   color: var(--foreground);
   font-weight: 650;
 }
 
-.mdx-content em {
+:is(.mdx-content, .pm-editor .ProseMirror) em {
   color: var(--muted-foreground);
 }
 
-.mdx-content a {
+:is(.mdx-content, .pm-editor .ProseMirror) del {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--muted-foreground) 65%, transparent);
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) a {
   color: var(--primary);
   font-weight: 500;
   text-decoration: underline;
@@ -342,42 +313,46 @@
   transition: text-decoration-color 150ms ease;
 }
 
-.mdx-content a:hover {
+:is(.mdx-content, .pm-editor .ProseMirror) a:hover {
   text-decoration-color: var(--primary);
 }
 
-.mdx-content ul,
-.mdx-content ol {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+/* Plain block flow (no flex) so nested lists and the editor's caret
+   behave; spacing comes from li margins instead of gap. */
+:is(.mdx-content, .pm-editor .ProseMirror) ul,
+:is(.mdx-content, .pm-editor .ProseMirror) ol {
+  list-style: none;
   margin: 0.45rem 0 1rem;
   padding-left: 0;
 }
 
-.mdx-content p + ul,
-.mdx-content p + ol {
+:is(.mdx-content, .pm-editor .ProseMirror) p + ul,
+:is(.mdx-content, .pm-editor .ProseMirror) p + ol {
   margin-top: 0.6rem;
 }
 
-.mdx-content li ul,
-.mdx-content li ol {
+:is(.mdx-content, .pm-editor .ProseMirror) li ul,
+:is(.mdx-content, .pm-editor .ProseMirror) li ol {
   padding-left: 1.35rem;
   margin: 0.25rem 0;
 }
 
-.mdx-content li {
+:is(.mdx-content, .pm-editor .ProseMirror) li {
   position: relative;
-  margin: 0;
+  margin: 0 0 0.35rem;
   padding-left: 1.35rem;
   color: color-mix(in oklch, var(--foreground) 82%, var(--muted-foreground));
 }
 
-.mdx-content li > p {
+:is(.mdx-content, .pm-editor .ProseMirror) li:last-child {
+  margin-bottom: 0;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) li > p {
   margin: 0;
 }
 
-.mdx-content ul > li::before {
+:is(.mdx-content, .pm-editor .ProseMirror) ul > li::before {
   content: "";
   position: absolute;
   left: 0.2rem;
@@ -389,47 +364,39 @@
   opacity: 0.72;
 }
 
-.mdx-content ol {
-  counter-reset: mdx-counter;
-}
-
-.mdx-content ol > li {
-  counter-increment: mdx-counter;
-  padding-left: 1.9rem;
-}
-
-.mdx-content ol > li::before {
-  content: counter(mdx-counter);
-  position: absolute;
-  left: 0;
-  top: 0.22rem;
-  display: inline-flex;
-  width: 1.2rem;
-  height: 1.2rem;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: var(--muted);
-  color: var(--muted-foreground);
-  font-size: 0.7rem;
-  font-weight: 650;
-  line-height: 1;
-}
-
-.mdx-content ul.contains-task-list,
-.mdx-content li.task-list-item {
-  list-style: none;
-}
-
-.mdx-content li.task-list-item {
+:is(.mdx-content, .pm-editor .ProseMirror) ol {
+  list-style: decimal;
   padding-left: 1.65rem;
 }
 
-.mdx-content li.task-list-item::before {
+:is(.mdx-content, .pm-editor .ProseMirror) ol > li {
+  padding-left: 0.25rem;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) ol > li::before {
+  content: none;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) ol > li::marker {
+  color: var(--muted-foreground);
+  font-size: 0.82em;
+  font-weight: 650;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) ul.contains-task-list,
+:is(.mdx-content, .pm-editor .ProseMirror) li.task-list-item {
+  list-style: none;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) li.task-list-item {
+  padding-left: 1.65rem;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) li.task-list-item::before {
   display: none;
 }
 
-.mdx-content input[type="checkbox"] {
+:is(.mdx-content, .pm-editor .ProseMirror) input[type="checkbox"] {
   position: absolute;
   left: 0;
   top: 0.28rem;
@@ -438,7 +405,7 @@
   accent-color: var(--primary);
 }
 
-.mdx-content blockquote {
+:is(.mdx-content, .pm-editor .ProseMirror) blockquote {
   margin: 1rem 0;
   padding: 0.8rem 1rem;
   border-left: 0.25rem solid var(--primary);
@@ -447,11 +414,22 @@
   color: var(--muted-foreground);
 }
 
-.mdx-content blockquote p {
+:is(.mdx-content, .pm-editor .ProseMirror) blockquote p {
   color: inherit;
 }
 
-.mdx-content code {
+:is(.mdx-content, .pm-editor .ProseMirror) blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) blockquote blockquote {
+  margin: 0.65rem 0 0.2rem;
+  border-left-width: 0.15rem;
+  background: transparent;
+  padding: 0.35rem 0.75rem;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) code {
   border-radius: 0.4rem;
   background: var(--muted);
   padding: 0.12rem 0.38rem;
@@ -460,7 +438,8 @@
   font-size: 0.84em;
 }
 
-.mdx-content pre {
+:is(.mdx-content, .pm-editor .ProseMirror) pre {
+  position: relative;
   margin: 1rem 0;
   overflow-x: auto;
   border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
@@ -471,7 +450,25 @@
   box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
 
-.mdx-content pre code {
+:is(.mdx-content, .pm-editor .ProseMirror) pre[data-language] {
+  padding-top: 2.2rem;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) pre[data-language]::before {
+  content: attr(data-language);
+  position: absolute;
+  left: 1rem;
+  top: 0.65rem;
+  color: var(--muted-foreground);
+  font-family: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.65rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) pre code {
   display: block;
   background: transparent;
   padding: 0;
@@ -488,7 +485,7 @@
   border-radius: var(--radius-xl);
 }
 
-.mdx-content table {
+:is(.mdx-content, .pm-editor .ProseMirror) table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -496,12 +493,8 @@
   font-size: 0.875rem;
 }
 
-.mdx-content thead {
-  background: var(--muted);
-}
-
-.mdx-content th,
-.mdx-content td {
+:is(.mdx-content, .pm-editor .ProseMirror) th,
+:is(.mdx-content, .pm-editor .ProseMirror) td {
   min-width: 8rem;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
   padding: 0.625rem 0.75rem;
@@ -509,32 +502,77 @@
   vertical-align: top;
 }
 
-.mdx-content th {
+/* Header styling lives on th (not thead) because the editor's table
+   schema emits a header <tr> without a <thead> wrapper. */
+:is(.mdx-content, .pm-editor .ProseMirror) th {
+  background: var(--muted);
   color: var(--foreground);
   font-weight: 650;
 }
 
-.mdx-content td {
+:is(.mdx-content, .pm-editor .ProseMirror) td {
   color: color-mix(in oklch, var(--foreground) 78%, var(--muted-foreground));
 }
 
-.mdx-content tbody tr:last-child td {
+:is(.mdx-content, .pm-editor .ProseMirror) table tr:last-child td {
   border-bottom: 0;
 }
 
-.mdx-content hr {
+:is(.mdx-content, .pm-editor .ProseMirror) hr {
   height: 1px;
   margin: 1.4rem 0;
   border: 0;
   background: linear-gradient(90deg, transparent, var(--border), transparent);
 }
 
-.mdx-content img {
+:is(.mdx-content, .pm-editor .ProseMirror) img {
+  display: block;
+  width: auto;
   max-width: 100%;
+  max-height: 22rem;
   height: auto;
+  margin: 1.1rem auto;
   border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
   border-radius: var(--radius-2xl);
+  object-fit: contain;
   box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 8%, transparent);
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) sup[data-type="footnote_reference"] {
+  display: inline-flex;
+  min-width: 1.1rem;
+  height: 1.1rem;
+  align-items: center;
+  justify-content: center;
+  margin-inline: 0.12rem;
+  border-radius: 999px;
+  background: var(--muted);
+  padding-inline: 0.3rem;
+  color: var(--foreground);
+  font-size: 0.68rem;
+  font-weight: 650;
+  line-height: 1;
+  vertical-align: 0.38em;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) dt {
+  margin-top: 1rem;
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) dt::before {
+  content: "Footnote ";
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) dd {
+  margin: 0.35rem 0 0 0.2rem;
+  border-left: 0.15rem solid var(--border);
+  padding: 0.15rem 0 0.15rem 0.8rem;
+  color: var(--muted-foreground);
 }
 
 .mdx-brief { font-size: inherit; line-height: inherit; color: inherit; }
@@ -631,66 +669,57 @@
   0%, 100% { opacity: 0.25; transform: scaleY(0.75); }
   50% { opacity: 1; transform: scaleY(1); }
 }
-.pm-editor .ProseMirror h1 { font-size: 1.625rem; font-weight: 700; letter-spacing: -0.025em; margin: 1.5rem 0 0.5rem 0; color: var(--foreground); }
-.pm-editor .ProseMirror h2 { font-size: 1.25rem; font-weight: 650; letter-spacing: -0.015em; margin: 1.25rem 0 0.35rem 0; color: var(--foreground); }
-.pm-editor .ProseMirror h3 { font-size: 1.1rem; font-weight: 600; margin: 1rem 0 0.25rem 0; color: var(--foreground); }
-.pm-editor .ProseMirror p { font-size: 0.9375rem; line-height: 1.7; margin: 0 0 0.375rem 0; color: color-mix(in oklch, var(--foreground) 78%, transparent); }
-.pm-editor .ProseMirror ul,
-.pm-editor .ProseMirror ol {
-  padding: 0;
-  margin: 0.375rem 0 0.75rem 0;
-}
-.pm-editor .ProseMirror ul { list-style: none; }
-.pm-editor .ProseMirror ol { list-style: none; counter-reset: pm-ol; }
+/* All content typography (headings, lists, tables, code, quotes…) comes
+   from the shared "Note typography" block above — do not restyle those
+   elements here or the editor will drift from the read-only views.
+   Below are only the pieces the read view can't have. */
 
-.pm-editor .ProseMirror li {
-  font-size: 0.9375rem;
-  line-height: 1.7;
-  margin-bottom: 0.125rem;
-  color: color-mix(in oklch, var(--foreground) 78%, transparent);
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  padding-left: 0.125rem;
+/* GFM task items: the editor schema emits li[data-item-type="task"] with
+   no <input>, so the checkbox is drawn as a pseudo-element to match the
+   read view's native checkbox. */
+.pm-editor .ProseMirror li[data-item-type="task"] {
+  padding-left: 1.65rem;
 }
-
-.pm-editor .ProseMirror ul > li::before {
+.pm-editor .ProseMirror li[data-item-type="task"]::before {
   content: "";
-  flex-shrink: 0;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
+  position: absolute;
+  left: 0;
+  top: 0.28rem;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 0.3rem;
+  border: 1.5px solid var(--border);
+  background: var(--background);
+  opacity: 1;
+}
+.pm-editor .ProseMirror li[data-item-type="task"][data-checked="true"]::before {
+  content: "✓";
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--primary-foreground);
   background: var(--primary);
-  margin-top: 0.55em;
-  opacity: 0.7;
+  border-color: var(--primary);
 }
 
-.pm-editor .ProseMirror ol > li { counter-increment: pm-ol; }
-.pm-editor .ProseMirror ol > li::before {
-  content: counter(pm-ol) ".";
-  flex-shrink: 0;
-  width: 1.25rem;
-  text-align: right;
-  margin-right: 0.25rem;
-  font-size: 0.8125rem;
+/* Read views wrap tables in .mdx-table-wrapper for the border + scroll;
+   the editor has no wrapper, so the table carries its own chrome. */
+.pm-editor .ProseMirror table {
+  margin: 1rem 0;
+  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+/* Footnote references (GFM) — superscript chip. */
+.pm-editor .ProseMirror sup[data-type="footnote_reference"] {
+  color: var(--primary);
+  font-size: 0.75em;
   font-weight: 600;
-  color: color-mix(in oklch, var(--primary), var(--foreground) 46%);
-  margin-top: 0.05em;
 }
-
-.pm-editor .ProseMirror li p {
-  margin: 0;
-  padding: 0;
-}
-.pm-editor .ProseMirror pre { background: color-mix(in oklch, var(--muted) 50%, transparent); border: 1px solid color-mix(in oklch, var(--border) 60%, transparent); border-radius: 0.625rem; padding: 0.75rem 1rem; margin: 0.5rem 0; overflow-x: auto; font-size: 0.8125rem; line-height: 1.6; }
-.pm-editor .ProseMirror pre code { background: none; padding: 0; font-size: inherit; font-family: "JetBrains Mono", ui-monospace, monospace; }
-.pm-editor .ProseMirror blockquote { border-left: 2px solid color-mix(in oklch, var(--primary) 40%, transparent); padding: 0.25rem 0 0.25rem 1rem; margin: 0.5rem 0; color: color-mix(in oklch, var(--foreground) 55%, transparent); font-style: italic; font-size: 0.9375rem; }
-.pm-editor .ProseMirror code { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.8125rem; background: color-mix(in oklch, var(--muted) 50%, transparent); padding: 0.1rem 0.35rem; border-radius: 0.25rem; }
-
-.pm-editor .ProseMirror strong { font-weight: 600; color: var(--foreground); }
-.pm-editor .ProseMirror em { font-style: italic; }
-.pm-editor .ProseMirror a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
-.pm-editor .ProseMirror hr { border: none; height: 1px; background: color-mix(in oklch, var(--border) 50%, transparent); margin: 1rem 0; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

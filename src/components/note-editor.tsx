@@ -2,7 +2,15 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   AiVoiceIcon,
@@ -14,6 +22,7 @@ import {
   Copy01Icon, FileAddIcon, CodeIcon,
   StopIcon, AlertCircleIcon, RefreshIcon,
   UserAdd02Icon, Add01Icon,
+  MoreHorizontalIcon, SaveIcon,
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
@@ -25,8 +34,7 @@ import { useRecording } from "@/lib/use-recording"
 import { saveTemplate as persistTemplate } from "@/lib/templates"
 import { useChat } from "@/lib/use-chat"
 import { cn } from "@/lib/utils"
-import { formatDate, formatTime, formatTimer } from "@/lib/format"
-import { SUGGESTED_QUESTIONS } from "@/lib/constants"
+import { formatDate, formatTime, formatTimer, stripMarkdown, stripMarkdownFence } from "@/lib/format"
 import { SPEAKER_TAILWIND_COLORS } from "@/lib/constants"
 import type { Meeting, AppSettings, MeetingTemplate, ChatMessage, SpeakerLabel } from "@/types"
 import { findRelatedMeetings } from "@/lib/context-memory"
@@ -114,22 +122,36 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     }
   }, [])
 
-  const notesRef = useRef(notes); notesRef.current = notes
-  const recorderStateRef = useRef(recorderState); recorderStateRef.current = recorderState
+  // Mirrors of fast-changing state for callbacks that must read the latest
+  // value without re-binding (recording pipeline, autosave, window events).
+  // Updated in effects, not during render, per the react-hooks/refs rule.
+  const notesRef = useRef(notes)
+  useEffect(() => { notesRef.current = notes }, [notes])
+  const recorderStateRef = useRef(recorderState)
+  useEffect(() => { recorderStateRef.current = recorderState }, [recorderState])
+  const titleRef = useRef(title)
+  useEffect(() => { titleRef.current = title }, [title])
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const titleRef = useRef(title); titleRef.current = title
-  const enhancedNotesRef = useRef<string>("")
-  const previousNotesRef = useRef<string>("")
+  // Note body from before the last AI enhance/transcription, so the user can
+  // back out. State (not a ref) because it controls the Undo button's render.
+  const [previousNotes, setPreviousNotes] = useState("")
+  // Chat prompts derived from this meeting's actual content. Generated after
+  // an enhancement completes; the chat panel shows nothing suggested before
+  // that, so suggestions always relate to the real transcript.
+  const [suggestedQuestions, setSuggestedQuestions] = useState<string[]>([])
   const chatHistoryRef = useRef<ChatMessage[]>(note?.chatHistory ?? [])
 
   const { devices, selectedDevice, setSelectedDevice, audioSource, setAudioSource } = useAudioDevices()
 
+  // Apply the persisted audio preferences once on mount; after that the user's
+  // in-editor choices win, so settings changes must not re-run this.
   useEffect(() => {
     if (settings.audioSource) setAudioSource(settings.audioSource)
     if (settings.preferredDeviceId && settings.preferredDeviceId !== "default") {
       setSelectedDevice(settings.preferredDeviceId)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const onSilenceLimit = useCallback(() => setRecorderState("idle"), [])
@@ -164,16 +186,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const isDirty = title !== savedSnapshot.title || notes !== savedSnapshot.notes
   const isEmpty = !notes.trim()
 
-  // Word count + reading time for the note body. Strips the heaviest markdown
-  // noise so the count reflects prose, not syntax. ~200 wpm reading speed.
+  // Word count + reading time for the note body. stripMarkdown removes the
+  // heaviest syntax so the count reflects prose. ~200 wpm reading speed.
   const noteStats = useMemo(() => {
-    const plain = notes
-      .replace(/```[\s\S]*?```/g, " ")
-      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
-      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-      .replace(/`[^`]*`/g, " ")
-      .replace(/[#>*_~]+/g, " ")
-      .trim()
+    const plain = stripMarkdown(notes)
     const words = plain ? plain.split(/\s+/).filter(Boolean).length : 0
     return { words, minutes: Math.max(1, Math.round(words / 200)) }
   }, [notes])
@@ -185,8 +201,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     duration: note?.duration ?? 0,
     transcript: rawTranscript || note?.transcript || "",
     notes,
-    chatHistory: chatHistoryRef.current,
-  }), [title, notes, rawTranscript, note?.id, note?.date, note?.duration, note?.transcript])
+    // useChat only reads chatHistory to seed its message state on mount, and
+    // at mount chatHistoryRef still equals the persisted history — so use the
+    // prop directly instead of reading a ref during render.
+    chatHistory: note?.chatHistory ?? [],
+  }), [title, notes, rawTranscript, note?.id, note?.date, note?.duration, note?.transcript, note?.chatHistory])
 
   const chatOnUpdate = useCallback((updated: Meeting) => {
     chatHistoryRef.current = updated.chatHistory ?? []
@@ -205,6 +224,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     retryLast,
     copyMessage,
     lastIsStreaming,
+    resetChat,
   } = useChat(chatMeeting, chatOnUpdate, meetings)
 
   const startRecording = useCallback(async () => {
@@ -266,7 +286,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       const content = notesRef.current.trim()
       if (content) {
         setRawTranscript(content)
-        previousNotesRef.current = notesRef.current
+        setPreviousNotes(notesRef.current)
 
         const { isAIConfigured } = await import("@/lib/ai-service")
         if (isAIConfigured()) {
@@ -289,7 +309,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const handleEnhance = useCallback(async () => {
     const content = notes.trim()
     if (!content) return
-    previousNotesRef.current = notesRef.current
+    setPreviousNotes(notesRef.current)
     setIsEnhancing(true); setError(null)
     try {
       const { streamGenerateNotes, isAIConfigured } = await import("@/lib/ai-service")
@@ -302,21 +322,32 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         streamed += chunk
         setNotes(streamed)
       }
-      enhancedNotesRef.current = streamed
+      // Models sometimes wrap the whole answer in a ```markdown fence; the
+      // read views strip it at render time but the editor shows it literally,
+      // so normalize the stored note once the stream is complete.
+      const cleaned = stripMarkdownFence(streamed)
+      setNotes(cleaned)
       setIsStreaming(false)
+      // Fire-and-forget: derive chat suggestions from the transcript that was
+      // just enhanced. `content` is the pre-enhance text (the raw transcript),
+      // which grounds the questions in what was actually said.
+      import("@/lib/ai-service")
+        .then(({ suggestQuestions }) => suggestQuestions(rawTranscript || content, cleaned))
+        .then(setSuggestedQuestions)
+        .catch(() => { /* suggestions are optional */ })
     } catch (e) {
       setError(e instanceof Error ? e.message : "AI enhancement failed")
     } finally { setIsEnhancing(false); setIsStreaming(false) }
 
     autoDetectSpeakers(content)
-  }, [notes, selectedTemplate, autoDetectSpeakers])
+  }, [notes, rawTranscript, selectedTemplate, autoDetectSpeakers])
 
   const handleUndoEnhance = useCallback(() => {
-    if (!previousNotesRef.current) return
-    setNotes(previousNotesRef.current)
-    notesRef.current = previousNotesRef.current
-    previousNotesRef.current = ""
-  }, [])
+    if (!previousNotes) return
+    setNotes(previousNotes)
+    notesRef.current = previousNotes
+    setPreviousNotes("")
+  }, [previousNotes])
 
   const handleEnhanceTitle = useCallback(async () => {
     const content = notes.trim()
@@ -416,9 +447,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setShowRawTranscript(false)
     setSelectedTemplate(undefined)
     notesRef.current = ""
-    enhancedNotesRef.current = ""
-    previousNotesRef.current = ""
+    setPreviousNotes("")
+    setSuggestedQuestions([])
     chatHistoryRef.current = []
+    // The chat hook keeps its own message state; clear it too so the fresh
+    // note doesn't show the previous note's conversation.
+    resetChat()
     setRecorderState("idle")
     setIsPaused(false)
     setError(null)
@@ -427,7 +461,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setJustSaved(true)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000)
-  }, [note, settings.titlePrefix, onSave, buildMeeting])
+  }, [note, settings.titlePrefix, onSave, buildMeeting, resetChat])
 
   useEffect(() => {
     const handler = () => { if (recorderStateRef.current === "recording") stopRecording(); else if (recorderStateRef.current === "idle") startRecording() }
@@ -493,179 +527,182 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   useEffect(() => () => { flushSaveRef.current() }, [])
 
   return (
-    <main className="flex h-full w-full flex-col bg-background">
+    <main className="flex h-full w-full flex-col bg-muted/35">
       <h1 className="sr-only">{note ? `Edit note: ${note.title}` : "New note"}</h1>
-      <div data-tauri-drag-region className="flex min-h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
-        <Button variant="ghost" size="icon" onClick={onCancel} className="text-muted-foreground hover:text-foreground" aria-label="Back to dashboard">
-          <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
-        </Button>
-        <div className="flex items-center gap-2 pr-1">
-          {isEnhancing && <span className="text-xs text-muted-foreground animate-pulse">Enhancing...</span>}
-          {copied && <span className="text-xs font-medium text-primary">Copied</span>}
-          {justSaved && <span className="text-xs font-medium text-primary">Saved</span>}
-          {isDirty && !justSaved && <span className="size-1.5 rounded-full bg-muted-foreground" title="Unsaved changes" />}
-          <Button variant="ghost" onClick={handleSaveAndNew}>Save & New</Button>
-          <Button variant="ghost" onClick={handleSave} title="Save (⌘S)">Save</Button>
-        </div>
-      </div>
-
-      <div className="flex min-h-0 w-full flex-1 flex-col px-6 sm:px-8 lg:px-12">
-        <div className="shrink-0 pb-7 pt-7">
-          <div className="flex items-center gap-2">
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Untitled"
-              aria-label="Note title"
-              className="h-auto min-w-0 flex-1 border-none bg-transparent px-0 py-0 text-3xl font-bold leading-tight tracking-tight outline-none placeholder:text-muted-foreground/45 focus-visible:ring-0"
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleEnhanceTitle}
-              disabled={isTitling || !notes.trim()}
-              className="text-muted-foreground/30 hover:text-muted-foreground shrink-0"
-              aria-label="AI generate title"
-            >
-              {isTitling ? (
-                <div className="size-3 border border-muted-foreground/40 border-t-transparent rounded-full animate-spin" />
+      <header data-tauri-drag-region className="flex min-h-14 shrink-0 items-center justify-between gap-4 border-b border-border/70 bg-background/90 px-4 backdrop-blur">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button variant="ghost" size="icon" onClick={onCancel} className="text-muted-foreground hover:text-foreground" aria-label="Back to dashboard">
+            <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
+          </Button>
+          <div className="h-5 w-px bg-border" aria-hidden="true" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">{note ? "Meeting note" : "New meeting note"}</p>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
+              {isEnhancing ? (
+                <><span className="size-1.5 rounded-full bg-primary animate-pulse" />Enhancing note</>
+              ) : copied ? (
+                <>Markdown copied</>
+              ) : justSaved ? (
+                <>All changes saved</>
+              ) : isDirty ? (
+                <><span className="size-1.5 rounded-full bg-amber-500" />Unsaved changes</>
               ) : (
-                <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} className="size-4" />
+                <>{note ? "Autosave is on" : "Ready to write"}</>
               )}
-            </Button>
+            </div>
           </div>
         </div>
-
-        <div className="flex items-center gap-3 text-xs text-muted-foreground/50 pb-4">
-          <span className="inline-flex items-center gap-1">
-            <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
-            {formatDate(note?.date ?? new Date().toISOString())}
-          </span>
-          <span className="inline-flex items-center gap-1">
-            <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.5} className="size-3" />
-            {formatTime(note?.date ?? new Date().toISOString())}
-          </span>
-          {noteStats.words > 0 && (
-            <span title={`${noteStats.words.toLocaleString()} words · ~${noteStats.minutes} min read`}>
-              {noteStats.words.toLocaleString()} {noteStats.words === 1 ? "word" : "words"} · {noteStats.minutes} min read
-            </span>
-          )}
-          {recorderState === "recording" && silenceSeconds > 30 && (
-            <span className="inline-flex items-center gap-1 text-amber-500">
-              <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} className="size-3" />
-              Silent {silenceSeconds}s
-            </span>
-          )}
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="ghost" onClick={handleSaveAndNew}>Save & New</Button>
+          <Button onClick={handleSave} title="Save (⌘S)">
+            <HugeiconsIcon icon={SaveIcon} strokeWidth={1.8} data-icon="inline-start" />
+            Save
+          </Button>
         </div>
+      </header>
 
-        <div className="flex items-center gap-2 flex-wrap pb-4">
-          {speakerLabels.map((label, i) => (
-            <span key={i} className={cn("inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border", label.color)}>
-              <span className="size-1.5 rounded-full bg-current opacity-60 shrink-0" />
-              {label.name}
-              <button type="button" onClick={() => handleRemoveSpeaker(i)} className="p-0.5 rounded-full hover:bg-black/10 transition-colors">
-                <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-2.5" />
-              </button>
-            </span>
-          ))}
-          {isAddingSpeaker ? (
-            <div className="flex items-center gap-1">
-              <Input value={newSpeakerName} onChange={(e) => setNewSpeakerName(e.target.value)} placeholder="Name" className="h-7 w-24 text-xs" autoFocus
-                onKeyDown={(e) => { if (e.key === "Enter") handleAddSpeaker(); if (e.key === "Escape") { setIsAddingSpeaker(false); setNewSpeakerName("") } }} />
-              <Button size="icon-sm" variant="ghost" onClick={handleAddSpeaker}><HugeiconsIcon icon={Add01Icon} strokeWidth={2} /></Button>
-              <Button size="icon-sm" variant="ghost" onClick={() => { setIsAddingSpeaker(false); setNewSpeakerName("") }}><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
-            </div>
-          ) : (
-            <Button variant="ghost" size="sm" onClick={() => setIsAddingSpeaker(true)} className="text-muted-foreground hover:text-foreground">
-              <HugeiconsIcon icon={UserAdd02Icon} strokeWidth={1.5} data-icon="inline-start" />Add Speaker
-            </Button>
-          )}
-        </div>
-
-        {relatedMeetings.length > 0 && (
-          <div className="mb-4 shrink-0">
-            <p className="text-[10px] font-medium text-muted-foreground/40 uppercase tracking-wider mb-1.5">Related</p>
-            <div className="flex flex-wrap gap-1.5">
-              {relatedMeetings.map(m => (
-                <button
-                  key={m.id}
-                  type="button"
-                  className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
-                  onClick={() => {
-                    if (note?.id !== m.id) {
-                      window.dispatchEvent(new CustomEvent("navigate-meeting", { detail: { id: m.id } }))
-                    }
-                  }}
+      <div className="relative flex min-h-0 flex-1 gap-3 overflow-hidden p-3">
+        <section className="mx-auto flex min-w-0 max-w-5xl flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
+          <div className="app-scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
+            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-8 pb-16 pt-10 sm:px-12">
+              <div className="flex items-start gap-3">
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="Untitled meeting"
+                  aria-label="Note title"
+                  className="h-auto min-w-0 flex-1 border-none bg-transparent px-0 py-0 text-4xl font-bold leading-tight tracking-tight outline-none placeholder:text-muted-foreground/35 focus-visible:ring-0"
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleEnhanceTitle}
+                  disabled={isTitling || !notes.trim()}
+                  className="mt-1 shrink-0 text-muted-foreground/50 hover:text-foreground"
+                  aria-label="AI generate title"
                 >
-                  {m.title}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {error && (
-          <div className="mb-4 shrink-0 flex items-start justify-between gap-2 bg-destructive/5 rounded-lg px-3 py-2" role="alert">
-            <div className="text-destructive text-sm">{error}</div>
-            <div className="flex items-center gap-1 shrink-0">
-              <Button variant="ghost" size="icon" onClick={() => setError(null)} aria-label="Dismiss error"><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
-            </div>
-          </div>
-        )}
-
-        <div className={cn("flex-1 min-h-0 flex", showAIPanel && "flex-row")}>
-          <div className="flex-1 min-w-0 flex flex-col">
-            <div className="app-scrollbar-hidden flex flex-1 min-h-0 flex-col overflow-y-auto">
-            <div className="border-b border-border/30 mb-6" />
-            {isStreaming && (
-              <div className="flex items-center gap-2 mb-4 text-xs text-primary">
-                <div className="size-2 border border-primary border-t-transparent rounded-full animate-spin" />
-                Enhancing...
+                  {isTitling ? (
+                    <div className="size-3 rounded-full border border-muted-foreground/40 border-t-transparent animate-spin" />
+                  ) : (
+                    <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} />
+                  )}
+                </Button>
               </div>
-            )}
 
-            {rawTranscript && (
-              <div className="mb-4">
-                <button
-                  onClick={() => setShowRawTranscript(!showRawTranscript)}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-border/60 hover:border-primary/30"
-                >
-                  <HugeiconsIcon icon={CodeIcon} strokeWidth={1.5} className="size-3" />
-                  {showRawTranscript ? "Show Enhanced Notes" : "Show Original Transcript"}
-                </button>
-              </div>
-            )}
-
-            <div className={`flex min-h-0 flex-1 flex-col ${viewMode === "source" ? "pb-0" : "pb-20"}`}>
-                {showRawTranscript && rawTranscript ? (
-                  <pre className="flex-1 min-h-0 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground overflow-y-auto" style={{ fontFamily: "inherit" }}>{rawTranscript}</pre>
-                ) : (
-                  <NoteRenderer
-                    content={notes}
-                    editable
-                    onChange={setNotes}
-                    viewMode={viewMode}
-                    toolbar={viewMode === "wysiwyg"}
-                  />
+              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5">
+                  <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
+                  {formatDate(note?.date ?? new Date().toISOString())}
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.5} className="size-3" />
+                  {formatTime(note?.date ?? new Date().toISOString())}
+                </span>
+                {noteStats.words > 0 && (
+                  <span title={`${noteStats.words.toLocaleString()} words · ~${noteStats.minutes} min read`}>
+                    {noteStats.words.toLocaleString()} {noteStats.words === 1 ? "word" : "words"} · {noteStats.minutes} min read
+                  </span>
+                )}
+                {recorderState === "recording" && silenceSeconds > 30 && (
+                  <span className="inline-flex items-center gap-1 text-amber-500">
+                    <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} className="size-3" />
+                    Silent {silenceSeconds}s
+                  </span>
                 )}
               </div>
 
-              {isEmpty && recorderState === "idle" && viewMode !== "source" && (
-                <div className="flex flex-col items-center gap-4 py-20 text-center">
-                  <p className="text-base text-muted-foreground">Record a meeting or start typing your notes</p>
-                  <div className="flex items-center gap-3">
-                    <Button variant="outline" onClick={startRecording}>
-                      <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />Start Recording
-                    </Button>
-                    <Button variant="ghost" onClick={() => setShowTemplatePicker(true)}>
-                      Pick a template
-                    </Button>
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                {speakerLabels.map((label, i) => (
+                  <span key={i} className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium", label.color)}>
+                    <span className="size-1.5 shrink-0 rounded-full bg-current opacity-60" />
+                    {label.name}
+                    <button type="button" onClick={() => handleRemoveSpeaker(i)} className="rounded-full p-0.5 transition-colors hover:bg-foreground/10" aria-label={`Remove ${label.name}`}>
+                      <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-2.5" />
+                    </button>
+                  </span>
+                ))}
+                {isAddingSpeaker ? (
+                  <div className="flex items-center gap-1">
+                    <Input value={newSpeakerName} onChange={(e) => setNewSpeakerName(e.target.value)} placeholder="Speaker name" className="h-7 w-32 text-xs" autoFocus
+                      onKeyDown={(e) => { if (e.key === "Enter") handleAddSpeaker(); if (e.key === "Escape") { setIsAddingSpeaker(false); setNewSpeakerName("") } }} />
+                    <Button size="icon-sm" variant="ghost" onClick={handleAddSpeaker} aria-label="Add speaker"><HugeiconsIcon icon={Add01Icon} strokeWidth={2} /></Button>
+                    <Button size="icon-sm" variant="ghost" onClick={() => { setIsAddingSpeaker(false); setNewSpeakerName("") }} aria-label="Cancel adding speaker"><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
                   </div>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => setIsAddingSpeaker(true)} className="text-muted-foreground hover:text-foreground">
+                    <HugeiconsIcon icon={UserAdd02Icon} strokeWidth={1.5} data-icon="inline-start" />Add speaker
+                  </Button>
+                )}
+              </div>
+
+              {relatedMeetings.length > 0 && (
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-medium text-muted-foreground">Related</span>
+                  {relatedMeetings.map(m => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      className="inline-flex items-center rounded-full border border-border/70 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      onClick={() => {
+                        if (note?.id !== m.id) {
+                          window.dispatchEvent(new CustomEvent("navigate-meeting", { detail: { id: m.id } }))
+                        }
+                      }}
+                    >
+                      {m.title}
+                    </button>
+                  ))}
                 </div>
               )}
+
+              {error && (
+                <div className="mt-5 flex shrink-0 items-start justify-between gap-2 rounded-xl border border-destructive/15 bg-destructive/5 px-3 py-2" role="alert">
+                  <div className="text-sm text-destructive">{error}</div>
+                  <Button variant="ghost" size="icon-sm" onClick={() => setError(null)} aria-label="Dismiss error"><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
+                </div>
+              )}
+
+              <div className="mt-7 flex min-h-[28rem] flex-1 flex-col border-t border-border/70 pt-3">
+                {isStreaming && (
+                  <div className="mb-3 flex items-center gap-2 text-xs text-primary">
+                    <div className="size-2 rounded-full border border-primary border-t-transparent animate-spin" />
+                    Enhancing note…
+                  </div>
+                )}
+
+                <div className={cn("flex min-h-0 flex-1 flex-col", viewMode === "wysiwyg" && "pb-10")}>
+                  {showRawTranscript && rawTranscript ? (
+                    <pre className="min-h-[24rem] flex-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground" style={{ fontFamily: "inherit" }}>{rawTranscript}</pre>
+                  ) : (
+                    <NoteRenderer
+                      content={notes}
+                      editable
+                      onChange={setNotes}
+                      viewMode={viewMode}
+                      toolbar={viewMode === "wysiwyg"}
+                      className="min-h-[24rem]"
+                    />
+                  )}
+                </div>
+
+                {isEmpty && recorderState === "idle" && viewMode !== "source" && (
+                  <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/35 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium">Start with a recording or a template</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">You can also click above and begin typing.</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={startRecording}>
+                        <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />Start recording
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => setShowTemplatePicker(true)}>Choose template</Button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-
+        </section>
           <AnimatePresence initial={false}>
             {showAIPanel && (
               <motion.div
@@ -674,10 +711,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 animate={{ width: chatWidth }}
                 exit={{ width: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
-                className="shrink-0 overflow-hidden border-l border-border/40 flex flex-col relative"
+                className="relative flex shrink-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm max-md:absolute max-md:bottom-3 max-md:right-3 max-md:top-3 max-md:z-20 max-md:shadow-2xl"
               >
                 <div
-                  className="absolute left-0 top-0 bottom-0 w-2 z-10 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 -ml-1"
+                  className="absolute bottom-0 left-0 top-0 z-10 -ml-1 w-2 cursor-col-resize hover:bg-primary/20 active:bg-primary/30"
                   onMouseDown={(e) => {
                     e.preventDefault()
                     resizeRef.current = true
@@ -685,7 +722,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     document.body.style.userSelect = "none"
                   }}
                 />
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border/40 shrink-0">
+                <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-3">
                   <span className="text-sm font-medium flex items-center gap-2">
                     <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-4" />
                     AI Chat
@@ -697,19 +734,25 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 <div className="flex-1 min-h-0 flex flex-col">
                   <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3">
                     {messages.length === 0 && (
-                      <div className="flex flex-col gap-2">
-                        <p className="text-xs text-muted-foreground">Suggested questions</p>
-                        {SUGGESTED_QUESTIONS.map((q) => (
-                          <button
-                            key={q}
-                            className="text-sm text-left px-3 py-2 rounded-2xl border border-dashed hover:bg-muted/50 hover:border-border transition-colors disabled:opacity-50"
-                            onClick={() => sendMessage(q)}
-                            disabled={chatStreaming}
-                          >
-                            {q}
-                          </button>
-                        ))}
-                      </div>
+                      suggestedQuestions.length > 0 ? (
+                        <div className="flex flex-col gap-2">
+                          <p className="text-xs text-muted-foreground">Suggested questions</p>
+                          {suggestedQuestions.map((q) => (
+                            <button
+                              key={q}
+                              className="text-sm text-left px-3 py-2 rounded-2xl border border-dashed hover:bg-muted/50 hover:border-border transition-colors disabled:opacity-50"
+                              onClick={() => sendMessage(q)}
+                              disabled={chatStreaming}
+                            >
+                              {q}
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Ask anything about this note. Enhance the transcript to get suggested questions based on what was discussed.
+                        </p>
+                      )
                     )}
                     {messages.map((msg, i) => {
                       const isLast = i === messages.length - 1
@@ -724,7 +767,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                             </div>
                           ) : (
                             <div className="max-w-[85%] rounded-2xl rounded-bl-md px-3 py-2 bg-muted">
-                              <MarkdownView markdown={msg.content || (isLast && lastIsStreaming ? "" : "")} />
+                              <MarkdownView markdown={msg.content} />
                               {isLast && lastIsStreaming && (
                                 <span className="inline-block w-1.5 h-4 bg-current ml-0.5 animate-pulse align-middle" />
                               )}
@@ -761,7 +804,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       </div>
                     )}
                   </div>
-                  <div className="shrink-0 p-3 border-t border-border flex items-end gap-2">
+                  <div className="flex shrink-0 items-end gap-2 border-t border-border p-3">
                     <Input
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
@@ -790,14 +833,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
-
       </div>
 
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-border/60 bg-card/70 px-3 py-3 backdrop-blur">
+      <footer className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-border/70 bg-background/95 px-4 py-2.5 shadow-[0_-8px_24px_-20px_rgba(0,0,0,0.45)] backdrop-blur">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           {recorderState === "recording" ? (
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-1.5">
               {isPaused ? (
                 <>
                   <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatTimer((note?.duration ?? 0) + duration)}</motion.span>
@@ -822,13 +863,15 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               )}
             </div>
           ) : isTranscribing ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><div className="size-2 border border-primary border-t-transparent rounded-full animate-spin" />Processing {formatTimer((note?.duration ?? 0) + duration)} recording...</span>
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><div className="size-2 rounded-full border border-primary border-t-transparent animate-spin" />Processing {formatTimer((note?.duration ?? 0) + duration)} recording…</span>
           ) : (
             <>
+              <span className="hidden text-xs font-medium text-muted-foreground lg:inline">Capture from</span>
               <div className="app-control-strip">
                 <button
                   className="app-control-item"
                   data-active={audioSource === "mic"}
+                  aria-pressed={audioSource === "mic"}
                   onClick={() => setAudioSource("mic")}
                 >
                   <HugeiconsIcon icon={MicIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />Mic
@@ -836,6 +879,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 <button
                   className="app-control-item"
                   data-active={audioSource === "system"}
+                  aria-pressed={audioSource === "system"}
                   onClick={() => setAudioSource("system")}
                 >
                   <HugeiconsIcon icon={ComputerIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />System
@@ -843,6 +887,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 <button
                   className="app-control-item"
                   data-active={audioSource === "both"}
+                  aria-pressed={audioSource === "both"}
                   onClick={() => setAudioSource("both")}
                 >
                   Both
@@ -854,7 +899,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {devices.map(d => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}
+                    <SelectGroup>
+                      {devices.map(d => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               )}
@@ -862,7 +909,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />Record
               </Button>
               <Button
-                variant="ghost"
+                variant="outline"
                 onClick={() => setShowTemplatePicker(true)}
               >
                 {selectedTemplate ? <><TemplateIcon name={selectedTemplate.icon} className="size-3" />{selectedTemplate.name}</> : "Template"}
@@ -874,37 +921,56 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         <div data-tauri-drag-region className="min-w-4 flex-1 self-stretch" />
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setViewMode(viewMode === "wysiwyg" ? "source" : "wysiwyg")} className="text-muted-foreground hover:text-foreground">
-            <HugeiconsIcon icon={CodeIcon} strokeWidth={1.5} data-icon="inline-start" />{viewMode === "wysiwyg" ? "WYSIWYG" : "Source"}
-          </Button>
-          {notes.trim() && !isEmpty && (
-            <>
-              <Button variant="ghost" size="sm" onClick={handleCopyMarkdown} className="text-muted-foreground hover:text-foreground">
-                <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} data-icon="inline-start" />Copy MD
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handleSaveAsTemplate} className="text-muted-foreground hover:text-foreground">
-                <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} data-icon="inline-start" />Save as Template
-              </Button>
-            </>
-          )}
-          {previousNotesRef.current && (
+          {previousNotes && (
             <Button variant="ghost" size="sm" onClick={handleUndoEnhance} className="text-amber-500 hover:text-amber-600">
-              Undo Enhance
+              Undo enhance
             </Button>
           )}
           {notes.trim() && (
-            <Button variant="ghost" onClick={handleEnhance} disabled={isEnhancing} className="text-muted-foreground hover:text-foreground">
+            <Button variant="outline" onClick={handleEnhance} disabled={isEnhancing}>
               <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} data-icon="inline-start" />Enhance
             </Button>
           )}
-          <Button variant="ghost" onClick={() => { setShowAIPanel(!showAIPanel) }} className={`${showAIPanel ? "text-foreground" : "text-muted-foreground"} hover:text-foreground`}>
-            <HugeiconsIcon icon={AiChat02Icon} strokeWidth={1.5} data-icon="inline-start" />AI
+          <Button variant={showAIPanel ? "secondary" : "outline"} onClick={() => { setShowAIPanel(!showAIPanel) }}>
+            <HugeiconsIcon icon={AiChat02Icon} strokeWidth={1.5} data-icon="inline-start" />AI chat
           </Button>
-          <Button variant="ghost" size="icon" onClick={onSettings} className="text-muted-foreground/50 hover:text-muted-foreground" aria-label="Settings">
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="More note actions">
+                <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={1.8} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-52">
+              <DropdownMenuLabel>Note actions</DropdownMenuLabel>
+              <DropdownMenuGroup>
+                <DropdownMenuItem onSelect={() => setViewMode(viewMode === "wysiwyg" ? "source" : "wysiwyg")}>
+                  <HugeiconsIcon icon={CodeIcon} strokeWidth={1.5} />
+                  {viewMode === "wysiwyg" ? "Edit Markdown source" : "Return to rich text"}
+                </DropdownMenuItem>
+                {rawTranscript && (
+                  <DropdownMenuItem onSelect={() => setShowRawTranscript(!showRawTranscript)}>
+                    <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} />
+                    {showRawTranscript ? "Show enhanced notes" : "Show original transcript"}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem disabled={!notes.trim()} onSelect={handleCopyMarkdown}>
+                  <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
+                  Copy Markdown
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={!notes.trim() || isEmpty} onSelect={handleSaveAsTemplate}>
+                  <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
+                  Save as template
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Button variant="ghost" size="icon" onClick={onSettings} className="text-muted-foreground hover:text-foreground" aria-label="Settings">
             <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} />
           </Button>
         </div>
-      </div>
+      </footer>
 
       <MeetingTemplateSelector selectedId={selectedTemplate?.id} onSelect={tpl => setSelectedTemplate(tpl)} open={showTemplatePicker} onOpenChange={setShowTemplatePicker} />
     </main>

@@ -1,6 +1,7 @@
 import { useMemo } from "react"
 import { marked } from "marked"
 import { ProseMirrorEditor } from "@/components/ProseMirrorEditor"
+import { stripMarkdownFence } from "@/lib/format"
 
 interface MarkdownViewProps {
   markdown?: string | null
@@ -17,12 +18,9 @@ function escapeHtml(value: string): string {
 }
 
 function cleanMarkdown(markdown: string): string {
-  return markdown
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .trim()
-    .replace(/^```(?:markdown|md)?\s*\n?/i, "")
-    .replace(/\n?```\s*$/i, "")
+  return stripMarkdownFence(
+    markdown.replace(/\\n/g, "\n").replace(/\\t/g, "\t")
+  )
 }
 
 function safeUrl(href: string): string {
@@ -67,7 +65,7 @@ function createRenderer() {
   return renderer
 }
 
-export function renderMarkdown(markdown: string): string {
+function renderMarkdown(markdown: string): string {
   try {
     return marked.parse(cleanMarkdown(markdown), { breaks: true, gfm: true, renderer: createRenderer() }) as string
   } catch {
@@ -94,7 +92,7 @@ export function MarkdownView({
         editorLabel={editorLabel}
         placeholder={placeholder}
         toolbar={toolbar}
-        className={`be-editor min-h-0 flex-1 ${className ?? ""}`}
+        className={`min-h-0 flex-1 ${className ?? ""}`}
       />
     )
   }

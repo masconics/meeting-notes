@@ -188,22 +188,27 @@ final class SystemAudioCapturer: @unchecked Sendable {
 /// now live in this one process (the Rust side no longer runs cpal or ships audio
 /// over stdin).
 ///
-/// Voice processing is enabled on the input node, which gives hardware/Apple AEC:
-/// when system audio plays through the speakers and bleeds back into the mic, the
-/// echo canceller removes it using the system render as reference. That stops the
-/// "both" mode from transcribing the same speech twice (once from the tap, once
-/// from the mic). If voice processing can't be enabled we fall back to a plain
-/// capture so the mic still works.
+/// Voice processing (Apple AEC) is opt-in per session: when system audio plays
+/// through the speakers and bleeds back into the mic, the echo canceller removes
+/// it using the system render as reference. That stops the "both" mode from
+/// transcribing the same speech twice (once from the tap, once from the mic).
+/// The cost is that macOS treats a voice-processed session like a call and ducks
+/// all other audio — even at the minimum ducking level there can be a slight dip.
+/// So mic-only sessions (no system tap, no double-transcription risk) skip AEC
+/// entirely and leave playback completely untouched. If voice processing can't
+/// be enabled we fall back to a plain capture so the mic still works.
 final class MicAudioCapturer: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let converter = AudioConverter() // defaults to 16kHz mono
+    private let enableAEC: Bool
     let samples: AsyncStream<[Float]>
     private let continuation: AsyncStream<[Float]>.Continuation
     private var bufferCount = 0
     private var blockPeak: Float = 0
     var onLevel: ((Float) -> Void)?
 
-    init() {
+    init(enableAEC: Bool) {
+        self.enableAEC = enableAEC
         var cont: AsyncStream<[Float]>.Continuation!
         self.samples = AsyncStream(bufferingPolicy: .unbounded) { cont = $0 }
         self.continuation = cont
@@ -216,11 +221,22 @@ final class MicAudioCapturer: @unchecked Sendable {
         // node's stream format, so read the tap format *after* enabling it. Treated
         // as best-effort — a failure here just means no AEC, not a dead mic.
         var aec = false
-        do {
-            try input.setVoiceProcessingEnabled(true)
-            aec = true
-        } catch {
-            sysLog("mic: voice processing (AEC) unavailable: \(error.localizedDescription)")
+        if enableAEC {
+            do {
+                try input.setVoiceProcessingEnabled(true)
+                aec = true
+                // Voice processing ducks all other system audio by default, so
+                // starting a recording made any playing audio fade and warp. Keep
+                // the echo canceller but turn the ducking down to its minimum,
+                // with the dynamic "advanced" ducking (the pumping/slowed-down
+                // effect) disabled.
+                input.voiceProcessingOtherAudioDuckingConfiguration = .init(
+                    enableAdvancedDucking: false,
+                    duckingLevel: .min
+                )
+            } catch {
+                sysLog("mic: voice processing (AEC) unavailable: \(error.localizedDescription)")
+            }
         }
 
         let tapFormat = input.outputFormat(forBus: 0)
@@ -671,11 +687,13 @@ struct FluidAsr {
                 }
             }
 
-            // Mic audio capture (AVAudioEngine + AEC) feeds the mic stream, mirroring
-            // the system tap above.
+            // Mic audio capture feeds the mic stream, mirroring the system tap
+            // above. AEC only when the system tap is also live ("both"), where it
+            // prevents speaker bleed from being transcribed twice; mic-only skips
+            // it so other playing audio is never ducked.
             var stopMic: (() -> Void)?
             if let m = micMgr {
-                let cap = MicAudioCapturer()
+                let cap = MicAudioCapturer(enableAEC: systemActive)
                 cap.onLevel = { peak in
                     emit("{\"source\":\"mic\",\"rms\":\(peak)}")
                 }
@@ -791,9 +809,10 @@ struct FluidAsr {
             }
         }
 
+        // AEC only alongside the system tap ("both") — see runStream.
         var stopMic: (() -> Void)?
         if let m = micMgr {
-            let cap = MicAudioCapturer()
+            let cap = MicAudioCapturer(enableAEC: systemActive)
             cap.onLevel = { peak in
                 emit("{\"source\":\"mic\",\"rms\":\(peak)}")
             }
