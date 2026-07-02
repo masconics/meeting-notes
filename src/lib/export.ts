@@ -162,7 +162,8 @@ export async function copyAllAsJson(): Promise<void> {
 export async function saveToFile(meeting: Meeting, format: "md" | "txt"): Promise<boolean> {
   const content = format === "md" ? toMarkdown(meeting) : toPlainText(meeting)
   const ext = format === "md" ? ".md" : ".txt"
-  const filename = `${meeting.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").slice(0, 50)}${ext}`
+  const safeTitle = meeting.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, "").slice(0, 50).trim() || "meeting"
+  const filename = `${safeTitle}${ext}`
 
   try {
     const { save } = await import("@tauri-apps/plugin-dialog")

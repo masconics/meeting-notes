@@ -38,11 +38,13 @@ computer: ASR runs locally on the Apple Neural Engine.
 
 - `src/` — React frontend. `src/lib/use-recording.ts` owns the recording
   pipeline; `note-editor.tsx` / `meeting-recorder.tsx` own their state machines.
-- `src-tauri/` — Rust shell. `capture.rs` runs cpal mic capture and relays the
-  sidecar's JSON updates as Tauri events; `fluid.rs` spawns/manages the sidecar.
-- `fluid-sidecar/` — Swift package producing the `fluidasr` binary: streaming
-  ASR (sliding window, 3s chunks), system-audio process tap, batch WAV
-  transcription.
+- `src-tauri/` — Rust shell. `capture.rs` spawns the streaming sidecar and
+  relays its JSON updates as Tauri events (no audio crosses the boundary);
+  `fluid.rs` spawns/manages the sidecar.
+- `fluid-sidecar/` — Swift package producing the `fluidasr` binary. Captures all
+  audio in-process — mic via AVAudioEngine (Apple voice-processing AEC) and
+  system output via a Core Audio process tap — and runs streaming ASR (sliding
+  window, 3s chunks) plus batch WAV transcription. v3 uses the int4 encoder.
 
 ## Development
 
@@ -55,19 +57,19 @@ yarn tauri:dev
 
 ### Rebuilding the sidecar
 
-After changing `fluid-sidecar/` sources:
+`yarn sidecar` builds the Swift sidecar and deploys it to both paths the app runs
+from (`src-tauri/binaries/fluidasr-<triple>` for the bundled app, and
+`src-tauri/target/debug/fluidasr` for `tauri dev`):
 
 ```bash
-cd fluid-sidecar
-swift build -c release
-cp .build/arm64-apple-macosx/release/fluidasr ../src-tauri/binaries/fluidasr-aarch64-apple-darwin
+yarn sidecar
 ```
 
-Tauri bundles the target-triple-named binary (`externalBin`) and copies it next
-to the app executable at build time. During an active `tauri dev` session you
-can also copy it straight to `src-tauri/target/debug/fluidasr` — the sidecar is
-spawned fresh on every recording start, so a stop/start picks it up without an
-app restart.
+This runs automatically before `tauri dev` and `tauri build` (wired into
+`beforeDevCommand` / `beforeBuildCommand`), so a change in `fluid-sidecar/` can't
+leave a stale binary behind. `swift build` is incremental (~1s when unchanged).
+The sidecar is spawned fresh on every recording start, so during `tauri dev` a
+stop/start picks up a rebuild without an app restart.
 
 ASR models download from HuggingFace on first run and are cached locally.
 

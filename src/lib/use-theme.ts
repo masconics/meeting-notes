@@ -19,10 +19,9 @@ export function useTheme(theme: AppSettings["theme"]) {
   }, [theme, apply])
 
   useEffect(() => {
+    if (theme !== "system") return
     const mq = window.matchMedia("(prefers-color-scheme: dark)")
-    const handler = () => {
-      if (theme === "system") apply("system")
-    }
+    const handler = () => apply("system")
     mq.addEventListener("change", handler)
     return () => mq.removeEventListener("change", handler)
   }, [theme, apply])

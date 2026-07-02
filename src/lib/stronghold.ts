@@ -2,20 +2,50 @@ import { Stronghold, Client, Store } from "@tauri-apps/plugin-stronghold"
 import { appDataDir } from "@tauri-apps/api/path"
 
 const CLIENT_NAME = "meeting-notes"
-const VAULT_PASSWORD = "meeting-notes-vault-key-2026"
+const VAULT_PASSWORD_KEY = "vault-password"
 
 let store: Store | null = null
 let stronghold: Stronghold | null = null
 let initPromise: Promise<void> | null = null
 
+function generatePassword(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+  let result = ""
+  const buf = new Uint32Array(64)
+  crypto.getRandomValues(buf)
+  for (let i = 0; i < 64; i++) {
+    result += chars[buf[i] % chars.length]
+  }
+  return result
+}
+
+async function getOrCreatePassword(): Promise<string> {
+  try {
+    const { load } = await import("@tauri-apps/plugin-store")
+    const secureStore = await load("meeting-notes-secure.json", { defaults: {}, autoSave: true })
+    const existing = await secureStore.get<string>(VAULT_PASSWORD_KEY)
+    if (existing) return existing
+    const newPass = generatePassword()
+    await secureStore.set(VAULT_PASSWORD_KEY, newPass)
+    return newPass
+  } catch {
+    return generatePassword()
+  }
+}
+
 export async function initDatabase(): Promise<void> {
   if (store) return
+  if (initPromise) {
+    try { await initPromise } catch { initPromise = null }
+    if (store) return
+  }
   if (initPromise) return initPromise
 
   initPromise = (async () => {
     const vaultPath = `${await appDataDir()}vault.hold`
+    const password = await getOrCreatePassword()
 
-    stronghold = await Stronghold.load(vaultPath, VAULT_PASSWORD)
+    stronghold = await Stronghold.load(vaultPath, password)
 
     let client: Client
     try {

@@ -33,6 +33,7 @@ import {
   RefreshIcon,
 } from "@hugeicons/core-free-icons"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import {
   loadAISettings,
   loadApiKey,
@@ -58,6 +59,17 @@ interface OnboardingWizardProps {
 }
 
 type FluidStatus = "checking" | "ready" | "loaded" | "not-installed" | "error"
+type ModelProgress = {
+  fraction: number
+  percent: number
+  phase: string
+  model?: string
+}
+
+type ModelSetupError = {
+  model: string
+  error: string
+}
 
 export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
   const [step, setStep] = useState(0)
@@ -67,6 +79,9 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
   const [micStream, setMicStream] = useState<MediaStream | null>(null)
 
   const [fluidStatus, setFluidStatus] = useState<FluidStatus>("checking")
+  const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null)
+  const [settingUpModel, setSettingUpModel] = useState(false)
+  const [setupError, setSetupError] = useState<string | null>(null)
   const fluidIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const [aiSettings, setAiSettings] = useState<AISettings>(() => loadAISettings())
@@ -85,7 +100,7 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
 
   useEffect(() => {
     if (step === 2) {
-      setFluidStatus("checking")
+      queueMicrotask(() => setFluidStatus("checking"))
       checkFluid()
       fluidIntervalRef.current = setInterval(() => {
         invoke<boolean>("fluid_loaded")
@@ -106,7 +121,35 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
         fluidIntervalRef.current = null
       }
     }
-  }, [step])
+  }, [step, open])
+
+  useEffect(() => {
+    if (!open) return
+    let unlisten: (() => void) | undefined
+    listen<ModelProgress>("fluid-model-progress", (event) => {
+      setModelProgress(event.payload)
+      setSetupError(null)
+      if (event.payload.percent >= 100) {
+        setFluidStatus("loaded")
+        setSettingUpModel(false)
+      }
+    }).then((fn) => {
+      unlisten = fn
+    }).catch(() => {})
+    let unlistenError: (() => void) | undefined
+    listen<ModelSetupError>("fluid-model-error", (event) => {
+      setSetupError(event.payload.error)
+      setFluidStatus("error")
+      setSettingUpModel(false)
+    }).then((fn) => {
+      unlistenError = fn
+    }).catch(() => {})
+
+    return () => {
+      unlisten?.()
+      unlistenError?.()
+    }
+  }, [open])
 
   async function checkFluid() {
     try {
@@ -117,6 +160,40 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
       else setFluidStatus("not-installed")
     } catch {
       setFluidStatus("error")
+    }
+  }
+
+  async function setupModel() {
+    setSettingUpModel(true)
+    setSetupError(null)
+    setModelProgress((prev) => prev ?? { fraction: 0, percent: 0, phase: "starting" })
+    try {
+      await invoke<boolean>("setup_fluid")
+      const loaded = await invoke<boolean>("fluid_loaded")
+      setFluidStatus(loaded ? "loaded" : "ready")
+      if (loaded) {
+        setModelProgress({ fraction: 1, percent: 100, phase: "ready" })
+        setSettingUpModel(false)
+      }
+    } catch (e) {
+      setFluidStatus("error")
+      setSetupError(e instanceof Error ? e.message : String(e))
+      setSettingUpModel(false)
+    }
+  }
+
+  function formatProgressPhase(phase: string): string {
+    switch (phase) {
+      case "listing":
+        return "Preparing download"
+      case "downloading":
+        return "Downloading model"
+      case "compiling":
+        return "Compiling Core ML model"
+      case "ready":
+        return "Ready"
+      default:
+        return "Starting"
     }
   }
 
@@ -366,9 +443,31 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                       </Badge>
                     )}
                     {fluidStatus === "ready" && (
-                      <Badge variant="outline" className="gap-1">
-                        Setting up...
-                      </Badge>
+                      <div className="w-full flex flex-col gap-3">
+                        <Badge variant="outline" className="gap-1 mx-auto">
+                          {modelProgress
+                            ? `${formatProgressPhase(modelProgress.phase)} · ${modelProgress.percent}%`
+                            : "Download required"}
+                        </Badge>
+                        <div className="h-2 overflow-hidden rounded-full bg-muted ring-1 ring-border/70">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all duration-300"
+                            style={{ width: `${modelProgress?.percent ?? 0}%` }}
+                          />
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={setupModel}
+                          disabled={settingUpModel}
+                          className="mx-auto gap-1"
+                        >
+                          {settingUpModel ? "Setting up..." : "Download model"}
+                        </Button>
+                        {setupError && (
+                          <p className="text-xs text-destructive">{setupError}</p>
+                        )}
+                      </div>
                     )}
                     {fluidStatus === "not-installed" && (
                       <div className="w-full flex flex-col gap-3">
@@ -401,10 +500,13 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                           <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-3.5" />
                           Status unavailable
                         </Badge>
+                        {setupError && (
+                          <p className="text-xs text-destructive">{setupError}</p>
+                        )}
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={checkFluid}
+                          onClick={setupError ? setupModel : checkFluid}
                           className="gap-1"
                         >
                           <HugeiconsIcon icon={RefreshIcon} strokeWidth={2} className="size-3.5" />

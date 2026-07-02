@@ -199,8 +199,11 @@ export function TemplateEditor() {
     }))
   }
 
+  const [saving, setSaving] = useState(false)
+
   function handleSave() {
-    if (!form.name.trim()) return
+    if (!form.name.trim() || saving) return
+    setSaving(true)
     const id = editing ? editing.id : crypto.randomUUID()
     saveTemplate({
       ...form,
@@ -210,6 +213,7 @@ export function TemplateEditor() {
     })
     closeDialog()
     refresh()
+    setSaving(false)
   }
 
   function handleDelete() {

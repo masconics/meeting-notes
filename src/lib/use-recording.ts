@@ -7,12 +7,14 @@ import { invoke } from "@tauri-apps/api/core"
 import { listen, emit } from "@tauri-apps/api/event"
 import { error as logError } from "@tauri-apps/plugin-log"
 import { newStreamMerge, consumeConfirmed, consumeVolatile, normalizeSource, appendStream } from "@/lib/stream-transcript"
+import type { TranscriptionModel } from "@/types"
 
 export type AudioSourceKind = "mic" | "system" | "both"
 
 export interface UseRecordingOptions {
   audioSource: AudioSourceKind
   speechLang: string
+  transcriptionModel: TranscriptionModel
   /** Receives the live transcript text. Compatible with a React state setter. */
   setText: React.Dispatch<React.SetStateAction<string>>
   /** Returns the current editor text (a ref read, not state). Used to detect
@@ -34,6 +36,7 @@ function broadcast(recording: boolean) {
 export function useRecording({
   audioSource,
   speechLang,
+  transcriptionModel,
   setText,
   getText,
   onError,
@@ -180,8 +183,9 @@ export function useRecording({
       invoke("start_continuous", {
         language: speechLang === "auto" ? null : speechLang || null,
         source: audioSource,
+        model: transcriptionModel,
       }),
-    [speechLang, audioSource],
+    [speechLang, audioSource, transcriptionModel],
   )
 
   const start = useCallback(async () => {

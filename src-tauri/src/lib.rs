@@ -1,10 +1,10 @@
 mod capture;
 mod fluid;
 
+use log;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Listener, Manager};
-use log;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -17,7 +17,7 @@ pub fn run() {
         }))
         .plugin(
             tauri_plugin_stronghold::Builder::new(|password| {
-                use sha2::{Sha256, Digest};
+                use sha2::{Digest, Sha256};
                 let salt = b"notes-app-vault-salt-v2";
                 let password_bytes: &[u8] = password.as_ref();
                 let mut input = Vec::from(password_bytes);
@@ -57,26 +57,30 @@ pub fn run() {
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
                 .tooltip("Notes")
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "show" => {
-                            if let Some(window) = app.get_webview_window("main") {
-                                let _ = window.show();
-                                let _ = window.set_focus();
+                .on_menu_event(|app, event| match event.id().as_ref() {
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            if let Err(e) = window.show() {
+                                log::warn!("failed to show window: {e}");
                             }
+                            let _ = window.set_focus();
                         }
-                        "quit" => {
-                            app.exit(0);
-                        }
-                        _ => {}
                     }
+                    "quit" => {
+                        crate::capture::stop_continuous_sync();
+                        if let Ok(mut guard) = crate::fluid::slot().try_lock() {
+                            *guard = None;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        app.exit(0);
+                    }
+                    _ => {}
                 })
                 .build(app)?;
 
             let handle = app.handle().clone();
             app.listen("recording-state", move |event| {
-                let payload: Option<serde_json::Value> =
-                    serde_json::from_str(event.payload()).ok();
+                let payload: Option<serde_json::Value> = serde_json::from_str(event.payload()).ok();
                 let recording = payload
                     .and_then(|v| v.get("recording").and_then(|r| r.as_bool()))
                     .unwrap_or(false);
@@ -91,19 +95,20 @@ pub fn run() {
                 }
             });
 
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = fluid::setup_fluid(handle).await;
-            });
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             fluid::transcribe_audio_fluid,
             fluid::check_fluid_ready,
             fluid::setup_fluid,
+            fluid::setup_fluid_model,
+            fluid::download_model,
+            fluid::cancel_model_setup,
+            fluid::model_setup_status,
             fluid::unload_fluid,
             fluid::fluid_loaded,
+            fluid::model_storage_info,
+            fluid::delete_model,
             fluid::check_screen_permission,
             fluid::request_screen_permission,
             capture::start_continuous,

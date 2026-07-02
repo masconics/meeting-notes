@@ -584,6 +584,15 @@
 .pm-editor .ProseMirror:focus-visible {
   outline: none;
 }
+/* Empty-document placeholder. The `float`/`height: 0` keeps the caret on the
+   first line and the hint non-interactive. */
+.pm-editor .ProseMirror .pm-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: color-mix(in oklch, var(--foreground) 32%, transparent);
+  pointer-events: none;
+  height: 0;
+  float: left;
+}
 .pm-editor .ProseMirror.pm-ai-writing {
   caret-color: var(--primary);
 }
@@ -682,3 +691,11 @@
 .pm-editor .ProseMirror em { font-style: italic; }
 .pm-editor .ProseMirror a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
 .pm-editor .ProseMirror hr { border: none; height: 1px; background: color-mix(in oklch, var(--border) 50%, transparent); margin: 1rem 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

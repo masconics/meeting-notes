@@ -24,6 +24,7 @@ import { Input } from "@/components/ui/input"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
+import { formatTime, formatDuration, relativeDate } from "@/lib/format"
 import {
   PlayListAddIcon,
   Cancel01Icon,
@@ -44,43 +45,9 @@ import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback, useRef, useEffect } from "react"
 import { TemplateIcon } from "@/components/template-icon"
 import { getTemplateById } from "@/lib/templates"
+import { loadSavedSearches, saveSavedSearches, saveSortPreference } from "@/lib/storage"
 import { MarkdownView } from "@/components/markdown-view"
 import { GlobalChat } from "@/components/global-chat"
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  })
-}
-
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
-function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  if (m === 0) return `${s}s`
-  return `${m}m ${s}s`
-}
-
-function relativeDate(iso: string): string {
-  const now = new Date()
-  const date = new Date(iso)
-  const diffMs = now.getTime() - date.getTime()
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
-
-  if (diffDays === 0) return "Today"
-  if (diffDays === 1) return "Yesterday"
-  if (diffDays < 7) return `${diffDays}d ago`
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`
-  return formatDate(iso)
-}
 
 function stripMarkdown(md: string): string {
   return md
@@ -96,6 +63,15 @@ function stripMarkdown(md: string): string {
     .replace(/\n{2,}/g, " · ")
     .replace(/\n/g, " ")
     .trim()
+}
+
+const stripMarkdownCache = new Map<string, string>()
+function memoStripMarkdown(md: string): string {
+  if (stripMarkdownCache.has(md)) return stripMarkdownCache.get(md)!
+  const result = stripMarkdown(md)
+  if (stripMarkdownCache.size > 500) stripMarkdownCache.clear()
+  stripMarkdownCache.set(md, result)
+  return result
 }
 
 type SortKey = "date-desc" | "date-asc" | "duration-desc" | "duration-asc" | "title-asc" | "title-desc"
@@ -196,12 +172,7 @@ export function MeetingDashboard({
   const [briefResult, setBriefResult] = useState<string | null>(null)
   const [briefMeetingId, setBriefMeetingId] = useState<string | null>(null)
   const [showGlobalChat, setShowGlobalChat] = useState(false)
-  const [savedSearches, setSavedSearches] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem("meeting-notes-saved-searches")
-      return raw ? JSON.parse(raw) : []
-    } catch { return [] }
-  })
+  const [savedSearches, setSavedSearches] = useState<string[]>(() => loadSavedSearches())
 
   const sorted = useMemo(() => sortMeetings(meetings, sortKey), [meetings, sortKey])
 
@@ -235,7 +206,7 @@ export function MeetingDashboard({
 
   const handleSortChange = useCallback((key: SortKey) => {
     setSortKey(key)
-    localStorage.setItem("meeting-notes-sort-pref", key)
+    saveSortPreference(key)
   }, [])
 
   const handleSaveSearch = useCallback(() => {
@@ -244,7 +215,7 @@ export function MeetingDashboard({
     setSavedSearches((prev) => {
       if (prev.includes(trimmed)) return prev
       const next = [trimmed, ...prev]
-      localStorage.setItem("meeting-notes-saved-searches", JSON.stringify(next))
+      saveSavedSearches(next)
       return next
     })
   }, [searchQuery])
@@ -252,7 +223,7 @@ export function MeetingDashboard({
   const handleRemoveSavedSearch = useCallback((q: string) => {
     setSavedSearches((prev) => {
       const next = prev.filter((s) => s !== q)
-      localStorage.setItem("meeting-notes-saved-searches", JSON.stringify(next))
+      saveSavedSearches(next)
       return next
     })
   }, [])
@@ -272,10 +243,11 @@ export function MeetingDashboard({
   }, [filteredMeetings, selected.size])
 
   const handleBatchDelete = useCallback(() => {
-    selected.forEach((id) => onDeleteMeeting(id))
+    const ids = new Set(selected)
     setSelected(new Set())
     setBatchDeleteConfirm(false)
     setBatchMode(false)
+    ids.forEach((id) => onDeleteMeeting(id))
   }, [selected, onDeleteMeeting])
 
   const handleTitleEditStart = useCallback((meeting: Meeting) => {
@@ -490,10 +462,10 @@ export function MeetingDashboard({
           {filteredMeetings.map((meeting) => {
             const template = meeting.templateId ? getTemplateById(meeting.templateId) : undefined
             const previewText = meeting.structuredNotes?.[0]?.content
-              ? stripMarkdown(meeting.structuredNotes[0].content)
+              ? memoStripMarkdown(meeting.structuredNotes[0].content)
               : meeting.notes
-                ? stripMarkdown(meeting.notes)
-                : meeting.transcript.replace(/\n/g, " ")
+                ? memoStripMarkdown(meeting.notes)
+                : meeting.transcript?.replace(/\n/g, " ") || ""
             const isEditing = editingTitleId === meeting.id
             const isSelected = selected.has(meeting.id)
             return (
@@ -507,8 +479,10 @@ export function MeetingDashboard({
             >
             <Card
               size="sm"
+              role="button"
+              tabIndex={0}
               className={cn(
-                "transition-colors hover:bg-muted/50",
+                "transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring outline-none",
                 !batchMode && "cursor-pointer",
                 isSelected && "ring-2 ring-primary/50"
               )}
@@ -517,6 +491,16 @@ export function MeetingDashboard({
                   toggleSelect(meeting.id)
                 } else {
                   onViewMeeting(meeting)
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault()
+                  if (batchMode) {
+                    toggleSelect(meeting.id)
+                  } else {
+                    onViewMeeting(meeting)
+                  }
                 }
               }}
             >

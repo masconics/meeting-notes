@@ -8,6 +8,8 @@ interface MarkdownViewProps {
   editable?: boolean
   onChange?: (markdown: string) => void
   editorLabel?: string
+  placeholder?: string
+  toolbar?: boolean
 }
 
 function escapeHtml(value: string): string {
@@ -25,7 +27,8 @@ function cleanMarkdown(markdown: string): string {
 
 function safeUrl(href: string): string {
   const trimmed = href.trim()
-  if (/^(https?:|mailto:|tel:|#|\/)/i.test(trimmed)) return trimmed
+  const SAFE = /^(https?:\/\/|mailto:|tel:|#|\/[^/])/i
+  if (SAFE.test(trimmed) && !/^(javascript|data|vbscript):/i.test(trimmed)) return trimmed
   return "#"
 }
 
@@ -78,6 +81,8 @@ export function MarkdownView({
   editable = false,
   onChange,
   editorLabel = "Edit markdown",
+  placeholder,
+  toolbar = false,
 }: MarkdownViewProps) {
   const html = useMemo(() => (markdown ? renderMarkdown(markdown) : ""), [markdown])
 
@@ -87,6 +92,8 @@ export function MarkdownView({
         value={markdown ?? ""}
         onChange={onChange}
         editorLabel={editorLabel}
+        placeholder={placeholder}
+        toolbar={toolbar}
         className={`be-editor min-h-0 flex-1 ${className ?? ""}`}
       />
     )

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useEffect } from "react"
 import { invoke } from "@tauri-apps/api/core"
 
 type WhisperState = "idle" | "recording" | "transcribing" | "done"
@@ -56,6 +56,11 @@ export function useWhisper() {
   const [engine, setEngine] = useState<EngineStatus>({ status: "checking" })
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    return () => { mountedRef.current = false }
+  }, [])
 
   const checkEngine = useCallback(async () => {
     setEngine({ status: "checking" })
@@ -102,7 +107,7 @@ export function useWhisper() {
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop())
         if (chunksRef.current.length === 0) {
-          setState("idle")
+          if (mountedRef.current) setState("idle")
           return
         }
         await transcribe()
@@ -143,9 +148,11 @@ export function useWhisper() {
       const text: string = await invoke(TRANSCRIBE, {
         audioData: wavBytes,
       })
+      if (!mountedRef.current) return
       setResult(text)
       setState("done")
     } catch (err) {
+      if (!mountedRef.current) return
       setError(
         err instanceof Error
           ? err.message

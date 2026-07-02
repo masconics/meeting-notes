@@ -42,7 +42,6 @@ export function NoteEnhancer({ meeting, onUpdate }: NoteEnhancerProps) {
       structuredNotes: enhanced,
       enhancedNotes: sectionsContent,
     })
-    setEnhanced(null)
   }, [enhanced, meeting, onUpdate])
 
   const isEnhanced = !!meeting.structuredNotes?.length

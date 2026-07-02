@@ -4,9 +4,9 @@
 // new text, and — in dual ("both") mode — prefixes a speaker label whenever the
 // active speaker changes.
 
-export type StreamSource = "mic" | "system"
+type StreamSource = "mic" | "system"
 
-export interface StreamMerge {
+interface StreamMerge {
   confirmed: Record<StreamSource, string>
   volatile: Record<StreamSource, string>
   lastSource: StreamSource | null
@@ -16,7 +16,7 @@ export function newStreamMerge(): StreamMerge {
   return { confirmed: { mic: "", system: "" }, volatile: { mic: "", system: "" }, lastSource: null }
 }
 
-export function labelFor(source: StreamSource): string {
+function labelFor(source: StreamSource): string {
   return source === "mic" ? "Me" : "Them"
 }
 

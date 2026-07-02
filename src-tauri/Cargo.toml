@@ -23,7 +23,6 @@ tauri-plugin-single-instance = "2"
 tauri-plugin-stronghold = "2"
 tauri-plugin-window-state = "2"
 tempfile = "3"
-cpal = "0.15"
 sha2 = "0.10"
 
 [features]

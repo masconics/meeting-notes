@@ -56,18 +56,39 @@ import {
   saveSettings,
 } from "@/lib/storage"
 import { invoke } from "@tauri-apps/api/core"
+import { listen } from "@tauri-apps/api/event"
 import { testConnection } from "@/lib/ai-service"
 import { exportAllMeetings, exportAllMeetingsMarkdown } from "@/lib/export"
 import type { AppSettings, AISettings } from "@/types"
-import { SPEECH_LANGS, AI_MODELS } from "@/types"
+import { SPEECH_LANGS, AI_MODELS, TRANSCRIPTION_MODELS } from "@/types"
 import { TemplateEditor } from "@/components/template-editor"
 import { Waveform } from "@/components/Waveform"
+import { cn } from "@/lib/utils"
 
 interface SettingsPageProps {
   onBack: () => void
   onClearData: () => void
   theme: AppSettings["theme"]
   onThemeChange: (theme: AppSettings["theme"]) => void
+}
+
+type ModelProgress = {
+  fraction: number
+  percent: number
+  phase: string
+  model: AppSettings["transcriptionModel"]
+}
+
+type ModelSetupStatus = {
+  running: boolean
+  model: AppSettings["transcriptionModel"] | null
+  progress: ModelProgress | null
+  error: string | null
+}
+
+type ModelSetupError = {
+  model: AppSettings["transcriptionModel"]
+  error: string
 }
 
 export function SettingsPage({
@@ -81,9 +102,22 @@ export function SettingsPage({
   const [meetingCount, setMeetingCount] = useState(0)
   const { devices, enumerate } = useAudioDevices()
   const [showClearConfirm, setShowClearConfirm] = useState(false)
-  const mic = useMicrophonePermission()
+  const {
+    permission: micPermission,
+    check: checkMicPermission,
+    request: requestMicPermission,
+    openSystemSettings: openMicSystemSettings,
+  } = useMicrophonePermission()
   const [fluidReady, setFluidReady] = useState<boolean | null>(null)
   const [fluidLoaded, setFluidLoaded] = useState(false)
+  const [modelStorage, setModelStorage] = useState<{ present: boolean; bytes: number } | null>(null)
+  const [modelProgress, setModelProgress] = useState<ModelProgress | null>(null)
+  const [settingUpModel, setSettingUpModel] = useState(false)
+  const [downloadingModel, setDownloadingModel] = useState<AppSettings["transcriptionModel"] | null>(null)
+  const [modelOperation, setModelOperation] = useState<"download" | "load" | null>(null)
+  const [setupError, setSetupError] = useState<string | null>(null)
+  const [deletingModel, setDeletingModel] = useState(false)
+  const [cancellingModel, setCancellingModel] = useState(false)
   const [testingConnection, setTestingConnection] = useState(false)
   const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
   const [apiKeyError, setApiKeyError] = useState<string | null>(null)
@@ -93,36 +127,290 @@ export function SettingsPage({
   const micTestStreamRef = useRef<MediaStream | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
   const micTestFrameRef = useRef<number>(0)
+  const downloadingModelRef = useRef<AppSettings["transcriptionModel"] | null>(null)
+  const selectedModelRef = useRef<AppSettings["transcriptionModel"]>(settings.transcriptionModel)
 
   useEffect(() => {
-    setMeetingCount(loadMeetings().length)
-    mic.check()
-    checkFluid()
+    downloadingModelRef.current = downloadingModel
+  }, [downloadingModel])
+
+  useEffect(() => {
+    selectedModelRef.current = settings.transcriptionModel
+  }, [settings.transcriptionModel])
+
+  const setReadyProgress = useCallback((model: AppSettings["transcriptionModel"]) => {
+    setModelProgress((prev) => {
+      if (prev?.model === model && prev.phase === "ready" && prev.percent === 100) return prev
+      return { fraction: 1, percent: 100, phase: "ready", model }
+    })
+  }, [])
+
+  const setProgressSnapshot = useCallback((progress: ModelProgress) => {
+    setModelProgress((prev) => {
+      if (
+        prev?.model === progress.model &&
+        prev.phase === progress.phase &&
+        prev.percent === progress.percent
+      ) return prev
+      return progress
+    })
+  }, [])
+
+  const inferOperation = useCallback((progress: ModelProgress | null): "download" | "load" => {
+    return progress?.phase === "loading" ? "load" : "download"
+  }, [])
+
+  const refreshModelStorage = useCallback(async () => {
+    try {
+      setModelStorage(await invoke<{ present: boolean; bytes: number }>("model_storage_info", {
+        model: settings.transcriptionModel,
+      }))
+    } catch {
+      setModelStorage(null)
+    }
+  }, [settings.transcriptionModel])
+
+  const checkFluid = useCallback(async () => {
+    try {
+      setFluidReady(await invoke<boolean>("check_fluid_ready"))
+      const loaded = await invoke<boolean>("fluid_loaded", { model: settings.transcriptionModel })
+      setFluidLoaded(loaded)
+      if (loaded) {
+        setSettingUpModel(false)
+        setDownloadingModel(null)
+        setModelOperation(null)
+        setReadyProgress(settings.transcriptionModel)
+      } else {
+        const status = await invoke<ModelSetupStatus>("model_setup_status", {
+          model: settings.transcriptionModel,
+        })
+        if (status.running && status.model === settings.transcriptionModel) {
+          setSettingUpModel(true)
+          setDownloadingModel(status.model)
+          setModelOperation(inferOperation(status.progress))
+          if (status.progress) setProgressSnapshot(status.progress)
+        } else if (status.error) {
+          setSetupError(status.error)
+        }
+      }
+    } catch {
+      setFluidReady(null)
+    }
+    await refreshModelStorage()
+  }, [inferOperation, refreshModelStorage, setProgressSnapshot, setReadyProgress, settings.transcriptionModel])
+
+  useEffect(() => {
+    queueMicrotask(() => setMeetingCount(loadMeetings().length))
+    checkMicPermission()
+    queueMicrotask(() => {
+      void checkFluid()
+    })
     loadApiKey().then((key) => {
       if (key) setAiSettings((prev) => ({ ...prev, apiKey: key }))
     })
     const id = setInterval(async () => {
       try {
-        setFluidLoaded(await invoke<boolean>("fluid_loaded"))
+        const loaded = await invoke<boolean>("fluid_loaded", { model: settings.transcriptionModel })
+        setFluidLoaded((prev) => prev === loaded ? prev : loaded)
+        if (loaded) {
+          setSettingUpModel((prev) => prev ? false : prev)
+          setDownloadingModel((prev) => prev === null ? prev : null)
+          setModelOperation((prev) => prev === null ? prev : null)
+          setReadyProgress(settings.transcriptionModel)
+        } else {
+          const status = await invoke<ModelSetupStatus>("model_setup_status", {
+            model: settings.transcriptionModel,
+          })
+          if (status.running && status.model === settings.transcriptionModel) {
+            setSettingUpModel((prev) => prev ? prev : true)
+            setDownloadingModel((prev) => prev === status.model ? prev : status.model)
+            setModelOperation((prev) => prev ?? inferOperation(status.progress))
+            if (status.progress) setProgressSnapshot(status.progress)
+          }
+        }
       } catch {
         setFluidLoaded(false)
       }
     }, 1000)
+    let unlisten: (() => void) | undefined
+    listen<ModelProgress>("fluid-model-progress", (event) => {
+      const progress = event.payload
+      const activeModel = downloadingModelRef.current ?? selectedModelRef.current
+      if (progress.model !== activeModel) return
+      setModelProgress((prev) => {
+        const previousPercent = prev?.model === progress.model ? prev.percent : 0
+        const percent = progress.phase === "ready"
+          ? 100
+          : Math.max(previousPercent, progress.percent)
+        return {
+          ...progress,
+          percent,
+          fraction: percent / 100,
+        }
+      })
+      setSetupError(null)
+      if (progress.phase === "downloaded") {
+        setSettingUpModel(false)
+        setDownloadingModel(null)
+        setModelOperation(null)
+        void refreshModelStorage()
+      }
+    }).then((fn) => {
+      unlisten = fn
+    }).catch(() => {})
+    let unlistenError: (() => void) | undefined
+    listen<ModelSetupError>("fluid-model-error", (event) => {
+      const payload = event.payload
+      const activeModel = downloadingModelRef.current ?? selectedModelRef.current
+      if (payload.model !== activeModel) return
+      setSetupError(payload.error)
+      setSettingUpModel(false)
+      setDownloadingModel(null)
+      setModelOperation(null)
+    }).then((fn) => {
+      unlistenError = fn
+    }).catch(() => {})
     return () => {
       clearInterval(id)
+      unlisten?.()
+      unlistenError?.()
       if (micTestFrameRef.current) cancelAnimationFrame(micTestFrameRef.current)
       if (micTestStreamRef.current) micTestStreamRef.current.getTracks().forEach((t) => t.stop())
       if (audioContextRef.current) audioContextRef.current.close()
     }
-  }, [])
+  }, [checkFluid, checkMicPermission, inferOperation, refreshModelStorage, setProgressSnapshot, setReadyProgress, settings.transcriptionModel])
 
-  async function checkFluid() {
+  async function setupModel() {
+    const model = settings.transcriptionModel
+    setSettingUpModel(true)
+    setDownloadingModel(model)
+    setModelOperation("load")
+    setSetupError(null)
+    setModelProgress({ fraction: 0, percent: 0, phase: "loading", model })
     try {
-      setFluidReady(await invoke<boolean>("check_fluid_ready"))
-      setFluidLoaded(await invoke<boolean>("fluid_loaded"))
-    } catch {
-      setFluidReady(null)
+      await invoke<boolean>("setup_fluid_model", { model })
+      setFluidReady(true)
+      const loaded = await invoke<boolean>("fluid_loaded", { model })
+      setFluidLoaded(loaded)
+      if (loaded) {
+        setModelProgress({ fraction: 1, percent: 100, phase: "ready", model })
+        setSettingUpModel(false)
+        setDownloadingModel(null)
+        setModelOperation(null)
+      }
+      await refreshModelStorage()
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : String(e))
+      setSettingUpModel(false)
+      setDownloadingModel(null)
+      setModelOperation(null)
     }
+  }
+
+  async function downloadModel() {
+    const model = settings.transcriptionModel
+    setSettingUpModel(true)
+    setDownloadingModel(model)
+    setModelOperation("download")
+    setSetupError(null)
+    setModelProgress({ fraction: 0, percent: 0, phase: "starting", model })
+    try {
+      await invoke<boolean>("download_model", { model })
+      setFluidReady(true)
+      await refreshModelStorage()
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : String(e))
+      setSettingUpModel(false)
+      setDownloadingModel(null)
+      setModelOperation(null)
+    }
+  }
+
+  async function cancelModelSetup() {
+    const model = downloadingModel ?? settings.transcriptionModel
+    setCancellingModel(true)
+    try {
+      await invoke<boolean>("cancel_model_setup", { model })
+      setSettingUpModel(false)
+      setDownloadingModel(null)
+      setModelOperation(null)
+      setModelProgress(null)
+      setSetupError(null)
+      await refreshModelStorage()
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCancellingModel(false)
+    }
+  }
+
+  async function unloadModelFromMemory() {
+    try {
+      await invoke<void>("unload_fluid")
+      setFluidLoaded(false)
+      setModelProgress(null)
+      setSetupError(null)
+    } catch (e) {
+      setSetupError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function deleteModel() {
+    if (!window.confirm(
+      "Delete the downloaded transcription model? It will stay removed until you download it again or start transcription.",
+    )) return
+    setDeletingModel(true)
+    try {
+      setModelStorage(await invoke<{ present: boolean; bytes: number }>("delete_model", {
+        model: settings.transcriptionModel,
+      }))
+      setFluidLoaded(false)
+      setSettingUpModel(false)
+      setDownloadingModel(null)
+      setModelOperation(null)
+      setModelProgress(null)
+      setSetupError(null)
+    } catch (e) {
+      window.alert(`Couldn't delete the model: ${e}`)
+    } finally {
+      setDeletingModel(false)
+    }
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2)} GB`
+    if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`
+    if (bytes >= 1e3) return `${Math.round(bytes / 1e3)} KB`
+    return `${bytes} B`
+  }
+
+  function formatProgressPhase(phase: string): string {
+    switch (phase) {
+      case "listing":
+        return "Preparing download"
+      case "downloading":
+        return "Downloading model"
+      case "compiling":
+        return "Compiling Core ML model"
+      case "loading":
+        return "Loading model"
+      case "downloaded":
+        return "Downloaded"
+      case "ready":
+        return "Ready"
+      default:
+        return "Starting"
+    }
+  }
+
+  function selectTranscriptionModel(model: AppSettings["transcriptionModel"]) {
+    update({ transcriptionModel: model })
+    setFluidLoaded(false)
+    setDownloadingModel(null)
+    setModelOperation(null)
+    setModelProgress(null)
+    setSetupError(null)
+    setModelStorage(null)
   }
 
   const startMicTest = useCallback(async () => {
@@ -226,6 +514,13 @@ export function SettingsPage({
     setShowClearConfirm(false)
   }, [onClearData])
 
+  const selectedModel = TRANSCRIPTION_MODELS[settings.transcriptionModel]
+  const activeDownloadModel = downloadingModel ?? modelProgress?.model ?? settings.transcriptionModel
+  const activeDownloadModelInfo = TRANSCRIPTION_MODELS[activeDownloadModel]
+  const showingDownloadProgress = settingUpModel || Boolean(modelProgress && modelProgress.phase !== "ready")
+  const shouldShowDownloadCard = fluidReady && !fluidLoaded && !modelStorage?.present
+  const activeOperationLabel = modelOperation === "load" ? "Loading" : "Downloading"
+
   return (
     <div className="app-page app-page-narrow">
       <div className="app-page-header">
@@ -240,7 +535,7 @@ export function SettingsPage({
         </div>
       </div>
 
-      {mic.permission === "denied" && (
+      {micPermission === "denied" && (
         <Card size="sm" className="border-destructive/30">
           <CardContent className="flex items-start gap-4 pt-4">
             <div className="bg-destructive/10 inline-flex size-10 shrink-0 items-center justify-center rounded-2xl">
@@ -255,11 +550,11 @@ export function SettingsPage({
                 </p>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={mic.request}>
+                <Button variant="outline" size="sm" onClick={requestMicPermission}>
                   <HugeiconsIcon icon={ShieldIcon} strokeWidth={2} data-icon="inline-start" />
                   Request Access
                 </Button>
-                <Button variant="default" size="sm" onClick={mic.openSystemSettings}>
+                <Button variant="default" size="sm" onClick={openMicSystemSettings}>
                   <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} data-icon="inline-start" />
                   Open System Settings
                 </Button>
@@ -387,7 +682,7 @@ export function SettingsPage({
             {fluidLoaded ? (
               <Badge variant="default" className="ml-auto">Ready</Badge>
             ) : fluidReady ? (
-              <Badge variant="outline" className="ml-auto">Setting up&hellip;</Badge>
+              <Badge variant="outline" className="ml-auto">Needs model</Badge>
             ) : fluidReady === false ? (
               <Badge variant="destructive" className="ml-auto">Not installed</Badge>
             ) : (
@@ -399,6 +694,37 @@ export function SettingsPage({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <label className="text-xs font-medium">Model</label>
+            <div className="grid gap-3 md:grid-cols-2">
+              {Object.entries(TRANSCRIPTION_MODELS).map(([id, model]) => {
+                const selected = settings.transcriptionModel === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => selectTranscriptionModel(id as AppSettings["transcriptionModel"])}
+                    disabled={settingUpModel}
+                    className={cn(
+                      "flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-70",
+                      selected
+                        ? "border-primary bg-primary/5"
+                        : "border-border bg-background hover:bg-muted/50"
+                    )}
+                    aria-pressed={selected}
+                  >
+                    <div className="min-w-0 flex flex-col gap-1">
+                      <span className="truncate text-sm font-medium">{model.name}</span>
+                      <span className="line-clamp-2 text-xs text-muted-foreground">{model.bestFor}</span>
+                    </div>
+                    <Badge variant={selected ? "default" : "outline"} className="shrink-0">
+                      {selected ? "Selected" : model.size}
+                    </Badge>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium">Language</label>
@@ -421,6 +747,124 @@ export function SettingsPage({
               </SelectContent>
             </Select>
           </div>
+
+          {modelStorage?.present && (
+            <div className="flex flex-col gap-3 rounded-2xl bg-muted p-4 ring-1 ring-border/70">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm font-medium">{selectedModel.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {fluidLoaded ? "Loaded in memory" : "Downloaded on disk"} · {formatBytes(modelStorage.bytes)}
+                  </span>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {fluidLoaded ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={unloadModelFromMemory}
+                    >
+                      Unload from memory
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={setupModel}
+                      disabled={settingUpModel}
+                    >
+                      {modelOperation === "load" ? "Loading…" : "Load into memory"}
+                    </Button>
+                  )}
+                  {modelOperation === "load" && settingUpModel && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={cancelModelSetup}
+                      disabled={cancellingModel}
+                    >
+                      {cancellingModel ? "Canceling…" : "Cancel"}
+                    </Button>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={deleteModel}
+                    disabled={deletingModel || settingUpModel}
+                  >
+                    <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} data-icon="inline-start" />
+                    {deletingModel ? "Deleting…" : "Delete model"}
+                  </Button>
+                </div>
+              </div>
+              {modelOperation === "load" && showingDownloadProgress && (
+                <div className="h-2 overflow-hidden rounded-full bg-background ring-1 ring-border/70">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${modelProgress?.percent ?? 0}%` }}
+                  />
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Keep the download on disk for faster startup later. Loading puts the model in memory; unloading frees memory without deleting the downloaded files.
+              </p>
+              {setupError && (
+                <p className="text-xs text-destructive">{setupError}</p>
+              )}
+            </div>
+          )}
+
+          {shouldShowDownloadCard && (
+            <div className="flex flex-col gap-3 rounded-2xl bg-muted p-4 ring-1 ring-border/70">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col gap-0.5">
+                  <span className="truncate text-sm font-medium">
+                    {showingDownloadProgress
+                      ? `${activeOperationLabel} ${activeDownloadModelInfo.name}`
+                      : `Download ${selectedModel.name}`}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {modelProgress
+                      ? `${formatProgressPhase(modelProgress.phase)} · ${modelProgress.percent}%`
+                      : "Downloads the model to disk and keeps it for future use"}
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={downloadModel}
+                  disabled={settingUpModel}
+                >
+                  <HugeiconsIcon icon={Download01Icon} strokeWidth={2} data-icon="inline-start" />
+                  {modelOperation === "download" ? "Downloading…" : "Download model"}
+                </Button>
+                {modelOperation === "download" && settingUpModel && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={cancelModelSetup}
+                    disabled={cancellingModel}
+                  >
+                    {cancellingModel ? "Canceling…" : "Cancel"}
+                  </Button>
+                )}
+              </div>
+              {modelOperation === "download" && showingDownloadProgress && (
+                <div className="h-2 overflow-hidden rounded-full bg-background ring-1 ring-border/70">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${modelProgress?.percent ?? 0}%` }}
+                  />
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Downloading does not keep the model loaded in memory. After it finishes, you can load it when you need local transcription or leave it stored on disk.
+              </p>
+              {setupError && (
+                <p className="text-xs text-destructive">{setupError}</p>
+              )}
+            </div>
+          )}
 
           {!fluidReady && fluidReady !== null && (
             <div className="rounded-2xl bg-muted p-4 text-sm ring-1 ring-border/70">

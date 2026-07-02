@@ -26,13 +26,21 @@ export async function hydrateFromVault(): Promise<void> {
 }
 
 async function persist(key: string, value: string): Promise<void> {
-  await initDatabase()
-  await dbSet(key, value)
+  try {
+    await initDatabase()
+    await dbSet(key, value)
+  } catch (e) {
+    console.error(`[storage] persist failed for ${key}:`, e)
+  }
 }
 
 async function persistRemove(key: string): Promise<void> {
-  await initDatabase()
-  await dbRemove(key)
+  try {
+    await initDatabase()
+    await dbRemove(key)
+  } catch (e) {
+    console.error(`[storage] persistRemove failed for ${key}:`, e)
+  }
 }
 
 import type { Meeting, AppSettings, AISettings, MeetingTemplate, ChatMessage, MemoryEntry } from "@/types"
@@ -113,12 +121,8 @@ async function getSecureStore() {
 }
 
 export async function saveApiKey(apiKey: string): Promise<void> {
-  try {
-    const store = await getSecureStore()
-    await store.set(SECURE_API_KEY_KEY, apiKey)
-  } catch {
-    localStorage.setItem(SECURE_API_KEY_KEY, apiKey)
-  }
+  const store = await getSecureStore()
+  await store.set(SECURE_API_KEY_KEY, apiKey)
 }
 
 export async function loadApiKey(): Promise<string> {
@@ -127,7 +131,7 @@ export async function loadApiKey(): Promise<string> {
     const value = await store.get<string>(SECURE_API_KEY_KEY)
     return value ?? ""
   } catch {
-    return localStorage.getItem(SECURE_API_KEY_KEY) ?? ""
+    return ""
   }
 }
 
@@ -150,7 +154,7 @@ export function saveChatHistory(meetingId: string, messages: ChatMessage[]): voi
   updateMeeting(meetingId, { chatHistory: messages })
 }
 
-export type SortKey = "date-desc" | "date-asc" | "duration-desc" | "duration-asc" | "title-asc" | "title-desc"
+type SortKey = "date-desc" | "date-asc" | "duration-desc" | "duration-asc" | "title-asc" | "title-desc"
 
 export function loadSortPreference(): SortKey {
   try {
@@ -190,7 +194,7 @@ export function loadMemory(): MemoryEntry[] {
   }
 }
 
-export function saveMemory(entries: MemoryEntry[]): void {
+function saveMemory(entries: MemoryEntry[]): void {
   const raw = JSON.stringify(entries)
   localStorage.setItem(MEMORY_KEY, raw)
   persist(MEMORY_KEY, raw)

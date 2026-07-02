@@ -14,17 +14,9 @@ import {
 import { motion, AnimatePresence } from "framer-motion"
 import { streamGlobalChat } from "@/lib/ai-service"
 import { isAIConfigured } from "@/lib/ai-service"
+import { GLOBAL_SUGGESTED_QUESTIONS } from "@/lib/constants"
 import { MarkdownView } from "@/components/markdown-view"
 import type { Meeting, ChatMessage } from "@/types"
-
-const SUGGESTED_QUESTIONS = [
-  "What were the key decisions across all meetings?",
-  "List all action items that are still open",
-  "What budget or pricing topics came up?",
-  "Summarize all meetings from the last week",
-  "What objections or risks were raised across meetings?",
-  "Who are the key people I've met with?",
-]
 
 interface GlobalChatProps {
   meetings: Meeting[]
@@ -179,7 +171,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
                   Ask anything about your meetings.
                 </p>
                 <div className="flex flex-wrap gap-1.5 justify-center">
-                  {SUGGESTED_QUESTIONS.map((q) => (
+                  {GLOBAL_SUGGESTED_QUESTIONS.map((q) => (
                     <button
                       key={q}
                       type="button"
@@ -195,7 +187,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
               <div className="flex flex-col gap-3">
                 {messages.map((msg, i) => (
                   <motion.div
-                    key={i}
+                    key={msg.timestamp}
                     initial={{ opacity: 0, y: 6 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ duration: 0.15 }}

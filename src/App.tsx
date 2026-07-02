@@ -5,6 +5,7 @@ import { NoteEditor } from "@/components/note-editor"
 import { SettingsPage } from "@/components/settings-page"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { OnboardingWizard } from "@/components/onboarding-wizard"
+import { ErrorBoundary } from "@/components/error-boundary"
 import { isOnboardingComplete } from "@/lib/onboarding"
 import {
   loadMeetings,
@@ -225,6 +226,7 @@ export function App() {
 
   return (
     <div className="h-screen overflow-hidden bg-muted/30">
+      <ErrorBoundary>
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
           <motion.div key="dashboard" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
@@ -285,6 +287,7 @@ export function App() {
           onComplete={handleOnboardingComplete}
         />
       )}
+      </ErrorBoundary>
     </div>
   )
 }

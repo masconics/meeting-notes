@@ -4,6 +4,7 @@ import type { Meeting, ChatMessage } from "@/types"
 
 export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void, allMeetings?: Meeting[]) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => meeting.chatHistory || [])
+  const messagesRef = useRef(messages)
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -16,6 +17,10 @@ export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void, 
   useEffect(() => {
     allMeetingsRef.current = allMeetings
   }, [allMeetings])
+
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
 
   const persistHistory = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs)
@@ -30,7 +35,7 @@ export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void, 
       content: text.trim(),
       timestamp: new Date().toISOString(),
     }
-    const base = [...messages, userMsg]
+    const base = [...messagesRef.current, userMsg]
     persistHistory(base)
     setInput("")
     setError(null)
@@ -75,18 +80,19 @@ export function useChat(meeting: Meeting, onUpdate: (meeting: Meeting) => void, 
       abortRef.current = null
       setStreaming(false)
     }
-  }, [messages, streaming, meeting, persistHistory])
+  }, [streaming, meeting, persistHistory])
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort()
   }, [])
 
   const retryLast = useCallback(() => {
-    const lastUser = [...messages].reverse().find((m) => m.role === "user")
+    const current = messagesRef.current
+    const lastUser = [...current].reverse().find((m) => m.role === "user")
     if (!lastUser) return
-    setMessages(messages.filter((m) => m !== lastUser))
+    setMessages(current.filter((m) => m !== lastUser))
     sendMessage(lastUser.content)
-  }, [messages, sendMessage])
+  }, [sendMessage])
 
   const copyMessage = useCallback(async (content: string, idx: number) => {
     await navigator.clipboard.writeText(content)

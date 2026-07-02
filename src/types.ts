@@ -28,11 +28,6 @@ export interface SpeakerLabel {
   color: string
 }
 
-export interface TranscriptSegment {
-  speakerIndex: number
-  text: string
-}
-
 export interface Meeting {
   id: string
   title: string
@@ -45,7 +40,7 @@ export interface Meeting {
   enhancedNotes?: string
   chatHistory?: ChatMessage[]
   speakerLabels?: SpeakerLabel[]
-  transcriptSegments?: TranscriptSegment[]
+  transcriptSegments?: { speakerIndex: number; text: string }[]
   brief?: string
   memoryDigest?: string
   memoryIndexedAt?: string
@@ -54,6 +49,7 @@ export interface Meeting {
 export interface MemoryEntry {
   meetingId: string
   digest: string
+  contentHash: string
   tf: Record<string, number>
   indexedAt: string
 }
@@ -69,12 +65,13 @@ export interface AISettings {
   enabled: boolean
 }
 
-// Transcription is fixed to one on-device engine/model (Parakeet v3), so there
-// is no engine/model setting. Stale keys in stored settings are ignored.
+export type TranscriptionModel = "parakeet-v3" | "qwen3-asr"
+
 export interface AppSettings {
   audioSource: "mic" | "system" | "both"
   preferredDeviceId: string
   speechLang: string
+  transcriptionModel: TranscriptionModel
   titlePrefix: string
   theme: "light" | "dark" | "system"
 }
@@ -89,6 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   audioSource: "mic",
   preferredDeviceId: "default",
   speechLang: "auto",
+  transcriptionModel: "parakeet-v3",
   titlePrefix: "",
   theme: "system",
 }
@@ -132,4 +130,55 @@ export const SPEECH_LANGS: Record<string, string> = {
   "bg": "Bulgarian",
   "sr": "Serbian",
   "el": "Greek",
+}
+
+export const TRANSCRIPTION_MODELS: Record<TranscriptionModel, {
+  name: string
+  label: string
+  description: string
+  size: string
+  source: string
+  runtime: string
+  bestFor: string
+  capabilities: string[]
+  limitations: string[]
+}> = {
+  "parakeet-v3": {
+    name: "Parakeet TDT 0.6B v3",
+    label: "Fast live meetings",
+    description: "CoreML Parakeet model optimized for low-latency local meeting transcription.",
+    size: "~325 MB",
+    source: "FluidInference/parakeet-tdt-0.6b-v3-coreml",
+    runtime: "Apple Neural Engine",
+    bestFor: "Live meeting capture, lower latency, reliable continuous recording",
+    capabilities: [
+      "Live streaming",
+      "Mic, system, and both-source capture",
+      "Multilingual ASR",
+      "Best default for meetings",
+    ],
+    limitations: [
+      "Less broad language identification than Qwen3",
+    ],
+  },
+  "qwen3-asr": {
+    name: "Qwen3 ASR 0.6B int8",
+    label: "Multilingual language ID",
+    description: "Native CoreML Qwen3 ASR model for broad multilingual recognition.",
+    size: "~900 MB",
+    source: "FluidInference/qwen3-asr-0.6b-coreml/int8",
+    runtime: "CoreML, macOS 15+",
+    bestFor: "Multilingual audio, language identification, Chinese dialect coverage",
+    capabilities: [
+      "30 languages",
+      "22 Chinese dialects",
+      "Automatic language detection",
+      "Batch and accumulated live transcription",
+    ],
+    limitations: [
+      "Requires macOS 15 or newer",
+      "Higher disk and memory use",
+      "Live updates are accumulated, not token-streamed",
+    ],
+  },
 }

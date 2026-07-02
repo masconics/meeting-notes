@@ -6,6 +6,14 @@ import {
   PresentationIcon,
   DashboardCircleIcon,
   CheckmarkBadge01Icon,
+  DollarCircleIcon,
+  AlertCircleIcon,
+  Mail01Icon,
+  Task01Icon,
+  NoteIcon,
+  StarIcon,
+  QuotesIcon,
+  IdeaIcon,
 } from "@hugeicons/core-free-icons"
 import type { IconSvgElement } from "@hugeicons/react"
 
@@ -15,6 +23,14 @@ const ICON_MAP: Record<string, IconSvgElement> = {
   Comment01Icon,
   PresentationIcon,
   DashboardCircleIcon,
+  DollarCircleIcon,
+  AlertCircleIcon,
+  Mail01Icon,
+  Task01Icon,
+  NoteIcon,
+  StarIcon,
+  QuotesIcon,
+  IdeaIcon,
 }
 
 interface TemplateIconProps {

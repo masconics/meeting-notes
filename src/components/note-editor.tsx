@@ -23,52 +23,42 @@ import { MarkdownView } from "@/components/markdown-view"
 import { Waveform } from "@/components/Waveform"
 import { useRecording } from "@/lib/use-recording"
 import { saveTemplate as persistTemplate } from "@/lib/templates"
-import { saveMeetings, loadMeetings } from "@/lib/storage"
 import { useChat } from "@/lib/use-chat"
 import { cn } from "@/lib/utils"
+import { formatDate, formatTime, formatTimer } from "@/lib/format"
+import { SUGGESTED_QUESTIONS } from "@/lib/constants"
+import { SPEAKER_TAILWIND_COLORS } from "@/lib/constants"
 import type { Meeting, AppSettings, MeetingTemplate, ChatMessage, SpeakerLabel } from "@/types"
 import { findRelatedMeetings } from "@/lib/context-memory"
-
-function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  return `${m}:${s.toString().padStart(2, "0")}`
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  })
-}
-
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-}
-
-const SUGGESTED_QUESTIONS = [
-  "What were the key decisions made?",
-  "List all action items with owners",
-  "What was their budget?",
-  "What objections or concerns were raised?",
-  "Summarize the main points in 3 sentences",
-  "What are the next steps?",
-]
 
 interface NoteEditorProps {
   note?: Meeting
   meetings: Meeting[]
-  onSave: (meeting: Meeting) => void
+  onSave: (meeting: Meeting, stayOnEditor?: boolean) => void
   onCancel: () => void
   onSettings: () => void
   settings: AppSettings
 }
 
 type RecorderState = "idle" | "recording" | "reviewing"
+
+// Derive a readable title from the first meaningful line of the body, so a note
+// saved without an explicit title beats a bare "Note <date>". Strips leading
+// markdown markers (heading hashes, list bullets, emphasis) and truncates.
+function deriveTitle(notes: string): string {
+  const line = notes
+    .split("\n")
+    .map((l) =>
+      l
+        .replace(/^\s{0,3}#{1,6}\s+/, "")
+        .replace(/^\s*[-*+]\s+/, "")
+        .replace(/[*_`~]/g, "")
+        .trim()
+    )
+    .find((l) => l.length > 0)
+  if (!line) return `Note ${new Date().toLocaleDateString()}`
+  return line.length > 60 ? `${line.slice(0, 60).trimEnd()}…` : line
+}
 
 export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, settings }: NoteEditorProps) {
   const [title, setTitle] = useState(note?.title ?? settings.titlePrefix)
@@ -89,19 +79,17 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [rawTranscript, setRawTranscript] = useState(note?.transcript || "")
   const [showRawTranscript, setShowRawTranscript] = useState(false)
   const [chatWidth, setChatWidth] = useState(360)
+  // Snapshot of the last-persisted title/notes. Drives the dirty indicator and
+  // lets it clear correctly after a save (manual or auto), instead of comparing
+  // against the never-updated `note` prop.
+  const [savedSnapshot, setSavedSnapshot] = useState(() => ({
+    title: note?.title ?? settings.titlePrefix,
+    notes: note?.notes || note?.transcript || "",
+  }))
 
   const [speakerLabels, setSpeakerLabels] = useState<SpeakerLabel[]>(note?.speakerLabels ?? [])
   const [isAddingSpeaker, setIsAddingSpeaker] = useState(false)
   const [newSpeakerName, setNewSpeakerName] = useState("")
-
-  const SPEAKER_COLORS = [
-    "bg-blue-500/20 text-blue-700 border-blue-500/30",
-    "bg-amber-500/20 text-amber-700 border-amber-500/30",
-    "bg-emerald-500/20 text-emerald-700 border-emerald-500/30",
-    "bg-violet-500/20 text-violet-700 border-violet-500/30",
-    "bg-rose-500/20 text-rose-700 border-rose-500/30",
-    "bg-cyan-500/20 text-cyan-700 border-cyan-500/30",
-  ]
 
   const resizeRef = useRef(false)
   const chatPanelRef = useRef<HTMLDivElement>(null)
@@ -129,6 +117,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const notesRef = useRef(notes); notesRef.current = notes
   const recorderStateRef = useRef(recorderState); recorderStateRef.current = recorderState
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const titleRef = useRef(title); titleRef.current = title
   const enhancedNotesRef = useRef<string>("")
   const previousNotesRef = useRef<string>("")
@@ -157,6 +146,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   } = useRecording({
     audioSource,
     speechLang: settings.speechLang,
+    transcriptionModel: settings.transcriptionModel,
     setText: setNotes,
     getText: () => notesRef.current,
     onError: setError,
@@ -171,9 +161,22 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       .filter((m): m is Meeting => Boolean(m))
   }, [note, meetings])
 
-  const isDirty = title !== (note?.title ?? settings.titlePrefix) ||
-    notes !== (note?.notes || note?.transcript || "")
+  const isDirty = title !== savedSnapshot.title || notes !== savedSnapshot.notes
   const isEmpty = !notes.trim()
+
+  // Word count + reading time for the note body. Strips the heaviest markdown
+  // noise so the count reflects prose, not syntax. ~200 wpm reading speed.
+  const noteStats = useMemo(() => {
+    const plain = notes
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+      .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+      .replace(/`[^`]*`/g, " ")
+      .replace(/[#>*_~]+/g, " ")
+      .trim()
+    const words = plain ? plain.split(/\s+/).filter(Boolean).length : 0
+    return { words, minutes: Math.max(1, Math.round(words / 200)) }
+  }, [notes])
 
   const chatMeeting = useMemo<Meeting>(() => ({
     id: note?.id ?? "",
@@ -242,7 +245,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             .filter((n) => !existing.has(n.toLowerCase()))
             .map((name, i) => ({
               name,
-              color: SPEAKER_COLORS[(prev.length + i) % SPEAKER_COLORS.length],
+              color: SPEAKER_TAILWIND_COLORS[(prev.length + i) % SPEAKER_TAILWIND_COLORS.length],
             }))
           return [...prev, ...newLabels]
         })
@@ -331,8 +334,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
   const handleAddSpeaker = useCallback(() => {
     if (!newSpeakerName.trim()) return
-    const colorIdx = speakerLabels.length % SPEAKER_COLORS.length
-    setSpeakerLabels([...speakerLabels, { name: newSpeakerName.trim(), color: SPEAKER_COLORS[colorIdx] }])
+    const colorIdx = speakerLabels.length % SPEAKER_TAILWIND_COLORS.length
+    setSpeakerLabels([...speakerLabels, { name: newSpeakerName.trim(), color: SPEAKER_TAILWIND_COLORS[colorIdx] }])
     setNewSpeakerName("")
     setIsAddingSpeaker(false)
   }, [newSpeakerName, speakerLabels])
@@ -353,10 +356,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const handleSaveAsTemplate = useCallback(async () => {
     if (!title.trim()) return
     const sections: string[] = []
-    const sectionRegex = /^## (.+)$/gm
+    const sectionRegex = /^#{1,3} (.+)$/gm
     let match: RegExpExecArray | null
     while ((match = sectionRegex.exec(notes)) !== null) {
-      sections.push(match[1])
+      sections.push(match[1].replace(/[#*_~`]/g, "").trim())
     }
     if (sections.length === 0) {
       sections.push("Key Takeaways", "Next Steps")
@@ -374,52 +377,39 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     persistTemplate(template)
     setSelectedTemplate(template)
     setError("Template saved! You can reuse it from the Template picker.")
-    setTimeout(() => setError(null), 3000)
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
+    errorTimerRef.current = setTimeout(() => setError(null), 3000)
   }, [title, notes])
 
+  // Build the Meeting payload from the current editor state for a given id.
+  // Shared by manual save, save-and-new, and autosave so they never drift.
+  const buildMeeting = useCallback((id: string): Meeting => ({
+    id,
+    title: title.trim() || deriveTitle(notes),
+    date: note?.date ?? new Date().toISOString(),
+    duration: (note?.duration ?? 0) + duration,
+    transcript: rawTranscript || note?.transcript || "",
+    notes: notes.trim(),
+    templateId: selectedTemplate?.id ?? note?.templateId,
+    structuredNotes: note?.structuredNotes,
+    enhancedNotes: note?.enhancedNotes,
+    chatHistory: chatHistoryRef.current.length > 0 ? chatHistoryRef.current : note?.chatHistory,
+    speakerLabels: speakerLabels.length > 0 ? speakerLabels : note?.speakerLabels,
+    transcriptSegments: note?.transcriptSegments,
+    brief: note?.brief,
+  }), [title, note, duration, rawTranscript, notes, selectedTemplate, speakerLabels])
+
   const handleSave = useCallback(() => {
-    const meeting: Meeting = {
-      id: note?.id ?? crypto.randomUUID(),
-      title: title || `Note ${new Date().toLocaleDateString()}`,
-      date: note?.date ?? new Date().toISOString(),
-      duration: (note?.duration ?? 0) + duration,
-      transcript: rawTranscript || note?.transcript || "",
-      notes: notes.trim(),
-      templateId: selectedTemplate?.id ?? note?.templateId,
-      structuredNotes: note?.structuredNotes,
-      enhancedNotes: note?.enhancedNotes,
-      chatHistory: chatHistoryRef.current.length > 0 ? chatHistoryRef.current : note?.chatHistory,
-      speakerLabels: speakerLabels.length > 0 ? speakerLabels : note?.speakerLabels,
-      transcriptSegments: note?.transcriptSegments,
-      brief: note?.brief,
-    }
+    const meeting = buildMeeting(note?.id ?? crypto.randomUUID())
     onSave(meeting)
+    setSavedSnapshot({ title, notes })
     setJustSaved(true)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000)
-  }, [title, duration, notes, selectedTemplate, note, onSave, rawTranscript])
+  }, [title, notes, note, onSave, buildMeeting])
 
   const handleSaveAndNew = useCallback(() => {
-    const meetings = loadMeetings()
-    const meeting: Meeting = {
-      id: note?.id ?? crypto.randomUUID(),
-      title: title || `Note ${new Date().toLocaleDateString()}`,
-      date: note?.date ?? new Date().toISOString(),
-      duration: (note?.duration ?? 0) + duration,
-      transcript: rawTranscript || note?.transcript || "",
-      notes: notes.trim(),
-      templateId: selectedTemplate?.id ?? note?.templateId,
-      structuredNotes: note?.structuredNotes,
-      enhancedNotes: note?.enhancedNotes,
-      chatHistory: chatHistoryRef.current.length > 0 ? chatHistoryRef.current : note?.chatHistory,
-      speakerLabels: speakerLabels.length > 0 ? speakerLabels : note?.speakerLabels,
-      transcriptSegments: note?.transcriptSegments,
-      brief: note?.brief,
-    }
-    const updated = note?.id
-      ? meetings.map(m => m.id === note.id ? meeting : m)
-      : [...meetings, meeting]
-    saveMeetings(updated)
+    onSave(buildMeeting(note?.id ?? crypto.randomUUID()), true)
     setTitle(settings.titlePrefix)
     setNotes("")
     setRawTranscript("")
@@ -432,10 +422,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setRecorderState("idle")
     setIsPaused(false)
     setError(null)
+    // Fresh form is a clean slate, not dirty against the note we just saved.
+    setSavedSnapshot({ title: settings.titlePrefix, notes: "" })
     setJustSaved(true)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000)
-  }, [title, duration, notes, selectedTemplate, note, settings.titlePrefix, rawTranscript])
+  }, [note, settings.titlePrefix, onSave, buildMeeting])
 
   useEffect(() => {
     const handler = () => { if (recorderStateRef.current === "recording") stopRecording(); else if (recorderStateRef.current === "idle") startRecording() }
@@ -443,18 +435,62 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     return () => window.removeEventListener("toggle-recording", handler)
   }, [startRecording, stopRecording])
 
+  // ⌘S / Ctrl+S force-saves immediately — the reflex users expect even though
+  // existing notes already autosave. Suppresses the webview's default save dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (e.key === "s" || e.key === "S")) {
+        e.preventDefault()
+        handleSave()
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [handleSave])
+
   useEffect(() => () => {
     abortCapture()
+    if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+    if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
   }, [abortCapture])
 
   useEffect(() => {
-    const originalTitle = note?.title ?? settings.titlePrefix
-    const originalNotes = note?.notes || note?.transcript || ""
-    const titleChanged = title !== originalTitle
-    const notesChanged = notes !== originalNotes
-    const dirty = titleChanged || notesChanged
+    const dirty = title !== savedSnapshot.title || notes !== savedSnapshot.notes
     window.dispatchEvent(new CustomEvent("recorder-dirty", { detail: { dirty } }))
-  }, [title, notes, note?.title, note?.notes, note?.transcript, settings.titlePrefix])
+  }, [title, notes, savedSnapshot])
+
+  // Autosave existing notes after a short idle. Scoped to existing notes only:
+  // the id is real and stable, onSave upserts by id (no duplicate), and the
+  // stayOnEditor flag suppresses navigation. New notes keep explicit save so we
+  // don't mint a draft meeting on the first keystroke. Skipped while AI is
+  // streaming/enhancing/titling to avoid persisting half-generated content.
+  const autosaveRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!note || !isDirty || isStreaming || isEnhancing || isTitling) return
+    if (autosaveRef.current) clearTimeout(autosaveRef.current)
+    autosaveRef.current = setTimeout(() => {
+      onSave(buildMeeting(note.id), true)
+      setSavedSnapshot({ title: titleRef.current, notes: notesRef.current })
+      setJustSaved(true)
+      if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
+      savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000)
+    }, 1200)
+    return () => { if (autosaveRef.current) clearTimeout(autosaveRef.current) }
+  }, [notes, title, note, isDirty, isStreaming, isEnhancing, isTitling, onSave, buildMeeting])
+
+  // Flush a pending autosave if the editor unmounts (navigates away / closes)
+  // within the debounce window, so the last edits to an existing note are never
+  // dropped. The closure is refreshed each render via an effect (not during
+  // render) and read only in the unmount cleanup.
+  const flushSaveRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    flushSaveRef.current = () => {
+      if (note && isDirty && !isStreaming && !isEnhancing && !isTitling) {
+        onSave(buildMeeting(note.id), true)
+      }
+    }
+  })
+  useEffect(() => () => { flushSaveRef.current() }, [])
 
   return (
     <main className="flex h-full w-full flex-col bg-background">
@@ -469,7 +505,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           {justSaved && <span className="text-xs font-medium text-primary">Saved</span>}
           {isDirty && !justSaved && <span className="size-1.5 rounded-full bg-muted-foreground" title="Unsaved changes" />}
           <Button variant="ghost" onClick={handleSaveAndNew}>Save & New</Button>
-          <Button variant="ghost" onClick={handleSave}>Save</Button>
+          <Button variant="ghost" onClick={handleSave} title="Save (⌘S)">Save</Button>
         </div>
       </div>
 
@@ -509,6 +545,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.5} className="size-3" />
             {formatTime(note?.date ?? new Date().toISOString())}
           </span>
+          {noteStats.words > 0 && (
+            <span title={`${noteStats.words.toLocaleString()} words · ~${noteStats.minutes} min read`}>
+              {noteStats.words.toLocaleString()} {noteStats.words === 1 ? "word" : "words"} · {noteStats.minutes} min read
+            </span>
+          )}
           {recorderState === "recording" && silenceSeconds > 30 && (
             <span className="inline-flex items-center gap-1 text-amber-500">
               <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} className="size-3" />
@@ -552,7 +593,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-0.5 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
                   onClick={() => {
                     if (note?.id !== m.id) {
-                      onSave({ id: note?.id ?? "", title, date: note?.date ?? new Date().toISOString(), duration: (note?.duration ?? 0) + duration, transcript: "", notes })
                       window.dispatchEvent(new CustomEvent("navigate-meeting", { detail: { id: m.id } }))
                     }
                   }}
@@ -605,6 +645,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     editable
                     onChange={setNotes}
                     viewMode={viewMode}
+                    toolbar={viewMode === "wysiwyg"}
                   />
                 )}
               </div>
@@ -759,14 +800,14 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             <div className="flex items-center gap-3">
               {isPaused ? (
                 <>
-                  <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatDuration((note?.duration ?? 0) + duration)}</motion.span>
+                  <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatTimer((note?.duration ?? 0) + duration)}</motion.span>
                   <span className="text-xs font-medium text-amber-500">Paused</span>
                   <Button variant="ghost" size="sm" onClick={resumeRecording} className="text-amber-500 hover:text-amber-600">Resume</Button>
                   <Button variant="ghost" size="sm" onClick={stopRecording} className="text-destructive hover:text-destructive">Stop</Button>
                 </>
               ) : (
                 <>
-                  <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatDuration((note?.duration ?? 0) + duration)}</motion.span>
+                  <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatTimer((note?.duration ?? 0) + duration)}</motion.span>
                   <Waveform active={true} level={audioLevel} className="min-w-[160px]" />
                   {isSpeaking ? (
                     <span className="text-xs font-medium text-primary">speaking</span>
@@ -781,7 +822,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
               )}
             </div>
           ) : isTranscribing ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><div className="size-2 border border-primary border-t-transparent rounded-full animate-spin" />Processing {formatDuration((note?.duration ?? 0) + duration)} recording...</span>
+            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><div className="size-2 border border-primary border-t-transparent rounded-full animate-spin" />Processing {formatTimer((note?.duration ?? 0) + duration)} recording...</span>
           ) : (
             <>
               <div className="app-control-strip">

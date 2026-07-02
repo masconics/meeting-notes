@@ -94,6 +94,11 @@ export function Waveform({ active, level, className = "", color = "var(--primary
       amplitudeRef.current = lerp(amplitudeRef.current, target, smoothing)
       phaseRef.current += 0.075 + amplitudeRef.current * 0.06
 
+      if (!active && amplitudeRef.current < 0.001) {
+        frameRef.current = requestAnimationFrame(() => {})
+        return
+      }
+
       const amp = amplitudeRef.current * height * 0.36
 
       const gradient = ctx.createLinearGradient(0, 0, 0, height)
