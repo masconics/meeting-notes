@@ -26,9 +26,10 @@ interface GlobalChatProps {
   open: boolean
   onClose: () => void
   onOpenSettings?: () => void
+  folderId?: string
 }
 
-export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalChatProps) {
+export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }: GlobalChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -97,7 +98,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
     abortRef.current = controller
 
     try {
-      const gen = streamGlobalChat(text.trim(), base, meetings, controller.signal)
+      const gen = streamGlobalChat(text.trim(), base, meetings, controller.signal, { folderId })
       for await (const chunk of gen) {
         fullContent += chunk
         setMessages([...base, { ...assistantMsg, content: fullContent }])
@@ -112,7 +113,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
       abortRef.current = null
       setStreaming(false)
     }
-  }, [messages, streaming, meetings])
+  }, [messages, streaming, meetings, folderId])
 
   const stopStreaming = useCallback(() => {
     abortRef.current?.abort()
@@ -159,9 +160,15 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
         >
           <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
             <div className="flex items-center gap-2 min-w-0">
-              <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-4 shrink-0" />
+              <span className="ai-mark shrink-0" data-ai={streaming ? "busy" : "active"}>
+                <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-3.5 text-white" />
+              </span>
               <div className="min-w-0">
-                <p className="text-sm font-medium truncate">Ask About All Meetings</p>
+                <p className="truncate text-sm font-medium">
+                  <span className="ai-label" data-ai={streaming ? "busy" : "idle"}>
+                    Ask about all meetings
+                  </span>
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {meetings.length} meeting{meetings.length !== 1 ? "s" : ""}
                 </p>
@@ -172,7 +179,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
             </Button>
           </div>
 
-          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+          <div ref={scrollRef} className="scroll-fade flex-1 overflow-y-auto px-4 py-3">
             {!configured ? (
               <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
                 <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} className="size-8" />

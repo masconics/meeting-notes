@@ -1,4 +1,4 @@
-# Meeting Notes — Architecture
+# Myna Notes — Architecture
 
 ## System Overview
 

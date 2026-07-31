@@ -10,34 +10,50 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
-const REQUEST_TIMEOUT_SECS: u64 = 30;
+/// Floor for the batch request timeout. The real deadline grows with the audio
+/// duration the sidecar reports via `INFO\tduration=` (see `request`), so long
+/// imports aren't killed mid-transcription.
+const MIN_REQUEST_TIMEOUT_SECS: u64 = 30;
+
+/// Batch request failure. `retryable` marks transport-level problems (timeout,
+/// closed pipe, IO) where respawning the sidecar and retrying can help; `ERR`
+/// responses from the sidecar are deterministic model/application errors —
+/// retrying the same audio after an expensive model reload would just fail
+/// again, so those are not retryable.
+#[derive(Debug)]
+struct RequestError {
+    retryable: bool,
+    message: String,
+}
+
+impl RequestError {
+    fn transport(message: impl Into<String>) -> Self {
+        Self {
+            retryable: true,
+            message: message.into(),
+        }
+    }
+
+    fn app(message: impl Into<String>) -> Self {
+        Self {
+            retryable: false,
+            message: message.into(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AsrModel {
     Parakeet,
-    Qwen3,
 }
 
 impl AsrModel {
-    fn parse(value: Option<&str>) -> Self {
-        match value {
-            Some("qwen3-asr") | Some("qwen3") => Self::Qwen3,
-            _ => Self::Parakeet,
-        }
-    }
-
-    fn arg(self) -> Option<&'static str> {
-        match self {
-            Self::Parakeet => None,
-            Self::Qwen3 => Some("--model=qwen3"),
-        }
+    fn parse(_value: Option<&str>) -> Self {
+        Self::Parakeet
     }
 
     fn id(self) -> &'static str {
-        match self {
-            Self::Parakeet => "parakeet-v3",
-            Self::Qwen3 => "qwen3-asr",
-        }
+        "parakeet-v3"
     }
 }
 
@@ -176,9 +192,6 @@ async fn spawn_sidecar(app: &AppHandle, model: AsrModel) -> Result<Sidecar, Stri
     let bin = binary_path(app);
     log::debug!("spawning sidecar: {}", bin.display());
     let mut cmd = Command::new(&bin);
-    if let Some(arg) = model.arg() {
-        cmd.arg(arg);
-    }
     cmd.kill_on_drop(true);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -261,9 +274,6 @@ async fn run_download_sidecar(app: &AppHandle, model: AsrModel) -> Result<(), St
     log::debug!("spawning download sidecar: {}", bin.display());
     let mut cmd = Command::new(&bin);
     cmd.arg("--download-only");
-    if let Some(arg) = model.arg() {
-        cmd.arg(arg);
-    }
     cmd.kill_on_drop(true);
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -329,7 +339,7 @@ async fn run_download_sidecar(app: &AppHandle, model: AsrModel) -> Result<(), St
     }
 }
 
-async fn request(sc: &mut Sidecar, wav_path: &str, language: &str) -> Result<String, String> {
+async fn request(sc: &mut Sidecar, wav_path: &str, language: &str) -> Result<String, RequestError> {
     let msg = if language.is_empty() {
         format!("{}\n", wav_path)
     } else {
@@ -339,44 +349,56 @@ async fn request(sc: &mut Sidecar, wav_path: &str, language: &str) -> Result<Str
     sc.stdin
         .write_all(msg.as_bytes())
         .await
-        .map_err(|e| format!("write req: {}", e))?;
+        .map_err(|e| RequestError::transport(format!("write req: {}", e)))?;
     sc.stdin
         .flush()
         .await
-        .map_err(|e| format!("flush: {}", e))?;
+        .map_err(|e| RequestError::transport(format!("flush: {}", e)))?;
 
     log::debug!("request: waiting for response...");
-    let read_result = tokio::time::timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS), async {
-        loop {
-            let mut line = String::new();
-            let n = sc
-                .stdout
-                .read_line(&mut line)
-                .await
-                .map_err(|e| format!("read resp: {}", e))?;
-            if n == 0 {
-                log::debug!("request: sidecar closed (n=0)");
-                return Err("sidecar closed".to_string());
+    let mut deadline =
+        tokio::time::Instant::now() + Duration::from_secs(MIN_REQUEST_TIMEOUT_SECS);
+    loop {
+        let mut line = String::new();
+        let n = match tokio::time::timeout_at(deadline, sc.stdout.read_line(&mut line)).await {
+            Ok(r) => r.map_err(|e| RequestError::transport(format!("read resp: {}", e)))?,
+            Err(_) => {
+                log::debug!("request: timed out");
+                return Err(RequestError::transport("sidecar request timed out"));
             }
-            let line = line.trim_end_matches(['\r', '\n']);
-            log::debug!("request: got response: {:?}", line);
-            if let Some(text) = line.strip_prefix("OK\t") {
-                return Ok(text.to_string());
-            }
-            if let Some(msg) = line.strip_prefix("ERR\t") {
-                return Err(format!("transcription error: {}", msg));
-            }
-            log::debug!("request: skipping non-protocol line");
+        };
+        if n == 0 {
+            log::debug!("request: sidecar closed (n=0)");
+            return Err(RequestError::transport("sidecar closed"));
         }
-    })
-    .await;
-
-    match read_result {
-        Ok(r) => r,
-        Err(_) => {
-            log::debug!("request: timed out");
-            Err("sidecar request timed out".into())
+        let line = line.trim_end_matches(['\r', '\n']);
+        log::debug!("request: got response: {:?}", line);
+        if let Some(text) = line.strip_prefix("OK\t") {
+            return Ok(text.to_string());
         }
+        if let Some(msg) = line.strip_prefix("ERR\t") {
+            return Err(RequestError::app(format!("transcription error: {}", msg)));
+        }
+        // The sidecar reports the decoded/VAD-trimmed audio length right before
+        // transcription starts. Scale the deadline to the audio: a flat timeout
+        // used to kill long imports, which then triggered a full model-reload
+        // respawn + retry of the same file. Budget assumes a very conservative
+        // 0.5x realtime floor plus 60s of slack, never below the floor timeout.
+        if let Some(rest) = line.strip_prefix("INFO\t") {
+            if let Some(secs) = rest
+                .strip_prefix("duration=")
+                .and_then(|v| v.trim().parse::<f64>().ok())
+            {
+                if secs.is_finite() && secs > 0.0 {
+                    let budget = Duration::from_secs(60) + Duration::from_secs_f64(secs * 0.5);
+                    let budget = budget.max(Duration::from_secs(MIN_REQUEST_TIMEOUT_SECS));
+                    log::debug!("request: audio duration {secs:.1}s, deadline {budget:?}");
+                    deadline = tokio::time::Instant::now() + budget;
+                }
+            }
+            continue;
+        }
+        log::debug!("request: skipping non-protocol line");
     }
 }
 
@@ -638,9 +660,22 @@ pub async fn request_screen_permission() -> Result<bool, String> {
     }
 }
 
+/// Long-lived streaming live-caption sidecar.
+///
+/// The process loads the ASR models first, then blocks reading the config frame
+/// from stdin, and only after that starts capturing audio. Splitting the spawn
+/// from the config write lets us *pre-warm*: spawn early (models load while the
+/// user isn't recording), park it, then send the config frame the moment the
+/// user hits record — capture starts without the multi-second model load.
+///
+/// stdout is pumped into an unbounded channel by a background task so progress
+/// lines emitted while parked never fill the pipe and stall the load.
 pub struct StreamSidecar {
+    model: AsrModel,
+    source: String,
     child: Child,
     stdin: Option<tokio::process::ChildStdin>,
+    lines: tokio::sync::mpsc::UnboundedReceiver<String>,
 }
 
 impl Drop for StreamSidecar {
@@ -651,21 +686,71 @@ impl Drop for StreamSidecar {
 }
 
 impl StreamSidecar {
-    pub async fn finish(mut self) {
-        self.stdin = None;
-        match tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await {
-            Ok(Ok(status)) => log::debug!("stream sidecar exited: {status}"),
-            Ok(Err(e)) => log::warn!("stream sidecar wait error: {e}"),
-            Err(_) => {
-                log::warn!("stream sidecar finish timeout, killing");
-                let _ = self.child.start_kill();
-                let _ = self.child.try_wait();
+    /// Send the stream config frame — the cue the parked sidecar waits on to
+    /// start capturing. `rate` is vestigial (capture happens in-process); only
+    /// the language field is consumed.
+    pub async fn begin(&mut self, rate: u32, language: &str) -> Result<(), String> {
+        let stdin = self.stdin.as_mut().ok_or("stream stdin already closed")?;
+        let cfg = format!("{}\t{}", rate, language);
+        write_frame(stdin, cfg.as_bytes()).await
+    }
+
+    /// Wait for READY after `begin`, relaying download progress events.
+    pub async fn wait_ready(&mut self, app: &AppHandle) -> Result<(), String> {
+        let model = self.model;
+        let ready = tokio::time::timeout(Duration::from_secs(300), async {
+            while let Some(line) = self.lines.recv().await {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if line == "READY" || line.ends_with("READY") {
+                    emit_progress(
+                        app,
+                        model,
+                        ModelProgress {
+                            fraction: 1.0,
+                            percent: 100,
+                            phase: "ready".into(),
+                            model: String::new(),
+                        },
+                    );
+                    return Ok(());
+                }
+                if let Some(progress) = parse_sidecar_progress(line) {
+                    emit_progress(app, model, progress);
+                    continue;
+                }
+                if let Some(msg) = line.strip_prefix("FATAL\t") {
+                    return Err(format!("stream sidecar fatal: {msg}"));
+                }
             }
+            Err("stream sidecar exited before READY".to_string())
+        })
+        .await;
+
+        match ready {
+            Ok(r) => r,
+            Err(_) => Err("stream sidecar did not become ready within 300s".into()),
         }
+    }
+
+    /// Next stdout line (transcript/level JSON, DONE, ERR...), None on EOF.
+    pub async fn next_line(&mut self) -> Option<String> {
+        self.lines.recv().await
+    }
+
+    /// Close stdin — the EOF the sidecar waits on to flush its final transcripts.
+    pub fn close_stdin(&mut self) {
+        self.stdin = None;
+    }
+
+    pub fn is_alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
     }
 }
 
-pub async fn write_frame(
+async fn write_frame(
     stdin: &mut tokio::process::ChildStdin,
     payload: &[u8],
 ) -> Result<(), String> {
@@ -683,33 +768,31 @@ pub async fn write_frame(
     stdin.flush().await.map_err(|e| format!("frame flush: {e}"))
 }
 
-pub async fn spawn_stream_sidecar(
+/// Spawn the streaming sidecar process WITHOUT sending the config frame: the
+/// sidecar loads models and then parks on stdin. Callers either wait_ready right
+/// away (`begin`) or park it for later use (see `prewarm_stream`).
+async fn spawn_stream_process(
     app: &AppHandle,
-    rate: u32,
-    language: &str,
+    model: AsrModel,
     source: &str,
-    model: Option<&str>,
-) -> Result<(StreamSidecar, BufReader<tokio::process::ChildStdout>), String> {
+) -> Result<StreamSidecar, String> {
     let bin = binary_path(app);
     log::debug!(
         "spawning stream sidecar: {} --stream --source {}",
         bin.display(),
         source
     );
-    let requested_model = AsrModel::parse(model);
     let mut cmd = Command::new(&bin);
     cmd.arg("--stream").arg("--source").arg(source);
-    if let Some(arg) = requested_model.arg() {
-        cmd.arg(arg);
-    }
+    cmd.kill_on_drop(true);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("spawn {}: {}", bin.display(), e))?;
-    let mut stdin = child.stdin.take().ok_or("no stdin")?;
-    let mut stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
+    let stdin = child.stdin.take().ok_or("no stdin")?;
+    let stdout = child.stdout.take().ok_or("no stdout")?;
 
     if let Some(stderr) = child.stderr.take() {
         tauri::async_runtime::spawn(async move {
@@ -721,59 +804,124 @@ pub async fn spawn_stream_sidecar(
         });
     }
 
-    let cfg = format!("{}\t{}", rate, language);
-    write_frame(&mut stdin, cfg.as_bytes()).await?;
-
-    let ready = tokio::time::timeout(Duration::from_secs(300), async {
+    // Pump stdout into an unbounded channel. Lines are short and the consumer
+    // normally keeps up; unbounded just guarantees a burst of download-progress
+    // lines while parked can't block the sidecar on a full pipe.
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    tauri::async_runtime::spawn(async move {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
         loop {
-            let mut line = String::new();
-            let n = stdout
-                .read_line(&mut line)
-                .await
-                .map_err(|e| format!("read READY: {e}"))?;
-            if n == 0 {
-                return Err("stream sidecar exited before READY".to_string());
-            }
-            let line = line.trim();
-            if line == "READY" || line.ends_with("READY") {
-                emit_progress(
-                    app,
-                    requested_model,
-                    ModelProgress {
-                        fraction: 1.0,
-                        percent: 100,
-                        phase: "ready".into(),
-                        model: String::new(),
-                    },
-                );
-                return Ok(());
-            }
-            if let Some(progress) = parse_sidecar_progress(line) {
-                emit_progress(app, requested_model, progress);
-                continue;
-            }
-            if let Some(msg) = line.strip_prefix("FATAL\t") {
-                return Err(format!("stream sidecar fatal: {msg}"));
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    if tx.send(line.clone()).is_err() {
+                        break; // receiver dropped (sidecar torn down)
+                    }
+                }
+                Err(e) => {
+                    log::warn!("stream sidecar stdout read error: {e}");
+                    break;
+                }
             }
         }
-    })
-    .await;
+    });
 
-    match ready {
-        Ok(Ok(())) => Ok((
-            StreamSidecar {
-                child,
-                stdin: Some(stdin),
-            },
-            stdout,
-        )),
-        Ok(Err(e)) => Err(e),
-        Err(_) => {
-            let _ = child.start_kill();
-            let _ = child.try_wait();
-            Err("stream sidecar did not become ready within 300s".into())
+    Ok(StreamSidecar {
+        model,
+        source: source.to_string(),
+        child,
+        stdin: Some(stdin),
+        lines: rx,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Pre-warmed stream sidecar
+//
+// One parked stream sidecar, spawned ahead of time (note editor opened, pause
+// pressed) so hitting record skips the model load. Parked sidecars hold the
+// loaded model in RAM but capture nothing (they're blocked pre-config-frame),
+// so no mic indicator and no CPU burn. A TTL reaper drops an unused park.
+// ---------------------------------------------------------------------------
+
+struct ParkedStream {
+    sidecar: StreamSidecar,
+    generation: u64,
+}
+
+fn parked_stream() -> &'static Mutex<Option<ParkedStream>> {
+    static S: OnceLock<Mutex<Option<ParkedStream>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(None))
+}
+
+static PARK_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+const PREWARM_TTL_SECS: u64 = 120;
+
+/// Pre-spawn the streaming sidecar so the ASR model is loaded before the user
+/// hits record. Cheap no-op when a matching sidecar is already parked.
+#[tauri::command]
+pub async fn prewarm_stream(
+    app: AppHandle,
+    model: Option<String>,
+    source: Option<String>,
+) -> Result<bool, String> {
+    if !binary_present(&app) {
+        return Err("ASR sidecar not installed.".into());
+    }
+    let requested_model = AsrModel::parse(model.as_deref());
+    let source = source.unwrap_or_else(|| "mic".to_string());
+
+    let mut guard = parked_stream().lock().await;
+    if let Some(parked) = guard.as_mut() {
+        if parked.sidecar.model == requested_model
+            && parked.sidecar.source == source
+            && parked.sidecar.is_alive()
+        {
+            return Ok(true);
         }
     }
+    *guard = None; // stale/mismatched park — Drop kills the process
+
+    let sidecar = spawn_stream_process(&app, requested_model, &source).await?;
+    let generation = PARK_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    log::debug!("prewarmed stream sidecar parked (gen {generation})");
+    *guard = Some(ParkedStream { sidecar, generation });
+
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(PREWARM_TTL_SECS)).await;
+        let mut guard = parked_stream().lock().await;
+        if guard.as_ref().map(|p| p.generation) == Some(generation) {
+            log::debug!("prewarmed stream sidecar expired unused");
+            *guard = None;
+        }
+    });
+
+    Ok(true)
+}
+
+/// Take the pre-warmed sidecar when it matches (instant start), otherwise spawn
+/// fresh (the sidecar loads models while the caller waits, as before).
+pub async fn acquire_stream_sidecar(
+    app: &AppHandle,
+    model: Option<&str>,
+    source: &str,
+) -> Result<StreamSidecar, String> {
+    let requested_model = AsrModel::parse(model);
+    {
+        let mut guard = parked_stream().lock().await;
+        if let Some(parked) = guard.take() {
+            let mut sidecar = parked.sidecar;
+            if sidecar.model == requested_model && sidecar.source == source && sidecar.is_alive() {
+                log::debug!("reusing prewarmed stream sidecar");
+                return Ok(sidecar);
+            }
+            log::debug!("discarding stale prewarmed stream sidecar");
+        }
+    }
+    spawn_stream_process(app, requested_model, source).await
 }
 
 #[tauri::command]
@@ -831,8 +979,8 @@ pub async fn transcribe_audio_fluid(
                 log::debug!("sidecar responded OK ({} chars)", t.len());
                 Ok(t)
             }
-            Err(e) => {
-                log::error!("sidecar request failed: {e}, respawning...");
+            Err(e) if e.retryable => {
+                log::error!("sidecar request failed: {}, respawning...", e.message);
                 *guard = Some(spawn_sidecar(&app, requested_model).await?);
                 log::debug!("sidecar respawned, retrying request...");
                 request(
@@ -841,7 +989,9 @@ pub async fn transcribe_audio_fluid(
                     lang,
                 )
                 .await
+                .map_err(|e2| e2.message)
             }
+            Err(e) => Err(e.message),
         }
     };
 
@@ -893,8 +1043,8 @@ pub async fn transcribe_audio_file_fluid(
     .await
     {
         Ok(t) => Ok(t),
-        Err(e) => {
-            log::error!("sidecar request failed: {e}, respawning...");
+        Err(e) if e.retryable => {
+            log::error!("sidecar request failed: {}, respawning...", e.message);
             *guard = Some(spawn_sidecar(&app, requested_model).await?);
             request(
                 guard.as_mut().expect("guard is Some after respawn"),
@@ -902,7 +1052,9 @@ pub async fn transcribe_audio_file_fluid(
                 lang,
             )
             .await
+            .map_err(|e2| e2.message)
         }
+        Err(e) => Err(e.message),
     }
 }
 
@@ -919,7 +1071,6 @@ fn model_cache_dir(model: AsrModel) -> Option<PathBuf> {
     let root = fluid_models_dir()?;
     Some(match model {
         AsrModel::Parakeet => root.join("parakeet-tdt-0.6b-v3"),
-        AsrModel::Qwen3 => root.join("qwen3-asr-0.6b/int8"),
     })
 }
 
@@ -943,14 +1094,6 @@ fn model_cache_complete(model: AsrModel, dir: &Path) -> bool {
     }
     match model {
         AsrModel::Parakeet => dir_size(dir) > 0,
-        AsrModel::Qwen3 => [
-            "qwen3_asr_audio_encoder_v2.mlmodelc",
-            "qwen3_asr_decoder_stateful.mlmodelc",
-            "qwen3_asr_embeddings.bin",
-            "vocab.json",
-        ]
-        .iter()
-        .all(|file| dir.join(file).exists()),
     }
 }
 
@@ -974,11 +1117,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_qwen3_model_ids() {
-        assert_eq!(AsrModel::parse(Some("qwen3-asr")), AsrModel::Qwen3);
-        assert_eq!(AsrModel::parse(Some("qwen3-asr")).id(), "qwen3-asr");
+    fn parses_model_ids() {
         assert_eq!(AsrModel::parse(Some("parakeet-v3")), AsrModel::Parakeet);
-        assert_eq!(AsrModel::parse(None), AsrModel::Parakeet);
+        assert_eq!(AsrModel::parse(None).id(), "parakeet-v3");
     }
 }
 

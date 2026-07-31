@@ -229,10 +229,13 @@ export function App() {
 
     if (isNew) {
       if (stayOnEditor) {
-        setEditorNote(undefined)
+        // Keep the note mounted so enhance/knowledge can attach to a real id.
+        setEditorNote(meeting)
       } else {
         navigate("dashboard")
       }
+    } else if (stayOnEditor && editorNoteRef.current?.id === meeting.id) {
+      setEditorNote(meeting)
     }
   }, [navigate])
 
@@ -307,13 +310,32 @@ export function App() {
     return () => { cancelled = true; unlisten?.() }
   }, [navigate])
 
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { pane?: string }
+      if (!detail?.pane) return
+      try { sessionStorage.setItem("dashboard-pane", detail.pane) } catch { /* ignore */ }
+      if (viewRef.current !== "dashboard") navigate("dashboard")
+    }
+    window.addEventListener("dashboard-pane", handler)
+    return () => window.removeEventListener("dashboard-pane", handler)
+  }, [navigate])
+
   return (
     <div className="h-screen overflow-hidden bg-muted/30">
       <ErrorBoundary>
       <AnimatePresence mode="wait">
         {view === "dashboard" && (
-          <motion.div key="dashboard" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-            <main className="h-screen overflow-y-auto">
+          <motion.div
+            key="dashboard"
+            variants={pageVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="h-screen"
+          >
+            <main className="h-full min-h-0">
               <MeetingDashboard
                 meetings={meetings}
                 onNewMeeting={() => { setEditorNote(undefined); navigate("editor") }}
@@ -340,7 +362,7 @@ export function App() {
         )}
         {view === "settings" && (
           <motion.div key="settings" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-            <main className="h-screen overflow-y-auto">
+            <main className="scroll-fade h-screen overflow-y-auto">
               <SettingsPage
                 onBack={goBackFromSettings}
                 onClearData={handleClearData}

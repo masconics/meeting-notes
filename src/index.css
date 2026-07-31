@@ -41,6 +41,81 @@
     --sidebar-ring: oklch(0.708 0 0);
     --highlight: oklch(0.852 0.199 91.936);
     --brand: oklch(0.623 0.214 259.815);
+    /* AI radial ramp — glass orb (coral → violet) + shared sheens */
+    --ai-coral: oklch(0.78 0.12 25);
+    --ai-coral-deep: oklch(0.68 0.16 15);
+    --ai-violet: oklch(0.52 0.24 290);
+    --ai-violet-deep: oklch(0.42 0.22 285);
+    --ai-hue-mid: oklch(0.58 0.2 300);
+    --ai-sheen-base: color-mix(in oklch, var(--foreground) 52%, transparent);
+    --ai-sheen-accent: var(--ai-violet);
+    /* Moving radial for text/sheen (animated via background-position) */
+    --ai-gradient: radial-gradient(
+      140% 220% at 0% 50%,
+      var(--ai-sheen-base) 0%,
+      var(--ai-coral) 22%,
+      var(--ai-hue-mid) 42%,
+      var(--ai-violet) 62%,
+      var(--ai-sheen-base) 100%
+    );
+    /* Soft surface wash for marks / chips */
+    --ai-ramp: radial-gradient(
+      circle at 32% 28%,
+      color-mix(in oklch, var(--ai-coral) 55%, white) 0%,
+      color-mix(in oklch, var(--ai-coral) 28%, transparent) 30%,
+      color-mix(in oklch, var(--ai-violet) 22%, transparent) 58%,
+      color-mix(in oklch, var(--ai-violet) 10%, transparent) 78%,
+      transparent 100%
+    );
+    --ai-ramp-strong: radial-gradient(
+      circle at 30% 24%,
+      color-mix(in oklch, var(--ai-coral) 70%, white) 0%,
+      var(--ai-coral-deep) 28%,
+      var(--ai-violet) 62%,
+      var(--ai-violet-deep) 100%
+    );
+    /* Glass orb face — matches enhance reference */
+    --ai-orb: radial-gradient(
+      circle at 32% 28%,
+      oklch(0.96 0.03 30 / 0.95) 0%,
+      oklch(0.82 0.1 20 / 0.55) 18%,
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at 70% 65%,
+      oklch(0.48 0.26 290) 0%,
+      oklch(0.42 0.22 285) 55%,
+      oklch(0.38 0.18 280) 100%
+    ),
+    linear-gradient(
+      135deg,
+      oklch(0.78 0.13 18) 0%,
+      oklch(0.62 0.18 340) 38%,
+      oklch(0.5 0.24 290) 72%,
+      oklch(0.44 0.22 280) 100%
+    );
+    --ai-orb-busy: radial-gradient(
+      circle at 32% 26%,
+      oklch(0.98 0.02 40 / 0.98) 0%,
+      oklch(0.85 0.1 20 / 0.6) 16%,
+      transparent 40%
+    ),
+    linear-gradient(
+      135deg,
+      oklch(0.82 0.14 18) 0%,
+      oklch(0.58 0.22 320) 42%,
+      oklch(0.46 0.26 290) 100%
+    );
+    --ai-gradient-vertical: radial-gradient(
+      ellipse 90% 120% at 50% 0%,
+      var(--ai-coral) 0%,
+      color-mix(in oklch, var(--ai-hue-mid) 50%, var(--ai-violet)) 45%,
+      color-mix(in oklch, var(--ai-violet) 40%, transparent) 100%
+    );
+    --ai-glow: color-mix(in oklch, var(--ai-violet) 55%, transparent);
+    --ai-glow-coral: color-mix(in oklch, var(--ai-coral) 50%, transparent);
+    --ai-soft: color-mix(in oklch, var(--ai-violet) 10%, transparent);
+    --ai-soft-strong: color-mix(in oklch, var(--ai-violet) 16%, transparent);
     /* Syntax highlighting tokens (highlight.js) */
     --code-keyword: oklch(0.52 0.2 15);
     --code-string: oklch(0.44 0.1 255);
@@ -87,6 +162,77 @@
     --sidebar-ring: oklch(0.556 0 0);
     --highlight: oklch(0.852 0.199 91.936);
     --brand: oklch(0.707 0.165 254.624);
+    --ai-coral: oklch(0.8 0.11 25);
+    --ai-coral-deep: oklch(0.7 0.14 18);
+    --ai-violet: oklch(0.62 0.2 295);
+    --ai-violet-deep: oklch(0.5 0.2 288);
+    --ai-hue-mid: oklch(0.72 0.16 300);
+    --ai-sheen-base: color-mix(in oklch, var(--foreground) 48%, transparent);
+    --ai-sheen-accent: var(--ai-violet);
+    --ai-gradient: radial-gradient(
+      140% 220% at 0% 50%,
+      var(--ai-sheen-base) 0%,
+      var(--ai-coral) 22%,
+      var(--ai-hue-mid) 42%,
+      var(--ai-violet) 62%,
+      var(--ai-sheen-base) 100%
+    );
+    --ai-ramp: radial-gradient(
+      circle at 32% 28%,
+      color-mix(in oklch, var(--ai-coral) 50%, white) 0%,
+      color-mix(in oklch, var(--ai-coral) 30%, transparent) 28%,
+      color-mix(in oklch, var(--ai-violet) 24%, transparent) 55%,
+      color-mix(in oklch, var(--ai-violet) 12%, transparent) 75%,
+      transparent 100%
+    );
+    --ai-ramp-strong: radial-gradient(
+      circle at 30% 24%,
+      color-mix(in oklch, var(--ai-coral) 70%, white) 0%,
+      var(--ai-coral-deep) 28%,
+      var(--ai-violet) 62%,
+      var(--ai-violet-deep) 100%
+    );
+    --ai-orb: radial-gradient(
+      circle at 32% 28%,
+      oklch(0.96 0.03 30 / 0.95) 0%,
+      oklch(0.82 0.1 20 / 0.55) 18%,
+      transparent 42%
+    ),
+    radial-gradient(
+      circle at 70% 65%,
+      oklch(0.55 0.24 295) 0%,
+      oklch(0.48 0.22 290) 55%,
+      oklch(0.42 0.18 285) 100%
+    ),
+    linear-gradient(
+      135deg,
+      oklch(0.8 0.12 18) 0%,
+      oklch(0.65 0.18 340) 38%,
+      oklch(0.55 0.22 295) 72%,
+      oklch(0.48 0.2 285) 100%
+    );
+    --ai-orb-busy: radial-gradient(
+      circle at 32% 26%,
+      oklch(0.98 0.02 40 / 0.98) 0%,
+      oklch(0.85 0.1 20 / 0.6) 16%,
+      transparent 40%
+    ),
+    linear-gradient(
+      135deg,
+      oklch(0.85 0.13 18) 0%,
+      oklch(0.62 0.22 320) 42%,
+      oklch(0.5 0.26 290) 100%
+    );
+    --ai-gradient-vertical: radial-gradient(
+      ellipse 90% 120% at 50% 0%,
+      var(--ai-coral) 0%,
+      color-mix(in oklch, var(--ai-hue-mid) 50%, var(--ai-violet)) 45%,
+      color-mix(in oklch, var(--ai-violet) 40%, transparent) 100%
+    );
+    --ai-glow: color-mix(in oklch, var(--ai-violet) 55%, transparent);
+    --ai-glow-coral: color-mix(in oklch, var(--ai-coral) 50%, transparent);
+    --ai-soft: color-mix(in oklch, var(--ai-violet) 14%, transparent);
+    --ai-soft-strong: color-mix(in oklch, var(--ai-violet) 22%, transparent);
     /* Syntax highlighting tokens (highlight.js) */
     --code-keyword: oklch(0.72 0.18 15);
     --code-string: oklch(0.8 0.1 235);
@@ -142,6 +288,8 @@
     --font-heading: var(--font-sans);
     --color-brand: var(--brand);
     --color-highlight: var(--highlight);
+    --color-ai-soft: var(--ai-soft);
+    --color-ai-glow: var(--ai-glow);
 }
 
 [data-tauri-drag-region] {
@@ -167,18 +315,49 @@
 @layer base {
   * {
     @apply border-border outline-ring/50;
-    }
-  body {
-    @apply font-sans bg-background text-foreground;
-    }
+    /* Hide scrollbars app-wide; overflow still scrolls (trackpad / wheel). */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  *::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
   html {
     @apply font-sans;
-    }
+  }
+  /* Desktop-app chrome: double-click/drag must not select UI labels.
+     Re-enable only in real content surfaces (editor, fields, copyable notes). */
+  body {
+    @apply font-sans bg-background text-foreground;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  input,
+  textarea,
+  select,
+  [contenteditable="true"],
+  [contenteditable=""],
+  [data-selectable],
+  .select-text,
+  .pm-editor,
+  .pm-editor .ProseMirror,
+  .mdx-content,
+  .ProseMirror {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 
 @layer components {
+  /*
+   * Granola-style content column (~48rem / 768px).
+   * Home, settings, and chrome share this so the app feels one-width.
+   */
   .app-page {
-    @apply mx-auto flex min-h-full w-full max-w-6xl flex-col gap-3 px-6 py-5 sm:px-8 lg:px-12;
+    @apply mx-auto flex min-h-full w-full max-w-3xl flex-col gap-3 px-5 py-5 sm:px-8;
   }
 
   .app-page-narrow {
@@ -186,7 +365,7 @@
   }
 
   .app-page-header {
-    @apply flex items-start justify-between gap-4 border-b border-border/60 pb-4;
+    @apply border-b border-border/60 pb-4;
   }
 
   .app-page-title {
@@ -214,15 +393,137 @@
   }
 
   .app-control-strip {
-    @apply inline-flex items-center rounded-2xl bg-muted p-0.5 ring-1 ring-border/70;
+    @apply inline-flex select-none items-center rounded-2xl bg-muted p-0.5 ring-1 ring-border/70;
   }
 
   .app-control-item {
-    @apply inline-flex h-8 items-center gap-1 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground;
+    @apply inline-flex h-8 select-none items-center gap-1 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground;
   }
 
   .app-control-item[data-active="true"] {
     @apply bg-background text-foreground shadow-sm;
+  }
+
+  /* ── Dashboard (Granola-inspired home) ───────────────────────────── */
+  .dashboard-shell {
+    @apply flex h-full min-h-0 w-full flex-col bg-background;
+  }
+
+  .dashboard-topbar {
+    @apply shrink-0 border-b border-border/40 bg-background/80 backdrop-blur-xl;
+  }
+
+  .dashboard-topbar-inner {
+    /* Granola-style column — same max as .app-page */
+    @apply mx-auto grid w-full max-w-3xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-5 py-3 sm:px-8;
+  }
+
+  .dashboard-nav {
+    @apply inline-flex select-none items-center gap-0.5 rounded-full bg-muted/70 p-0.5 ring-1 ring-border/50;
+  }
+
+  .dashboard-nav-item {
+    @apply inline-flex h-8 select-none items-center rounded-full px-3.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground;
+  }
+
+  .dashboard-nav-item[data-active="true"] {
+    @apply bg-background text-foreground shadow-sm;
+  }
+
+  .dashboard-body {
+    @apply scroll-fade mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-5 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6;
+  }
+
+  .dashboard-filters {
+    @apply flex flex-col gap-2;
+  }
+
+  /* ── Actions inbox (Linear / Todoist-style) ──────────────────────── */
+  .actions-chip {
+    @apply inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30;
+  }
+
+  .actions-chip-active {
+    @apply bg-muted text-foreground shadow-sm ring-1 ring-border/60;
+  }
+
+  .actions-avatar {
+    @apply inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-foreground/10 text-[10px] font-semibold text-foreground;
+  }
+
+  .actions-avatar-sm {
+    @apply size-4 text-[9px];
+  }
+
+  .actions-list {
+    @apply flex flex-col;
+  }
+
+  .actions-row {
+    @apply select-none;
+  }
+
+  .dashboard-day-label {
+    @apply px-2 pb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/75;
+  }
+
+  .dashboard-note-row {
+    @apply flex cursor-pointer items-start gap-3 rounded-2xl border border-border/70 bg-card/40 px-3 py-3.5 outline-none transition-colors hover:border-border hover:bg-muted/45 focus-visible:ring-2 focus-visible:ring-ring;
+  }
+
+  .dashboard-day-label + ul {
+    @apply flex flex-col gap-2;
+  }
+
+  .dashboard-empty {
+    @apply flex flex-1 flex-col items-center justify-center gap-4 py-16;
+  }
+
+  /* ── Folders ─────────────────────────────────────────────────────── */
+  .folder-rail {
+    /* Fixed track height so create/manage UI never reflows the dashboard. */
+    @apply min-h-8 min-w-0;
+  }
+
+  .folder-rail-scroll {
+    @apply scroll-fade-x flex h-8 items-center gap-1 overflow-x-auto overflow-y-hidden;
+  }
+
+  .folder-pill-group {
+    @apply inline-flex h-8 shrink-0 items-center;
+  }
+
+  .folder-pill {
+    @apply inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+  }
+
+  .folder-pill-active {
+    @apply bg-muted text-foreground shadow-sm ring-1 ring-border/60;
+  }
+
+  .folder-pill-count {
+    @apply text-[10px] text-muted-foreground/80;
+  }
+
+  .folder-pill-active .folder-pill-count {
+    @apply text-muted-foreground;
+  }
+
+  .folder-dot {
+    @apply size-2 shrink-0 rounded-full ring-1 ring-foreground/10;
+  }
+
+  .folder-pill-menu {
+    @apply -ml-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground/0 transition-colors hover:bg-muted hover:text-muted-foreground focus-visible:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/folder:text-muted-foreground;
+  }
+
+  .folder-pill-group:hover .folder-pill-menu,
+  .folder-pill-group:focus-within .folder-pill-menu {
+    @apply text-muted-foreground;
+  }
+
+  .folder-new-btn {
+    @apply h-8;
   }
 
   .app-scrollbar-hidden {
@@ -232,6 +533,568 @@
 
   .app-scrollbar-hidden::-webkit-scrollbar {
     display: none;
+  }
+
+  /* ── Editor shell (production note surface) ─────────────────────── */
+  .editor-shell {
+    @apply flex h-full w-full flex-col bg-background;
+  }
+
+  .editor-header {
+    @apply relative z-30 flex min-h-12 shrink-0 items-center gap-2 border-b border-border/40 bg-background/75 px-2.5 backdrop-blur-xl sm:gap-3 sm:px-3;
+  }
+
+  .editor-header-cluster {
+    @apply flex items-center gap-0.5 rounded-2xl bg-muted/50 p-0.5 ring-1 ring-border/50;
+  }
+
+  .editor-header-status {
+    @apply inline-flex max-w-full items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground;
+  }
+
+  .editor-header-status[data-state="busy"] {
+    color: var(--brand);
+    background: var(--ai-soft);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--brand) 16%, transparent);
+  }
+
+  .editor-header-status[data-state="dirty"] {
+    background: color-mix(in oklch, oklch(0.75 0.12 75) 12%, transparent);
+  }
+
+  .editor-header-status[data-state="saved"] {
+    background: color-mix(in oklch, oklch(0.72 0.12 155) 12%, transparent);
+  }
+
+  /* 3-column workbench: Info | Editor | Chat */
+  .editor-layout {
+    @apply relative flex min-h-0 flex-1 overflow-hidden;
+  }
+
+  .editor-col-info {
+    /* Opaque card surface — bg-muted/10 looked transparent at min window sizes.
+       Width is driven by Framer Motion; keep shrink-0 so the editor doesn't crush it. */
+    @apply flex shrink-0 flex-col overflow-hidden border-r border-border/50 bg-card;
+  }
+
+  /* Left details rail — dense inspector, not a second page */
+  .editor-info-header {
+    @apply flex shrink-0 items-start justify-between gap-2 border-b border-border/40 bg-card px-3 py-2.5;
+  }
+
+  .editor-info-body {
+    /* No scroll-fade here: nested masks + short min-height windows make the rail look transparent. */
+    @apply flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-3;
+  }
+
+  .editor-info-section {
+    @apply flex flex-col gap-1.5;
+  }
+
+  .editor-info-section--grow {
+    @apply min-h-0 flex-1;
+  }
+
+  .editor-info-section-head {
+    @apply flex h-6 items-center justify-between gap-2;
+  }
+
+  .editor-info-label {
+    @apply text-[11px] font-medium uppercase tracking-[0.05em] text-muted-foreground;
+  }
+
+  .editor-info-people {
+    @apply flex flex-col gap-0.5;
+  }
+
+  .editor-info-person {
+    @apply flex items-center gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-foreground/[0.03];
+  }
+
+  .editor-info-person--edit {
+    @apply gap-1 bg-muted/40;
+  }
+
+  .editor-info-avatar {
+    @apply flex size-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold uppercase;
+  }
+
+  .editor-info-avatar--muted {
+    @apply bg-muted text-muted-foreground;
+  }
+
+  .editor-info-avatar--brand {
+    @apply bg-brand/10 text-brand;
+  }
+
+  .editor-info-quiet-action {
+    @apply self-start text-[11px] text-muted-foreground/80 underline-offset-2 transition-colors hover:text-foreground hover:underline;
+  }
+
+  .editor-info-loops {
+    @apply flex min-h-0 flex-col gap-0.5 overflow-y-auto;
+  }
+
+  .editor-info-footer {
+    @apply shrink-0 border-t border-border/40 bg-card px-2 py-2;
+  }
+
+  .editor-info-loop {
+    @apply flex items-start gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-foreground/[0.03];
+  }
+
+  .editor-info-loop-check {
+    @apply mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 disabled:pointer-events-none;
+  }
+
+  .editor-info-loop-box {
+    @apply size-3.5 rounded-[0.3rem] border-[1.5px] border-border bg-background;
+  }
+
+  .editor-info-loop-check:hover .editor-info-loop-box {
+    border-color: color-mix(in oklch, var(--foreground) 35%, var(--border));
+  }
+
+  .editor-info-link {
+    @apply w-full truncate rounded-lg px-1.5 py-1.5 text-left text-[12px] text-muted-foreground transition-colors hover:bg-foreground/[0.03] hover:text-foreground;
+  }
+
+  .editor-info-footer-btn {
+    @apply flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[12px] text-foreground/90 transition-colors hover:bg-foreground/[0.04];
+  }
+
+  /* Post-meeting artifacts (action digest, standup, follow-up) */
+  .editor-artifacts {
+    @apply mt-6 flex flex-col gap-2;
+  }
+
+  .editor-artifacts-head {
+    @apply flex flex-wrap items-baseline justify-between gap-2;
+  }
+
+  .editor-artifacts-tabs {
+    @apply flex flex-wrap select-none gap-1;
+  }
+
+  .editor-artifacts-tab {
+    @apply inline-flex h-8 max-w-full select-none items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground;
+  }
+
+  .editor-artifacts-tab--active {
+    @apply bg-muted text-foreground shadow-sm ring-1 ring-border/60;
+  }
+
+  .editor-artifacts-tab--ready:not(.editor-artifacts-tab--active) {
+    @apply text-foreground/85;
+  }
+
+  .editor-artifacts-panel {
+    @apply overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10;
+  }
+
+  .editor-artifacts-body {
+    @apply scroll-fade max-h-[min(18rem,40vh)] select-text overflow-y-auto px-3 py-2.5 text-muted-foreground;
+  }
+
+  .editor-artifacts-quick {
+    @apply flex flex-wrap gap-1.5;
+  }
+
+  .editor-col-main {
+    @apply flex min-w-0 flex-1 flex-col overflow-hidden bg-background;
+    /* Canvas measure is driven by the *available* main column, not the viewport. */
+    container-type: inline-size;
+    container-name: editor-main;
+  }
+
+  .editor-col-chat {
+    @apply relative flex w-[min(20rem,28vw)] shrink-0 flex-col overflow-hidden border-l border-border/50 bg-card;
+  }
+
+  .editor-side-scroll {
+    @apply scroll-fade flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3.5;
+  }
+
+  .editor-side-section {
+    @apply flex flex-col gap-2;
+  }
+
+  .editor-side-label {
+    @apply text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground;
+  }
+
+  /*
+   * Editor measure (responsive writing column)
+   * ----------------------------------------
+   * Uses the main-column container (cqi), not the viewport, so Info/Chat
+   * correctly change available width.
+   *
+   *   gutter = clamp(1rem, 2.25cqi + 0.75rem, 3.25rem)
+   *   width  = min(100% of column, 80rem)   ← fill available, soft cap ~1280px
+   *   pad    = gutter (inside width; border-box)
+   *
+   * Replaces the old fixed max-w-[42rem] (~672px) that wasted wide screens.
+   */
+  .editor-canvas {
+    --editor-gutter: clamp(1rem, 2.25cqi + 0.75rem, 3.25rem);
+    --editor-cap: 80rem;
+
+    box-sizing: border-box;
+    display: flex;
+    width: min(100%, var(--editor-cap));
+    max-width: 100%;
+    min-height: 100%;
+    margin-inline: auto;
+    flex-direction: column;
+    padding-inline: var(--editor-gutter);
+    padding-top: clamp(1.5rem, 1.1cqi + 1.1rem, 2.75rem);
+    padding-bottom: clamp(5rem, 7cqi, 7rem);
+  }
+
+  @supports not (width: 1cqi) {
+    .editor-canvas {
+      --editor-gutter: clamp(1rem, 3vw, 3rem);
+      width: min(100%, 80rem);
+      padding-inline: var(--editor-gutter);
+      padding-top: clamp(1.5rem, 2vw + 1rem, 2.75rem);
+      padding-bottom: 6rem;
+    }
+  }
+
+  /* Same measure as the note body — full canvas content box, not content-sized */
+  .editor-title-row {
+    @apply relative w-full min-w-0;
+  }
+
+  .editor-title-input {
+    @apply box-border h-auto min-h-[1.15em] w-full min-w-0 max-w-full resize-none overflow-hidden border-none bg-transparent px-0 py-0 font-heading font-semibold leading-[1.15] tracking-tight text-foreground outline-none placeholder:text-muted-foreground/35 focus-visible:ring-0;
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    font-size: clamp(1.5rem, 1.2rem + 0.9cqi, 2.25rem);
+    /* Height is grown in JS; never shrink width to content */
+    field-sizing: fixed;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .editor-title-row:has(.editor-title-action) .editor-title-input {
+    padding-inline-end: 2.5rem; /* room for absolute AI title action */
+  }
+
+  .editor-title-action {
+    @apply absolute end-0 top-0.5;
+  }
+
+  .editor-description-input {
+    @apply mt-2 box-border min-h-[2.5rem] w-full max-w-full resize-none border-none bg-transparent px-0 py-0 text-[14px] leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/40 focus-visible:ring-0;
+    field-sizing: content;
+  }
+
+  @supports not (width: 1cqi) {
+    .editor-title-input {
+      font-size: clamp(1.5rem, 1.2rem + 1vw, 2.125rem);
+    }
+  }
+
+  .editor-meta {
+    @apply mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] tabular-nums text-muted-foreground;
+  }
+
+  .editor-meta-sep {
+    @apply text-border select-none;
+  }
+
+  .editor-chip {
+    @apply inline-flex items-center gap-1.5 rounded-full bg-muted/80 px-2.5 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted;
+  }
+
+  /* Floating capture dock (Granola-style) — centered island, not a full bar */
+  .editor-capture {
+    @apply pointer-events-none relative z-20 shrink-0 px-3 pb-3 pt-1 sm:px-4 sm:pb-4;
+  }
+
+  .editor-capture::before {
+    content: "";
+    position: absolute;
+    inset: auto 0 0 0;
+    height: 5.5rem;
+    pointer-events: none;
+    background: linear-gradient(
+      to top,
+      color-mix(in oklch, var(--background) 92%, transparent) 18%,
+      color-mix(in oklch, var(--background) 40%, transparent) 58%,
+      transparent
+    );
+  }
+
+  .editor-capture-inner {
+    @apply pointer-events-auto relative z-10 mx-auto flex w-full justify-center;
+  }
+
+  .editor-dock {
+    @apply flex max-w-full items-center gap-1 rounded-[1.35rem] bg-card/95 p-1.5 shadow-[0_12px_40px_-16px_rgba(0,0,0,0.45)] ring-1 ring-foreground/10 backdrop-blur-xl dark:bg-card/90 dark:shadow-[0_16px_48px_-12px_rgba(0,0,0,0.7)] dark:ring-foreground/12;
+  }
+
+  .editor-dock[data-state="live"] {
+    @apply w-full max-w-xl gap-1.5 p-1.5 ring-destructive/20 sm:max-w-2xl;
+  }
+
+  .editor-dock[data-state="paused"] {
+    @apply w-full max-w-md gap-1.5 ring-amber-500/25 sm:max-w-lg;
+  }
+
+  .editor-dock[data-state="processing"] {
+    @apply gap-2 px-3 py-2;
+  }
+
+  .editor-dock-divider {
+    @apply mx-0.5 h-5 w-px shrink-0 bg-border/80;
+  }
+
+  .editor-dock-status {
+    @apply flex min-w-0 flex-1 items-center gap-2 px-1.5 sm:gap-2.5 sm:px-2;
+  }
+
+  /* ── AI chrome (radial ramps) — data-ai="idle|active|busy" ── */
+
+  .ai-mark {
+    @apply inline-flex size-7 shrink-0 items-center justify-center rounded-full;
+    color: oklch(0.99 0 0);
+    background: var(--ai-orb);
+    box-shadow:
+      inset 0 1px 1px oklch(1 0 0 / 0.45),
+      0 0 12px -3px var(--ai-glow),
+      0 0 10px -4px var(--ai-glow-coral);
+    transition: background 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+  }
+  .ai-mark[data-ai="active"] {
+    background: var(--ai-orb);
+    filter: brightness(1.04);
+  }
+  .ai-mark[data-ai="busy"] {
+    background: var(--ai-orb-busy);
+    box-shadow:
+      inset 0 1px 1px oklch(1 0 0 / 0.55),
+      0 0 16px -2px var(--ai-glow),
+      0 0 14px -2px var(--ai-glow-coral);
+  }
+  .ai-mark[data-ai="busy"] svg {
+    animation: ai-icon-pulse 1.1s ease-in-out infinite;
+  }
+  /* White glyph on purple glass — beat .ai-icon violet */
+  .ai-mark,
+  .ai-mark .ai-icon,
+  .ai-mark svg {
+    color: oklch(0.99 0 0) !important;
+  }
+  .ai-mark svg {
+    filter: drop-shadow(0 0 4px oklch(1 0 0 / 0.35));
+  }
+
+  /* Text label: violet idle; radial sheen while busy */
+  .ai-label {
+    color: var(--ai-violet);
+    font-weight: 500;
+  }
+  .ai-label[data-ai="busy"] {
+    background-image: var(--ai-gradient);
+    background-size: 240% 140%;
+    background-position: 0% 50%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: ai-radial-sheen 1.5s ease-in-out infinite;
+  }
+
+  .ai-icon {
+    color: var(--ai-violet);
+  }
+
+  .ai-dot {
+    @apply size-1.5 shrink-0 rounded-full bg-muted-foreground/40;
+  }
+  .ai-dot[data-ai="busy"] {
+    background: var(--ai-ramp-strong);
+    background-color: var(--brand);
+    box-shadow: 0 0 0 3px var(--ai-soft-strong), 0 0 8px var(--ai-glow);
+    animation: ai-dot-pulse 1.1s ease-in-out infinite;
+  }
+
+  /*
+   * Enhance control — glass orb (coral → violet).
+   * Face + glow live on ::after / ::before so Button's transition-all and
+   * ghost hover never leave a rectangular “box” when busy→idle resets.
+   * Hover only swaps animation intensity — never sets static filter/transform
+   * on the same properties the keyframes drive (that killed motion on hover).
+   */
+  .ai-control {
+    position: relative;
+    isolation: isolate;
+    overflow: visible !important;
+    border-radius: 9999px !important;
+    border-color: transparent !important;
+    /* Transparent shell — gradient is only on the circular face pseudo */
+    background: transparent !important;
+    background-image: none !important;
+    background-color: transparent !important;
+    color: oklch(0.99 0 0) !important;
+    /* Kill Button transition-all (it interpolates multi-layer gradients badly) */
+    transition: transform 0.18s cubic-bezier(0.2, 0, 0, 1) !important;
+    box-shadow: none !important;
+  }
+  .ai-control:hover,
+  .ai-control:focus-visible,
+  .ai-control:disabled,
+  .ai-control[data-ai="idle"],
+  .ai-control[data-ai="busy"],
+  .ai-control[data-ai="active"] {
+    background: transparent !important;
+    background-image: none !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+  }
+  .ai-control > * {
+    position: relative;
+    z-index: 2;
+  }
+  /* Soft outer bloom — always a circle; motion via animation only */
+  .ai-control::before {
+    content: "";
+    position: absolute;
+    inset: -32%;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 40% 40%, var(--ai-glow-coral) 0%, transparent 55%),
+      radial-gradient(circle at 65% 55%, var(--ai-glow) 0%, transparent 58%);
+    opacity: 0.7;
+    filter: blur(10px);
+    z-index: 0;
+    pointer-events: none;
+    will-change: transform, opacity;
+    animation: ai-orb-glow-idle 3.2s ease-in-out infinite;
+  }
+  /* Circular glass face — always present so idle/busy never flash a box */
+  .ai-control::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: var(--ai-orb);
+    box-shadow:
+      inset 0 1px 1px oklch(1 0 0 / 0.55),
+      inset 0 -1px 2px oklch(0.35 0.12 285 / 0.35),
+      0 1px 2px oklch(0.4 0.12 290 / 0.18),
+      0 8px 22px -6px var(--ai-glow),
+      0 4px 16px -4px var(--ai-glow-coral);
+    z-index: 1;
+    pointer-events: none;
+    will-change: filter, transform;
+    /* Soft idle breathe — never transition background (box flash) */
+    animation: ai-orb-idle-breathe 3.2s ease-in-out infinite;
+  }
+  /* Hover: scale shell + faster glow/face loops (animations keep running) */
+  .ai-control:hover:not(:disabled) {
+    transform: scale(1.06);
+  }
+  .ai-control:hover:not(:disabled)::before {
+    animation: ai-orb-glow 1.35s ease-in-out infinite;
+  }
+  .ai-control:hover:not(:disabled)::after {
+    box-shadow:
+      inset 0 1px 1px oklch(1 0 0 / 0.65),
+      inset 0 -1px 2px oklch(0.35 0.12 285 / 0.3),
+      0 2px 4px oklch(0.4 0.12 290 / 0.2),
+      0 12px 28px -4px var(--ai-glow),
+      0 6px 20px -2px var(--ai-glow-coral);
+    animation: ai-orb-hover-sheen 1.25s ease-in-out infinite;
+  }
+  .ai-control[data-ai="busy"] {
+    cursor: progress;
+  }
+  .ai-control[data-ai="busy"]::after {
+    background: var(--ai-orb-busy);
+    background-image:
+      radial-gradient(circle at 30% 25%, oklch(1 0 0 / 0.35) 0%, transparent 42%),
+      radial-gradient(80% 80% at 70% 70%, oklch(0.7 0.18 300 / 0.35) 0%, transparent 60%),
+      var(--ai-orb-busy);
+    animation: ai-orb-face-sheen 1.6s ease-in-out infinite;
+  }
+  .ai-control[data-ai="busy"]::before {
+    animation: ai-orb-glow 1.4s ease-in-out infinite;
+  }
+  /* Busy + hover: keep motion, just snappier — do not assign static filter/transform */
+  .ai-control[data-ai="busy"]:hover:not(:disabled)::after,
+  .ai-control[data-ai="busy"]:disabled::after {
+    animation: ai-orb-face-sheen 1.2s ease-in-out infinite;
+  }
+  .ai-control[data-ai="busy"]:hover:not(:disabled)::before,
+  .ai-control[data-ai="busy"]:disabled::before {
+    animation: ai-orb-glow 1.15s ease-in-out infinite;
+  }
+  .ai-control[data-ai="busy"] svg {
+    animation: ai-icon-pulse 1.1s ease-in-out infinite;
+    filter: drop-shadow(0 0 4px oklch(1 0 0 / 0.5));
+  }
+  .ai-control[data-ai="busy"]:disabled {
+    opacity: 1 !important;
+    /* Beat Button disabled:pointer-events-none so hover loops still apply */
+    pointer-events: auto !important;
+    cursor: progress !important;
+  }
+  /* Compact circular orb variant (dock enhance) */
+  .ai-control--orb {
+    @apply size-9 shrink-0 gap-0 p-0;
+    border-radius: 9999px !important;
+    /* Beat Button size-icon (size-8) + rounded-2xl */
+    width: 2.25rem !important;
+    height: 2.25rem !important;
+    min-width: 2.25rem !important;
+    padding: 0 !important;
+  }
+  .ai-control--orb .ai-control-label {
+    @apply sr-only;
+  }
+
+  .ai-status {
+    @apply inline-flex items-center gap-2 text-xs font-medium;
+  }
+  .ai-status[data-ai="busy"] {
+    color: var(--ai-violet);
+  }
+  .ai-status[data-ai="busy"] .ai-status-text {
+    background-image: var(--ai-gradient);
+    background-size: 240% 140%;
+    background-position: 0% 50%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: ai-radial-sheen 1.5s ease-in-out infinite;
+  }
+
+  .ai-ring[data-ai="active"],
+  .ai-ring[data-ai="busy"] {
+    box-shadow: 0 0 0 1px color-mix(in oklch, var(--brand) 28%, transparent);
+    color: var(--brand);
+  }
+
+  .editor-pane {
+    @apply flex min-h-0 flex-col overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10;
+  }
+
+  .editor-pane-header {
+    @apply flex items-center justify-between gap-2 px-3 py-2 text-[11px] font-medium tracking-wide text-muted-foreground;
+  }
+
+  /* Narrow viewports: side columns become overlays so the editor stays usable */
+  @media (max-width: 1023px) {
+    .editor-col-info {
+      @apply absolute inset-y-0 left-0 z-20 w-[min(18.5rem,88vw)] shadow-xl ring-1 ring-foreground/10;
+    }
+    .editor-col-chat {
+      @apply absolute inset-y-0 right-0 z-20 w-[min(20rem,90vw)] shadow-xl ring-1 ring-foreground/10;
+    }
   }
 }
 
@@ -680,21 +1543,93 @@
   color: var(--muted-foreground);
 }
 
-.mdx-brief { font-size: inherit; line-height: inherit; color: inherit; }
+/* Brief body — compact prep type (sidebar density, not full note prose) */
+.mdx-brief {
+  font-size: 0.75rem; /* 12px */
+  line-height: 1.45;
+  color: inherit;
+  -webkit-font-smoothing: antialiased;
+}
 .mdx-brief > *:first-child { margin-top: 0; }
 .mdx-brief > *:last-child { margin-bottom: 0; }
 .mdx-brief h1,
 .mdx-brief h2,
-.mdx-brief h3 { font-size: 0.9em; font-weight: 650; margin: 0.5em 0 0.3em; color: var(--foreground); }
-.mdx-brief p { margin: 0 0 0.4em; }
-.mdx-brief strong { color: var(--foreground); font-weight: 650; }
+.mdx-brief h3 {
+  font-size: 0.6875rem; /* 11px */
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin: 0.85em 0 0.3em;
+  color: var(--muted-foreground);
+}
+.mdx-brief h1:first-child,
+.mdx-brief h2:first-child,
+.mdx-brief h3:first-child { margin-top: 0; }
+.mdx-brief p {
+  margin: 0 0 0.4em;
+  color: color-mix(in oklch, var(--foreground) 72%, var(--muted-foreground));
+}
+.mdx-brief strong { color: var(--foreground); font-weight: 600; }
 .mdx-brief ul,
-.mdx-brief ol { display: flex; flex-direction: column; gap: 0.15em; margin: 0.2em 0 0.5em; padding-left: 1.2em; }
-.mdx-brief li { margin: 0; }
-.mdx-brief blockquote { margin: 0.4em 0; padding: 0.3em 0.6em; border-left: 0.15em solid var(--primary); border-radius: 0 4px 4px 0; background: color-mix(in oklch, var(--primary) 6%, var(--background)); }
-.mdx-brief code { border-radius: 0.25em; background: var(--muted); padding: 0.05em 0.3em; font-size: 0.88em; }
-.mdx-brief hr { height: 1px; margin: 0.6em 0; border: 0; background: var(--border); }
-.mdx-brief a { color: var(--primary); text-decoration: underline; }
+.mdx-brief ol {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  margin: 0.05em 0 0.45em;
+  padding-left: 1em;
+}
+.mdx-brief li {
+  margin: 0;
+  color: color-mix(in oklch, var(--foreground) 70%, var(--muted-foreground));
+}
+.mdx-brief li::marker {
+  color: var(--muted-foreground);
+}
+.mdx-brief blockquote {
+  margin: 0.35em 0;
+  padding: 0 0 0 0.6em;
+  border-left: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+}
+.mdx-brief code {
+  border-radius: 0.25em;
+  background: var(--muted);
+  padding: 0.05em 0.25em;
+  font-size: 0.92em;
+}
+.mdx-brief hr {
+  height: 1px;
+  margin: 0.55em 0;
+  border: 0;
+  background: var(--border);
+}
+.mdx-brief a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.mdx-brief table {
+  width: 100%;
+  font-size: 0.92em;
+  border-collapse: collapse;
+  margin: 0.3em 0 0.45em;
+}
+.mdx-brief th,
+.mdx-brief td {
+  text-align: left;
+  padding: 0.2em 0.35em;
+  border-bottom: 1px solid var(--border);
+}
+.mdx-brief th {
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.editor-brief__body {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 22%, transparent) transparent;
+}
 
 /* ProseMirror editor */
 .pm-editor {
@@ -747,21 +1682,14 @@
   caret-color: transparent;
 }
 .pm-editor .ProseMirror .pm-ai-writing {
-  /* The sweep needs real contrast to be visible: --primary is a neutral
-     gray in this theme, so a primary-based gradient shimmers imperceptibly.
-     --brand is the chromatic accent; the dimmed-foreground base makes the
-     accent band read as it passes. */
-  background: linear-gradient(
-    90deg,
-    color-mix(in oklch, var(--foreground) 55%, transparent),
-    var(--brand),
-    color-mix(in oklch, var(--foreground) 55%, transparent)
-  );
-  background-size: 220% 100%;
+  /* Radial ramp sheen — same token language as AI chrome */
+  background-image: var(--ai-gradient);
+  background-size: 240% 160%;
+  background-position: 0% 50%;
   background-clip: text;
   -webkit-background-clip: text;
   color: transparent !important;
-  animation: pm-ai-writing-sheen 1.4s ease-in-out infinite;
+  animation: ai-radial-sheen 1.5s ease-in-out infinite;
 }
 /* Nested marks (code, links, hljs tokens) must inherit the sheen, not fight
    it with their own colors. */
@@ -803,12 +1731,8 @@
   height: 1em;
   margin-left: 0.15rem;
   border-radius: 999px;
-  background: linear-gradient(
-    to bottom,
-    var(--brand),
-    color-mix(in oklch, var(--brand) 30%, transparent)
-  );
-  box-shadow: 0 0 8px color-mix(in oklch, var(--brand) 60%, transparent);
+  background: var(--ai-gradient-vertical);
+  box-shadow: 0 0 8px var(--ai-glow);
   vertical-align: -0.15em;
   animation: pm-ai-caret 0.85s ease-in-out infinite;
 }
@@ -816,29 +1740,87 @@
   border-radius: 3px;
   animation: pm-ai-settle 0.8s ease-out forwards;
 }
+/* Linear fallback name kept for any external refs */
 @keyframes pm-ai-writing-sheen {
   from { background-position: 140% 0; }
   to { background-position: -120% 0; }
+}
+/* Radial ramp drift across text / sheen surfaces */
+@keyframes ai-radial-sheen {
+  0% { background-position: 0% 45%; }
+  50% { background-position: 100% 55%; }
+  100% { background-position: 0% 45%; }
+}
+@keyframes ai-radial-drift {
+  0% { transform: translate(-12%, -8%) scale(1); }
+  50% { transform: translate(10%, 6%) scale(1.08); }
+  100% { transform: translate(-12%, -8%) scale(1); }
 }
 @keyframes pm-ai-caret {
   0%, 100% { opacity: 0.25; transform: scaleY(0.75); }
   50% { opacity: 1; transform: scaleY(1); }
 }
 @keyframes pm-ai-settle {
-  from { background-color: color-mix(in oklch, var(--brand) 16%, transparent); }
+  from { background-color: var(--ai-soft-strong); }
   to { background-color: transparent; }
+}
+@keyframes ai-icon-pulse {
+  0%, 100% { opacity: 0.75; filter: drop-shadow(0 0 2px var(--ai-glow)); }
+  50% { opacity: 1; filter: drop-shadow(0 0 8px var(--ai-glow)); }
+}
+@keyframes ai-dot-pulse {
+  0%, 100% { transform: scale(0.92); opacity: 0.7; }
+  50% { transform: scale(1); opacity: 1; }
+}
+@keyframes ai-orb-glow-idle {
+  0%, 100% { opacity: 0.62; transform: scale(0.96); }
+  50% { opacity: 0.88; transform: scale(1.04); }
+}
+@keyframes ai-orb-glow {
+  0%, 100% { opacity: 0.75; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+@keyframes ai-orb-idle-breathe {
+  0%, 100% { filter: brightness(1); transform: scale(1); }
+  50% { filter: brightness(1.06); transform: scale(1.02); }
+}
+@keyframes ai-orb-hover-sheen {
+  0%, 100% { filter: brightness(1.04); transform: scale(1); }
+  50% { filter: brightness(1.12); transform: scale(1.03); }
+}
+/* Busy face pulse — filter + scale only, never background */
+@keyframes ai-orb-face-sheen {
+  0%, 100% { filter: brightness(1); transform: scale(1); }
+  50% { filter: brightness(1.12); transform: scale(1.04); }
 }
 @media (prefers-reduced-motion: reduce) {
   .pm-editor .ProseMirror .pm-ai-writing,
   .pm-editor .ProseMirror .pm-ai-caret,
-  .pm-editor .ProseMirror .pm-ai-settled {
-    animation: none;
+  .pm-editor .ProseMirror .pm-ai-settled,
+  .ai-label[data-ai="busy"],
+  .ai-mark[data-ai="busy"] svg,
+  .ai-dot[data-ai="busy"],
+  .ai-control::before,
+  .ai-control::after,
+  .ai-control[data-ai="busy"] svg,
+  .ai-status[data-ai="busy"] .ai-status-text {
+    animation: none !important;
   }
-  /* Without motion the sheen would freeze mid-gradient and could leave text
-     semi-transparent — fall back to plain readable text + a static caret. */
   .pm-editor .ProseMirror .pm-ai-writing {
     background: none;
     color: inherit;
+  }
+  .ai-label[data-ai="busy"],
+  .ai-status[data-ai="busy"] .ai-status-text {
+    background: none;
+    color: var(--ai-violet);
+  }
+  .ai-control:hover:not(:disabled) {
+    transform: none;
+  }
+  .ai-control::after {
+    filter: none;
+    transform: none;
   }
 }
 /* All content typography (headings, lists, tables, code, quotes…) comes

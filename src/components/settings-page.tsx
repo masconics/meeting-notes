@@ -63,17 +63,25 @@ import {
   saveDictionary,
   saveSettings,
   saveSnippets,
+  loadRecipes,
+  saveRecipes,
+  upsertRecipe,
+  deleteRecipe,
+  loadSlackWebhookUrl,
+  saveSlackWebhookUrl,
 } from "@/lib/storage"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { testConnection } from "@/lib/ai-service"
 import { exportAllMeetings, exportAllMeetingsMarkdown } from "@/lib/export"
-import type { AppSettings, AISettings, DictionaryEntry, Snippet } from "@/types"
-import { SPEECH_LANGS, AI_MODELS, TRANSCRIPTION_MODELS, WRITING_STYLES } from "@/types"
+import type { AppSettings, AISettings, DictionaryEntry, Snippet, Recipe } from "@/types"
+import { SPEECH_LANGS, AI_MODELS, TRANSCRIPTION_MODELS, WRITING_STYLES, BUILTIN_RECIPES } from "@/types"
 import { Textarea } from "@/components/ui/textarea"
 import { TemplateEditor } from "@/components/template-editor"
 import { Waveform } from "@/components/Waveform"
 import { cn } from "@/lib/utils"
+import { APP_NAME, APP_VERSION, APP_TAGLINE, APP_PRIVACY } from "@/lib/app-meta"
+import { MynaAppIcon } from "@/components/myna-logo"
 
 interface SettingsPageProps {
   onBack: () => void
@@ -110,8 +118,11 @@ type SettingsSection =
   | "snippets"
   | "meeting"
   | "templates"
+  | "recipes"
+  | "share"
   | "appearance"
   | "data"
+  | "about"
 
 const SECTION_GROUPS: {
   label: string
@@ -138,6 +149,8 @@ const SECTION_GROUPS: {
     items: [
       { id: "meeting", label: "Meeting", icon: AccountSetting01Icon },
       { id: "templates", label: "Templates", icon: CheckmarkBadge01Icon },
+      { id: "recipes", label: "Recipes", icon: AiMagicIcon },
+      { id: "share", label: "Share", icon: FolderOpenIcon },
     ],
   },
   {
@@ -145,6 +158,7 @@ const SECTION_GROUPS: {
     items: [
       { id: "appearance", label: "Appearance", icon: SunIcon },
       { id: "data", label: "Data", icon: FolderOpenIcon },
+      { id: "about", label: "About", icon: ShieldIcon },
     ],
   },
 ]
@@ -248,10 +262,16 @@ export function SettingsPage({
   const [snippets, setSnippets] = useState<Snippet[]>(() => loadSnippets())
   const [newTerm, setNewTerm] = useState("")
   const [newAliases, setNewAliases] = useState("")
+  const [editingDictId, setEditingDictId] = useState<string | null>(null)
+  const [dictQuery, setDictQuery] = useState("")
+  const dictTermRef = useRef<HTMLInputElement>(null)
   const [newTrigger, setNewTrigger] = useState("")
   const [newExpansion, setNewExpansion] = useState("")
+  const [editingSnippetId, setEditingSnippetId] = useState<string | null>(null)
+  const [snippetQuery, setSnippetQuery] = useState("")
   const [activeSection, setActiveSection] = useState<SettingsSection>("audio")
   const expansionRef = useRef<HTMLTextAreaElement>(null)
+  const triggerRef = useRef<HTMLInputElement>(null)
   const [micTesting, setMicTesting] = useState(false)
   const [micTestLevel, setMicTestLevel] = useState(0)
   const micTestStreamRef = useRef<MediaStream | null>(null)
@@ -533,16 +553,6 @@ export function SettingsPage({
     }
   }
 
-  function selectTranscriptionModel(model: AppSettings["transcriptionModel"]) {
-    update({ transcriptionModel: model })
-    setFluidLoaded(false)
-    setDownloadingModel(null)
-    setModelOperation(null)
-    setModelProgress(null)
-    setSetupError(null)
-    setModelStorage(null)
-  }
-
   const startMicTest = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -618,25 +628,55 @@ export function SettingsPage({
     []
   )
 
+  const resetDictionaryForm = useCallback(() => {
+    setNewTerm("")
+    setNewAliases("")
+    setEditingDictId(null)
+  }, [])
+
   const addDictionaryEntry = useCallback(() => {
     const term = newTerm.trim()
     if (!term) return
     const aliases = newAliases
-      .split(",")
+      .split(/[,;\n]/)
       .map((a) => a.trim())
       .filter((a) => a && a.toLowerCase() !== term.toLowerCase())
+    // Deduplicate aliases case-insensitively while keeping first spelling.
+    const seen = new Set<string>()
+    const uniqueAliases = aliases.filter((a) => {
+      const key = a.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+
     setDictionary((prev) => {
-      // Re-adding an existing term updates its aliases instead of duplicating.
-      const next = [
-        ...prev.filter((e) => e.term.toLowerCase() !== term.toLowerCase()),
-        { id: crypto.randomUUID(), term, aliases },
-      ]
+      const existingById = editingDictId
+        ? prev.find((e) => e.id === editingDictId)
+        : undefined
+      // Prefer the row being edited; otherwise merge into a case-insensitive
+      // term match so re-adding "Siddharth" updates instead of duplicating.
+      const replaceId =
+        existingById?.id ??
+        prev.find((e) => e.term.toLowerCase() === term.toLowerCase())?.id
+      const entry: DictionaryEntry = {
+        id: replaceId ?? crypto.randomUUID(),
+        term,
+        aliases: uniqueAliases,
+      }
+      const next = [...prev.filter((e) => e.id !== entry.id), entry]
       saveDictionary(next)
       return next
     })
-    setNewTerm("")
-    setNewAliases("")
-  }, [newTerm, newAliases])
+    resetDictionaryForm()
+  }, [newTerm, newAliases, editingDictId, resetDictionaryForm])
+
+  const beginEditDictionaryEntry = useCallback((entry: DictionaryEntry) => {
+    setEditingDictId(entry.id)
+    setNewTerm(entry.term)
+    setNewAliases(entry.aliases.join(", "))
+    requestAnimationFrame(() => dictTermRef.current?.focus())
+  }, [])
 
   const removeDictionaryEntry = useCallback((id: string) => {
     setDictionary((prev) => {
@@ -644,6 +684,13 @@ export function SettingsPage({
       saveDictionary(next)
       return next
     })
+    if (editingDictId === id) resetDictionaryForm()
+  }, [editingDictId, resetDictionaryForm])
+
+  const resetSnippetForm = useCallback(() => {
+    setEditingSnippetId(null)
+    setNewTrigger("")
+    setNewExpansion("")
   }, [])
 
   const addSnippet = useCallback(() => {
@@ -651,16 +698,34 @@ export function SettingsPage({
     const expansion = newExpansion.trim()
     if (!trigger || !expansion || /\s/.test(trigger)) return
     setSnippets((prev) => {
-      const next = [
-        ...prev.filter((s) => s.trigger.toLowerCase() !== trigger.toLowerCase()),
-        { id: crypto.randomUUID(), trigger, expansion },
-      ]
+      const existingById = editingSnippetId
+        ? prev.find((s) => s.id === editingSnippetId)
+        : undefined
+      const replaceId =
+        existingById?.id ??
+        prev.find((s) => s.trigger.toLowerCase() === trigger.toLowerCase())?.id
+      const entry: Snippet = {
+        id: replaceId ?? crypto.randomUUID(),
+        trigger,
+        expansion,
+      }
+      const next = [...prev.filter((s) => s.id !== entry.id), entry]
       saveSnippets(next)
       return next
     })
-    setNewTrigger("")
-    setNewExpansion("")
-  }, [newTrigger, newExpansion])
+    resetSnippetForm()
+  }, [newTrigger, newExpansion, editingSnippetId, resetSnippetForm])
+
+  const beginEditSnippet = useCallback((snippet: Snippet) => {
+    setEditingSnippetId(snippet.id)
+    setNewTrigger(snippet.trigger)
+    setNewExpansion(snippet.expansion)
+    requestAnimationFrame(() => {
+      expansionRef.current?.focus()
+      const len = snippet.expansion.length
+      expansionRef.current?.setSelectionRange(len, len)
+    })
+  }, [])
 
   const removeSnippet = useCallback((id: string) => {
     setSnippets((prev) => {
@@ -668,7 +733,8 @@ export function SettingsPage({
       saveSnippets(next)
       return next
     })
-  }, [])
+    if (editingSnippetId === id) resetSnippetForm()
+  }, [editingSnippetId, resetSnippetForm])
 
   // Insert a {{variable}} token at the textarea cursor, restoring focus and caret.
   const insertVariable = useCallback((variable: string) => {
@@ -692,11 +758,32 @@ export function SettingsPage({
     () => [...dictionary].sort((a, b) => a.term.localeCompare(b.term)),
     [dictionary],
   )
+  const filteredDictionary = useMemo(() => {
+    const q = dictQuery.trim().toLowerCase()
+    if (!q) return sortedDictionary
+    return sortedDictionary.filter(
+      (e) =>
+        e.term.toLowerCase().includes(q) ||
+        e.aliases.some((a) => a.toLowerCase().includes(q)),
+    )
+  }, [sortedDictionary, dictQuery])
+  const isEditingDictionary = editingDictId !== null
   const sortedSnippets = useMemo(
     () => [...snippets].sort((a, b) => a.trigger.localeCompare(b.trigger)),
     [snippets],
   )
+  const filteredSnippets = useMemo(() => {
+    const q = snippetQuery.trim().toLowerCase()
+    if (!q) return sortedSnippets
+    return sortedSnippets.filter(
+      (s) =>
+        s.trigger.toLowerCase().includes(q) ||
+        s.expansion.toLowerCase().includes(q),
+    )
+  }, [sortedSnippets, snippetQuery])
   const triggerHasSpace = /\s/.test(newTrigger)
+  const isEditingSnippet = editingSnippetId !== null
+  const canSaveSnippet = Boolean(newTrigger.trim() && newExpansion.trim() && !triggerHasSpace)
 
   const handleTestConnection = useCallback(async () => {
     const err = validateApiKey(aiSettings.apiKey)
@@ -725,15 +812,17 @@ export function SettingsPage({
   }, [onClearData])
 
   const selectedModel = TRANSCRIPTION_MODELS[settings.transcriptionModel]
-  const activeDownloadModel = downloadingModel ?? modelProgress?.model ?? settings.transcriptionModel
-  const activeDownloadModelInfo = TRANSCRIPTION_MODELS[activeDownloadModel]
+  const activeDownloadModelInfo =
+    TRANSCRIPTION_MODELS[
+      (downloadingModel ?? settings.transcriptionModel) as AppSettings["transcriptionModel"]
+    ] ?? selectedModel
   const showingDownloadProgress = settingUpModel || Boolean(modelProgress && modelProgress.phase !== "ready")
   const shouldShowDownloadCard = fluidReady && !fluidLoaded && !modelStorage?.present
   const activeOperationLabel = modelOperation === "load" ? "Loading" : "Downloading"
 
   return (
     <div className="app-page">
-      <div className="app-page-header">
+      <div className="app-page-header flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
           <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
@@ -762,7 +851,7 @@ export function SettingsPage({
               <div>
                 <p className="text-sm font-medium">Microphone Access Required</p>
                 <p className="text-xs text-muted-foreground">
-                  Meeting Notes cannot record audio without microphone permission.
+                  Myna Notes cannot record audio without microphone permission.
                   Enable it in System Settings to use transcription features.
                 </p>
               </div>
@@ -777,7 +866,7 @@ export function SettingsPage({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Privacy &amp; Security &rarr; Microphone &rarr; enable Meeting Notes
+                Privacy &amp; Security &rarr; Microphone &rarr; enable Myna Notes
               </p>
             </div>
           </CardContent>
@@ -913,33 +1002,12 @@ export function SettingsPage({
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <label className="text-xs font-medium">Model</label>
-            <div className="grid gap-3 md:grid-cols-2">
-              {Object.entries(TRANSCRIPTION_MODELS).map(([id, model]) => {
-                const selected = settings.transcriptionModel === id
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => selectTranscriptionModel(id as AppSettings["transcriptionModel"])}
-                    disabled={settingUpModel}
-                    className={cn(
-                      "flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-70",
-                      selected
-                        ? "border-primary bg-primary/5"
-                        : "border-border bg-background hover:bg-muted/50"
-                    )}
-                    aria-pressed={selected}
-                  >
-                    <div className="min-w-0 flex flex-col gap-1">
-                      <span className="truncate text-sm font-medium">{model.name}</span>
-                      <span className="line-clamp-2 text-xs text-muted-foreground">{model.bestFor}</span>
-                    </div>
-                    <Badge variant={selected ? "default" : "outline"} className="shrink-0">
-                      {selected ? "Selected" : model.size}
-                    </Badge>
-                  </button>
-                )
-              })}
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background p-3">
+              <div className="min-w-0 flex flex-col gap-1">
+                <span className="truncate text-sm font-medium">{selectedModel.name}</span>
+                <span className="line-clamp-2 text-xs text-muted-foreground">{selectedModel.description}</span>
+              </div>
+              <Badge variant="outline" className="shrink-0">{selectedModel.size}</Badge>
             </div>
           </div>
 
@@ -1107,10 +1175,80 @@ export function SettingsPage({
             )}
           </CardTitle>
           <CardDescription>
-            Names and jargon the transcriber should always get right — teach it once and it never misspells them again
+            Teach correct spellings once — mis-hearings are rewritten in transcripts and AI prompts.
+            Names in People, attendees, or speakers are never force-rewritten (so Christy and Christian can both exist).
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-3 rounded-2xl bg-muted/50 p-3 ring-1 ring-border/60">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium">
+                {isEditingDictionary ? "Edit term" : "Add a term"}
+              </p>
+              {isEditingDictionary && (
+                <Button variant="ghost" size="sm" onClick={resetDictionaryForm}>
+                  Cancel
+                </Button>
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="dict-term" className="text-[11px] font-medium text-muted-foreground">
+                Correct spelling
+              </label>
+              <Input
+                id="dict-term"
+                ref={dictTermRef}
+                value={newTerm}
+                onChange={(e) => setNewTerm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    addDictionaryEntry()
+                  } else if (e.key === "Escape" && isEditingDictionary) {
+                    resetDictionaryForm()
+                  }
+                }}
+                placeholder="e.g. Siddharth"
+                aria-label="Correct spelling"
+                className="bg-background"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="dict-aliases" className="text-[11px] font-medium text-muted-foreground">
+                Mis-hearings <span className="font-normal">(optional, comma-separated)</span>
+              </label>
+              <Input
+                id="dict-aliases"
+                value={newAliases}
+                onChange={(e) => setNewAliases(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    addDictionaryEntry()
+                  } else if (e.key === "Escape" && isEditingDictionary) {
+                    resetDictionaryForm()
+                  }
+                }}
+                placeholder="e.g. sidharth, siddart, Sid Hart"
+                aria-label="Mis-hearings"
+                className="bg-background font-mono text-sm"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                {isEditingDictionary
+                  ? "Save replaces this term’s corrections."
+                  : "Existing terms with the same spelling are updated."}
+              </p>
+              <Button size="sm" onClick={addDictionaryEntry} disabled={!newTerm.trim()} className="shrink-0">
+                {!isEditingDictionary && (
+                  <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" />
+                )}
+                {isEditingDictionary ? "Save" : "Add"}
+              </Button>
+            </div>
+          </div>
+
           {sortedDictionary.length === 0 ? (
             <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center">
               <div className="inline-flex size-10 items-center justify-center rounded-2xl bg-muted">
@@ -1118,81 +1256,95 @@ export function SettingsPage({
               </div>
               <p className="text-sm font-medium">No terms yet</p>
               <p className="max-w-sm text-xs text-muted-foreground">
-                Add names of people, products, or jargon — e.g.{" "}
-                <span className="font-medium text-foreground">Siddharth</span> with mis-hearings{" "}
-                <span className="font-mono text-foreground">sidharth, siddart</span> — and every
-                transcript spells them right.
+                Add a name or jargon above. Mis-hearings like{" "}
+                <span className="font-mono text-foreground">sidharth</span> will be rewritten to{" "}
+                <span className="font-medium text-foreground">Siddharth</span>.
               </p>
             </div>
           ) : (
-            <div className="flex flex-col gap-1.5">
-              {sortedDictionary.map((e) => (
-                <div
-                  key={e.id}
-                  className="group flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 transition-colors hover:bg-muted/40"
-                >
-                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
-                    <span className="text-sm font-medium">{e.term}</span>
-                    {e.aliases.length > 0 && (
-                      <>
-                        <HugeiconsIcon
-                          icon={ArrowLeft01Icon}
-                          strokeWidth={2}
-                          className="size-3.5 shrink-0 text-muted-foreground/60"
-                        />
-                        <span className="flex flex-wrap gap-1">
-                          {e.aliases.map((alias) => (
-                            <Badge key={alias} variant="secondary" className="font-mono text-[11px] font-normal">
-                              {alias}
-                            </Badge>
-                          ))}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100"
-                    onClick={() => removeDictionaryEntry(e.id)}
-                    aria-label={`Remove ${e.term}`}
-                  >
-                    <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
-                  </Button>
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2.5 rounded-xl bg-muted/50 px-3 py-2 text-xs ring-1 ring-border/60">
+                <Badge variant="secondary" className="shrink-0 font-mono font-normal">sidharth</Badge>
+                <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-3.5 shrink-0 text-muted-foreground/60" />
+                <span className="font-medium text-foreground">Siddharth</span>
+                <span className="ml-auto hidden text-muted-foreground sm:inline">in every transcript</span>
+              </div>
+
+              {sortedDictionary.length > 6 && (
+                <Input
+                  value={dictQuery}
+                  onChange={(e) => setDictQuery(e.target.value)}
+                  placeholder="Search terms or mis-hearings…"
+                  aria-label="Search dictionary"
+                  className="bg-background"
+                />
+              )}
+
+              {filteredDictionary.length === 0 ? (
+                <p className="px-1 py-4 text-center text-xs text-muted-foreground">
+                  No terms match “{dictQuery.trim()}”
+                </p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  {filteredDictionary.map((e) => {
+                    const editing = editingDictId === e.id
+                    return (
+                      <div
+                        key={e.id}
+                        className={cn(
+                          "group flex items-start gap-3 rounded-xl border px-3 py-2.5 transition-colors",
+                          editing
+                            ? "border-primary bg-primary/5"
+                            : "border-border/60 hover:bg-muted/40",
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => beginEditDictionaryEntry(e)}
+                          className="min-w-0 flex-1 text-left"
+                          aria-label={`Edit ${e.term}`}
+                        >
+                          <div className="flex min-w-0 flex-col gap-1.5">
+                            <span className="truncate text-sm font-medium">{e.term}</span>
+                            {e.aliases.length > 0 ? (
+                              <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                                <span className="text-[11px] text-muted-foreground">Also matches</span>
+                                {e.aliases.map((alias) => (
+                                  <Badge
+                                    key={alias}
+                                    variant="secondary"
+                                    className="font-mono text-[11px] font-normal"
+                                  >
+                                    {alias}
+                                  </Badge>
+                                ))}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-muted-foreground">
+                                No mis-hearings — still guides AI spelling
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeDictionaryEntry(e.id)}
+                          aria-label={`Remove ${e.term}`}
+                        >
+                          <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
+                        </Button>
+                      </div>
+                    )
+                  })}
                 </div>
-              ))}
+              )}
             </div>
           )}
 
-          <div className="flex flex-col gap-2 rounded-2xl bg-muted/50 p-3 ring-1 ring-border/60">
-            <div className="flex flex-col gap-1.5 sm:flex-row">
-              <Input
-                value={newTerm}
-                onChange={(e) => setNewTerm(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") addDictionaryEntry() }}
-                placeholder="Correct spelling (e.g. Siddharth)"
-                aria-label="Correct spelling"
-                className="flex-1 bg-background"
-              />
-              <Input
-                value={newAliases}
-                onChange={(e) => setNewAliases(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") addDictionaryEntry() }}
-                placeholder="Mis-hearings, comma-separated (optional)"
-                aria-label="Mis-hearings"
-                className="flex-1 bg-background"
-              />
-              <Button size="sm" onClick={addDictionaryEntry} disabled={!newTerm.trim()} className="shrink-0 self-start sm:self-auto">
-                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" />
-                Add
-              </Button>
-            </div>
-            <p className="text-[11px] text-muted-foreground">
-              Re-adding an existing term updates its corrections.
-            </p>
-          </div>
           <p className="text-xs text-muted-foreground">
-            Applied when a recording stops and included in AI prompts, so transcripts, titles, notes, and knowledge all use the right spellings.
+            Applied when a recording stops, and included in AI prompts for titles, notes, and knowledge.
           </p>
         </CardContent>
       </Card>
@@ -1302,6 +1454,50 @@ export function SettingsPage({
           </div>
 
           <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">Auto-enhance on stop</span>
+              <span className="text-xs text-muted-foreground">Run Enhance + run-on-stop recipes when recording ends</span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.autoEnhanceOnStop}
+              onClick={() => update({ autoEnhanceOnStop: !settings.autoEnhanceOnStop })}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.autoEnhanceOnStop ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.autoEnhanceOnStop ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">Auto-tag on enhance</span>
+              <span className="text-xs text-muted-foreground">
+                AI adds concept tags from notes (reuses existing tags when possible)
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.autoTagOnEnhance !== false}
+              onClick={() => update({ autoTagOnEnhance: !(settings.autoTagOnEnhance !== false) })}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.autoTagOnEnhance !== false ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.autoTagOnEnhance !== false ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
             <Button
               variant="outline"
               size="sm"
@@ -1386,111 +1582,231 @@ export function SettingsPage({
       </Card>
 
       <Card size="sm" className={cn(activeSection !== "snippets" && "hidden")}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <HugeiconsIcon icon={KeyboardIcon} strokeWidth={2} className="size-5" />
-            Shortcuts
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-[15px] font-medium tracking-tight">
+            <HugeiconsIcon icon={KeyboardIcon} strokeWidth={2} className="size-4 text-muted-foreground" />
+            Text shortcuts
             {snippets.length > 0 && (
-              <Badge variant="secondary" className="ml-auto">{snippets.length} snippet{snippets.length !== 1 ? "s" : ""}</Badge>
+              <Badge variant="secondary" className="ml-auto tabular-nums">
+                {snippets.length}
+              </Badge>
             )}
           </CardTitle>
-          <CardDescription>
-            Quick text expansion — type <span className="font-mono text-foreground">;trigger</span> then a space in the editor, and the whole formatted thing appears
+          <CardDescription className="text-[13px]">
+            Type{" "}
+            <kbd className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground ring-1 ring-border/60">
+              ;trigger
+            </kbd>{" "}
+            then space in a note to expand.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          {sortedSnippets.length === 0 ? (
-            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center">
-              <div className="inline-flex size-10 items-center justify-center rounded-2xl bg-muted">
-                <HugeiconsIcon icon={KeyboardIcon} strokeWidth={2} className="size-5 text-muted-foreground" />
-              </div>
-              <p className="text-sm font-medium">No shortcuts yet</p>
-              <p className="max-w-sm text-xs text-muted-foreground">
-                Type <span className="font-mono text-foreground">;sig</span> then a space in any note and
-                it expands into your full signature — markdown and{" "}
-                <span className="font-mono text-foreground">{"{{date}}"}</span> variables included.
-              </p>
-            </div>
-          ) : (
-            <>
-              <div className="flex items-center gap-2.5 rounded-xl bg-muted/50 px-3 py-2 text-xs ring-1 ring-border/60">
-                <Badge variant="outline" className="shrink-0 font-mono">;sig</Badge>
-                <span className="shrink-0 text-muted-foreground">+ space</span>
-                <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-3.5 shrink-0 text-muted-foreground/60" />
-                <span className="truncate text-muted-foreground">
-                  Best, Criston — <span className="font-mono text-[11px]">{"{{date}}"}</span>
-                </span>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {sortedSnippets.map((s) => (
-                  <div
-                    key={s.id}
-                    className="group flex items-start gap-3 rounded-xl border border-border/60 px-3 py-2.5 transition-colors hover:bg-muted/40"
-                  >
-                    <Badge variant="outline" className="mt-0.5 shrink-0 font-mono">;{s.trigger}</Badge>
-                    <p className="min-w-0 flex-1 whitespace-pre-line text-xs leading-relaxed text-muted-foreground line-clamp-2">
-                      {renderExpansionPreview(s.expansion)}
-                    </p>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="-mt-0.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100"
-                      onClick={() => removeSnippet(s.id)}
-                      aria-label={`Remove ;${s.trigger}`}
-                    >
-                      <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
-                    </Button>
-                  </div>
-                ))}
-              </div>
-            </>
+          {/* How it works — one quiet strip, not a wall of helper text */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-2xl bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
+            <kbd className="rounded-md bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground ring-1 ring-border/60">
+              ;sig
+            </kbd>
+            <span>+</span>
+            <kbd className="rounded-md bg-background px-1.5 py-0.5 font-mono text-[11px] text-foreground ring-1 ring-border/60">
+              space
+            </kbd>
+            <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-3 text-muted-foreground/50" />
+            <span className="min-w-0 truncate">
+              Signature with <span className="font-mono text-[11px] text-foreground/80">{"{{date}}"}</span>
+            </span>
+          </div>
+
+          {sortedSnippets.length > 4 && (
+            <Input
+              value={snippetQuery}
+              onChange={(e) => setSnippetQuery(e.target.value)}
+              placeholder="Filter shortcuts…"
+              aria-label="Filter shortcuts"
+              className="h-8 text-[13px]"
+            />
           )}
 
-          <div className="flex flex-col gap-2 rounded-2xl bg-muted/50 p-3 ring-1 ring-border/60">
-            <div className="flex items-center rounded-2xl border border-transparent bg-background transition-[color,box-shadow] duration-200 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30 has-[aria-invalid=true]:border-destructive has-[aria-invalid=true]:ring-3 has-[aria-invalid=true]:ring-destructive/20">
-              <span className="pr-1 pl-2.5 font-mono text-sm text-muted-foreground select-none">;</span>
-              <Input
-                value={newTrigger}
-                onChange={(e) => setNewTrigger(e.target.value.replace(/^;+/, ""))}
-                placeholder="trigger (no spaces, e.g. sig)"
-                aria-label="Snippet trigger"
-                aria-invalid={triggerHasSpace}
-                className="min-w-0 flex-1 rounded-none border-0 bg-transparent px-1 focus-visible:border-transparent focus-visible:ring-0 aria-invalid:border-transparent aria-invalid:ring-0"
-              />
-            </div>
-            {triggerHasSpace && (
-              <p className="text-[11px] text-destructive">Triggers can&apos;t contain spaces.</p>
-            )}
-            <Textarea
-              ref={expansionRef}
-              value={newExpansion}
-              onChange={(e) => setNewExpansion(e.target.value)}
-              placeholder={"What it expands to — markdown works.\n\ne.g. Best,\nCriston\n{{date}}"}
-              rows={3}
-              aria-label="Snippet expansion"
-              className="resize-none bg-background text-sm"
-              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) addSnippet() }}
-            />
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-muted-foreground">Insert:</span>
-              {["date", "time", "datetime"].map((variable) => (
-                <button
-                  key={variable}
-                  type="button"
-                  onClick={() => insertVariable(variable)}
-                  className="rounded-md bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:text-foreground hover:ring-border"
-                >
-                  {`{{${variable}}}`}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-[11px] text-muted-foreground">
-                ⌘↵ to add · re-adding a trigger updates it
+          {sortedSnippets.length === 0 ? (
+            <div className="rounded-2xl bg-muted/30 px-4 py-6 text-center">
+              <p className="text-[13px] font-medium">No shortcuts yet</p>
+              <p className="mt-1 text-[12px] text-muted-foreground">
+                Create one below — e.g. <span className="font-mono text-foreground/80">;sig</span> for your sign-off.
               </p>
-              <Button size="sm" onClick={addSnippet} disabled={!newTrigger.trim() || !newExpansion.trim() || triggerHasSpace} className="shrink-0">
-                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" />
-                Add shortcut
+            </div>
+          ) : filteredSnippets.length === 0 ? (
+            <p className="py-4 text-center text-[13px] text-muted-foreground">No matches for “{snippetQuery.trim()}”</p>
+          ) : (
+            <ul className="flex flex-col gap-0.5" role="list" aria-label="Text shortcuts">
+              {filteredSnippets.map((s) => {
+                const active = editingSnippetId === s.id
+                return (
+                  <li key={s.id}>
+                    <div
+                      className={cn(
+                        "group flex h-auto min-h-11 items-start gap-2.5 rounded-xl px-2.5 py-2 transition-colors",
+                        active ? "bg-muted ring-1 ring-border/70" : "hover:bg-muted/50",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-start gap-2.5 text-left"
+                        onClick={() => beginEditSnippet(s)}
+                        aria-label={`Edit ;${s.trigger}`}
+                      >
+                        <span className="mt-0.5 shrink-0 rounded-md bg-background px-1.5 py-0.5 font-mono text-[11px] font-medium text-foreground ring-1 ring-border/60">
+                          ;{s.trigger}
+                        </span>
+                        <span className="min-w-0 flex-1 whitespace-pre-line text-[12px] leading-relaxed text-muted-foreground line-clamp-2">
+                          {renderExpansionPreview(s.expansion)}
+                        </span>
+                      </button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        className="mt-0.5 size-7 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                        onClick={() => removeSnippet(s.id)}
+                        aria-label={`Delete ;${s.trigger}`}
+                      >
+                        <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-3.5" />
+                      </Button>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+
+          {/* Composer — production editor block */}
+          <div
+            className={cn(
+              "flex flex-col gap-2.5 rounded-2xl p-3 ring-1 transition-[box-shadow,background-color]",
+              isEditingSnippet
+                ? "bg-card ring-foreground/10 shadow-sm"
+                : "bg-muted/40 ring-border/60",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] font-medium uppercase tracking-[0.05em] text-muted-foreground">
+                {isEditingSnippet ? "Edit shortcut" : "New shortcut"}
+              </p>
+              {isEditingSnippet && (
+                <button
+                  type="button"
+                  onClick={resetSnippetForm}
+                  className="text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="snippet-trigger" className="text-[12px] font-medium text-foreground/90">
+                Trigger
+              </label>
+              <div
+                className={cn(
+                  "flex h-9 items-center rounded-xl bg-background ring-1 transition-[box-shadow,color]",
+                  triggerHasSpace
+                    ? "ring-destructive/40 focus-within:ring-3 focus-within:ring-destructive/25"
+                    : "ring-border/70 focus-within:ring-3 focus-within:ring-ring/30",
+                )}
+              >
+                <span className="select-none pl-2.5 pr-0.5 font-mono text-[13px] text-muted-foreground">;</span>
+                <Input
+                  ref={triggerRef}
+                  id="snippet-trigger"
+                  value={newTrigger}
+                  onChange={(e) => setNewTrigger(e.target.value.replace(/^;+/, "").replace(/\s/g, ""))}
+                  placeholder="sig"
+                  aria-label="Shortcut trigger"
+                  aria-invalid={triggerHasSpace}
+                  className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-1 font-mono text-[13px] shadow-none focus-visible:border-transparent focus-visible:ring-0"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      expansionRef.current?.focus()
+                    }
+                  }}
+                />
+              </div>
+              {triggerHasSpace && (
+                <p className="text-[11px] text-destructive">No spaces in triggers.</p>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <label htmlFor="snippet-expansion" className="text-[12px] font-medium text-foreground/90">
+                  Expands to
+                </label>
+                <div className="flex items-center gap-1">
+                  {["date", "time", "datetime"].map((variable) => (
+                    <button
+                      key={variable}
+                      type="button"
+                      onClick={() => insertVariable(variable)}
+                      className="rounded-md px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:bg-background hover:text-foreground"
+                      title={`Insert {{${variable}}}`}
+                    >
+                      {`{{${variable}}}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <Textarea
+                ref={expansionRef}
+                id="snippet-expansion"
+                value={newExpansion}
+                onChange={(e) => setNewExpansion(e.target.value)}
+                placeholder={"Best,\nCriston\n{{date}}"}
+                rows={4}
+                aria-label="Shortcut expansion"
+                className="min-h-[5.5rem] resize-y bg-background px-3 py-2.5 text-[13px] leading-relaxed ring-1 ring-border/70 focus-visible:ring-ring/30"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault()
+                    addSnippet()
+                  }
+                  if (e.key === "Escape" && isEditingSnippet) {
+                    e.preventDefault()
+                    resetSnippetForm()
+                  }
+                }}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Markdown allowed · variables insert at the caret
+              </p>
+            </div>
+
+            {newExpansion.trim() && (
+              <div className="rounded-xl bg-muted/50 px-3 py-2 ring-1 ring-border/50">
+                <p className="mb-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Preview
+                </p>
+                <p className="whitespace-pre-line text-[12px] leading-relaxed text-foreground/85">
+                  {renderExpansionPreview(newExpansion)}
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between gap-2 pt-0.5">
+              <p className="text-[11px] text-muted-foreground">
+                <kbd className="rounded bg-muted px-1 font-mono text-[10px] ring-1 ring-border/50">⌘</kbd>
+                <kbd className="ml-0.5 rounded bg-muted px-1 font-mono text-[10px] ring-1 ring-border/50">↵</kbd>
+                {" "}
+                {isEditingSnippet ? "to save" : "to add"}
+              </p>
+              <Button
+                size="sm"
+                onClick={addSnippet}
+                disabled={!canSaveSnippet}
+                className="h-8 shrink-0 rounded-xl px-3 active:scale-[0.96]"
+              >
+                {!isEditingSnippet && (
+                  <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" className="size-3.5" />
+                )}
+                {isEditingSnippet ? "Save changes" : "Add shortcut"}
               </Button>
             </div>
           </div>
@@ -1503,7 +1819,7 @@ export function SettingsPage({
             <HugeiconsIcon icon={AccountSetting01Icon} strokeWidth={2} className="size-5" />
             Meeting
           </CardTitle>
-          <CardDescription>Default title prefix for new meetings</CardDescription>
+          <CardDescription>Defaults for new meetings and calendar prep</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
@@ -1521,17 +1837,66 @@ export function SettingsPage({
               Preview: <span className="font-medium text-foreground">{settings.titlePrefix || "[prefix]"}</span>Untitled
             </p>
           </div>
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">macOS Calendar</span>
+              <span className="text-xs text-muted-foreground">
+                Show upcoming meetings from Apple Calendar (EventKit)
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.calendarEnabled}
+              onClick={() => update({ calendarEnabled: !settings.calendarEnabled })}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.calendarEnabled ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.calendarEnabled ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">MCP snapshot</span>
+              <span className="text-xs text-muted-foreground">Write meetings-mcp-snapshot.json for Cursor/Claude</span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.mcpEnabled}
+              onClick={() => update({ mcpEnabled: !settings.mcpEnabled })}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.mcpEnabled ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.mcpEnabled ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
         </CardContent>
       </Card>
 
+      <RecipesSettingsCard active={activeSection === "recipes"} />
+      <ShareSettingsCard
+        active={activeSection === "share"}
+        settings={settings}
+        update={update}
+      />
+
       <Card size="sm" className={cn(activeSection !== "templates" && "hidden")}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <HugeiconsIcon icon={CheckmarkBadge01Icon} strokeWidth={2} className="size-5" />
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-[15px] font-medium tracking-tight">
+            <HugeiconsIcon icon={CheckmarkBadge01Icon} strokeWidth={2} className="size-4 text-muted-foreground" />
             Templates
           </CardTitle>
-          <CardDescription>
-            Create and manage meeting note templates with custom sections and quick actions
+          <CardDescription className="text-[13px]">
+            Sections structure enhance. Optional quick actions for follow-ups.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1624,11 +1989,15 @@ export function SettingsPage({
             Data
           </CardTitle>
           <CardDescription>
-            {meetingCount} meeting{meetingCount !== 1 ? "s" : ""} saved in local storage
+            {meetingCount} note{meetingCount !== 1 ? "s" : ""} saved on this Mac (local storage)
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          <div className="flex gap-2">
+          <p className="text-xs text-pretty text-muted-foreground">
+            Your notes never leave this computer unless you export them or send text to AI with your own API key.
+            Export regularly if this Mac is your only copy.
+          </p>
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -1636,7 +2005,7 @@ export function SettingsPage({
               onClick={() => exportAllMeetings()}
             >
               <HugeiconsIcon icon={Download01Icon} strokeWidth={2} data-icon="inline-start" />
-              Export All (JSON)
+              Export all (JSON)
             </Button>
             <Button
               variant="outline"
@@ -1645,36 +2014,360 @@ export function SettingsPage({
               onClick={() => exportAllMeetingsMarkdown()}
             >
               <HugeiconsIcon icon={Download01Icon} strokeWidth={2} data-icon="inline-start" />
-              Export All (Markdown)
+              Export all (Markdown)
             </Button>
           </div>
           <AlertDialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" disabled={meetingCount === 0}>
                 <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} data-icon="inline-start" />
-                Clear All Meetings
+                Clear all notes
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent size="sm">
               <AlertDialogHeader>
-                <AlertDialogTitle>Clear all meetings?</AlertDialogTitle>
+                <AlertDialogTitle>Clear all notes?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will permanently delete all {meetingCount} meeting{meetingCount !== 1 ? "s" : ""},
-                  including transcripts and notes. This action cannot be undone.
+                  This will permanently delete all {meetingCount} note{meetingCount !== 1 ? "s" : ""},
+                  including transcripts and tags. This action cannot be undone.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                 <AlertDialogAction variant="destructive" onClick={handleClearData}>
-                  Delete All
+                  Delete all
                 </AlertDialogAction>
               </AlertDialogFooter>
             </AlertDialogContent>
           </AlertDialog>
         </CardContent>
       </Card>
+
+      <Card size="sm" className={cn(activeSection !== "about" && "hidden")}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={ShieldIcon} strokeWidth={2} className="size-5" />
+            About
+          </CardTitle>
+          <CardDescription>{APP_TAGLINE}</CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex items-center gap-3">
+            <MynaAppIcon className="size-14 shrink-0 shadow-sm ring-1 ring-foreground/10" />
+            <div className="min-w-0">
+              <p className="text-base font-medium tracking-tight">{APP_NAME}</p>
+              <p className="text-sm text-muted-foreground">Version {APP_VERSION}</p>
+            </div>
+          </div>
+          <p className="text-sm text-pretty text-muted-foreground">{APP_PRIVACY}</p>
+          <ul className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+            <li>· On-device speech recognition (Parakeet / Apple Neural Engine)</li>
+            <li>· Optional cloud AI only when you set an API key</li>
+            <li>· Concept tags, Actions, and People stay on this Mac</li>
+          </ul>
+        </CardContent>
+      </Card>
         </div>
       </div>
     </div>
+  )
+}
+
+function SettingsSwitch({
+  checked,
+  onCheckedChange,
+  label,
+}: {
+  checked: boolean
+  onCheckedChange: (next: boolean) => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onCheckedChange(!checked)}
+      className={cn(
+        "relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors",
+        checked ? "bg-primary" : "bg-muted",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform",
+          checked ? "translate-x-5" : "translate-x-1",
+        )}
+      />
+    </button>
+  )
+}
+
+function RecipesSettingsCard({ active }: { active: boolean }) {
+  const [recipes, setRecipes] = useState<Recipe[]>(() => loadRecipes())
+  const [name, setName] = useState("")
+  const [prompt, setPrompt] = useState("")
+  const [runOnStop, setRunOnStop] = useState(false)
+
+  const refresh = () => setRecipes(loadRecipes())
+
+  return (
+    <Card size="sm" className={cn(active ? undefined : "hidden")}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <HugeiconsIcon icon={AiMagicIcon} strokeWidth={2} className="size-5" />
+          Recipes
+          {recipes.length > 0 && (
+            <Badge variant="secondary" className="ml-auto">
+              {recipes.length}
+            </Badge>
+          )}
+        </CardTitle>
+        <CardDescription>
+          Post-meeting prompts. Enable “Run on stop” to execute automatically after Enhance.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {recipes.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center">
+            <div className="inline-flex size-10 items-center justify-center rounded-2xl bg-muted">
+              <HugeiconsIcon icon={AiMagicIcon} strokeWidth={2} className="size-5 text-muted-foreground" />
+            </div>
+            <p className="text-sm font-medium">No recipes yet</p>
+            <p className="max-w-sm text-xs text-muted-foreground">
+              Add a prompt below, or restore the built-in follow-up, action digest, and standup recipes.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                saveRecipes(BUILTIN_RECIPES)
+                refresh()
+              }}
+            >
+              Restore built-ins
+            </Button>
+          </div>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {recipes.map((r) => (
+              <li
+                key={r.id}
+                className="rounded-2xl bg-muted/30 px-3 py-2.5 ring-1 ring-border/60"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <p className="text-sm font-medium">{r.name}</p>
+                      {r.builtin && (
+                        <Badge variant="outline" className="h-5 text-[10px]">
+                          Built-in
+                        </Badge>
+                      )}
+                      {r.runOnStop && (
+                        <Badge variant="secondary" className="h-5 text-[10px]">
+                          On stop
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-1 line-clamp-2 text-xs text-pretty text-muted-foreground">
+                      {r.prompt}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <SettingsSwitch
+                      checked={Boolean(r.runOnStop)}
+                      onCheckedChange={(next) => {
+                        upsertRecipe({ ...r, runOnStop: next })
+                        refresh()
+                      }}
+                      label={`${r.runOnStop ? "Disable" : "Enable"} run on stop for ${r.name}`}
+                    />
+                    {!r.builtin && (
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Delete recipe ${r.name}`}
+                        onClick={() => {
+                          deleteRecipe(r.id)
+                          refresh()
+                        }}
+                      >
+                        <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="flex flex-col gap-2.5 rounded-2xl border border-dashed border-border/70 bg-muted/20 p-3">
+          <p className="text-xs font-medium text-muted-foreground">New recipe</p>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Recipe name"
+            className="h-8"
+            aria-label="Recipe name"
+          />
+          <Textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            placeholder="Prompt instructions…"
+            rows={3}
+            className="resize-none text-sm"
+            aria-label="Recipe prompt"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <SettingsSwitch
+                checked={runOnStop}
+                onCheckedChange={setRunOnStop}
+                label="Run new recipe on stop"
+              />
+              <span className="text-xs text-muted-foreground">Run on stop</span>
+            </div>
+            <Button
+              size="sm"
+              disabled={!name.trim() || !prompt.trim()}
+              onClick={() => {
+                upsertRecipe({
+                  id: crypto.randomUUID(),
+                  name: name.trim(),
+                  prompt: prompt.trim(),
+                  runOnStop,
+                })
+                setName("")
+                setPrompt("")
+                setRunOnStop(false)
+                refresh()
+              }}
+            >
+              <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" />
+              Add recipe
+            </Button>
+          </div>
+        </div>
+
+        {recipes.some((r) => r.builtin) && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="self-start text-xs text-muted-foreground"
+            onClick={() => {
+              saveRecipes(BUILTIN_RECIPES)
+              refresh()
+            }}
+          >
+            Reset built-ins
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function ShareSettingsCard({
+  active,
+  settings,
+  update,
+}: {
+  active: boolean
+  settings: AppSettings
+  update: (patch: Partial<AppSettings>) => void
+}) {
+  const [webhook, setWebhook] = useState(settings.slackWebhookUrl || "")
+  const [snapshotPath, setSnapshotPath] = useState("")
+
+  useEffect(() => {
+    loadSlackWebhookUrl()
+      .then((u) => {
+        if (u) setWebhook(u)
+      })
+      .catch(() => {})
+    invoke<string>("mcp_snapshot_path")
+      .then(setSnapshotPath)
+      .catch(() => {})
+  }, [])
+
+  return (
+    <Card size="sm" className={cn(active ? undefined : "hidden")}>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={2} className="size-5" />
+          Share
+        </CardTitle>
+        <CardDescription>
+          Default export folder and optional Slack Incoming Webhook for one-click sharing from a note.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="export-folder-path" className="text-xs font-medium">
+            Export folder
+          </label>
+          <div className="flex gap-2">
+            <Input
+              id="export-folder-path"
+              value={settings.exportFolderPath}
+              onChange={(e) => update({ exportFolderPath: e.target.value })}
+              placeholder="/Users/you/Documents/Myna Notes"
+              className="font-mono text-xs"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              className="shrink-0"
+              onClick={async () => {
+                try {
+                  const { open } = await import("@tauri-apps/plugin-dialog")
+                  const dir = await open({ directory: true, multiple: false })
+                  if (typeof dir === "string") update({ exportFolderPath: dir })
+                } catch {
+                  /* ignore */
+                }
+              }}
+            >
+              Choose…
+            </Button>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Used by Share → Export to folder in the note menu.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor="slack-webhook" className="text-xs font-medium">
+            Slack webhook URL
+          </label>
+          <Input
+            id="slack-webhook"
+            type="password"
+            autoComplete="off"
+            value={webhook}
+            onChange={(e) => setWebhook(e.target.value)}
+            onBlur={() => {
+              update({ slackWebhookUrl: webhook })
+              void saveSlackWebhookUrl(webhook)
+            }}
+            placeholder="https://hooks.slack.com/services/…"
+            className="font-mono text-xs"
+          />
+          <p className="text-xs text-muted-foreground">
+            Stored securely. Used by Share → Slack in the note menu.
+          </p>
+        </div>
+        {snapshotPath && (
+          <div className="rounded-2xl bg-muted/30 px-3 py-2.5 ring-1 ring-border/60">
+            <p className="text-xs font-medium">MCP snapshot</p>
+            <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+              {snapshotPath}
+            </p>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   )
 }

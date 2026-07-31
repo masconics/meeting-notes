@@ -63,6 +63,50 @@ ${content.slice(0, 3000)}`
   return response.trim().replace(/^["']|["']$/g, "").replace(/[.!?,;:]$/, "")
 }
 
+/**
+ * Plain-text 1–2 sentence summary for dashboard list cards.
+ * No markdown — intentionally separate from the enhanced note body.
+ */
+export async function generateMeetingDescription(
+  notes: string,
+  transcript: string,
+  title?: string,
+): Promise<string> {
+  const content = [title, notes, transcript].filter(Boolean).join("\n\n").trim()
+  if (!content) return ""
+
+  const prompt = `Write a brief plain-text description of this meeting for a list card (1–2 sentences, max ~200 characters).
+Cover what the meeting was about and the main outcome or topics — not a transcript.
+Rules:
+- Plain prose only (no markdown, no bullets, no headings, no quotes around the whole answer)
+- No title line
+- Do not invent facts not present below
+
+MEETING:
+${content.slice(0, 6000)}`
+
+  const response = await callDeepSeek([
+    {
+      role: "system",
+      content: withVocabulary(
+        "You write short meeting descriptions for a notes app list. Respond with only the description text.",
+      ),
+    },
+    { role: "user", content: prompt },
+  ], { temperature: 0.3, maxTokens: 180 })
+
+  return response
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    // Strip any accidental markdown the model still emits
+    .replace(/^#+\s+/gm, "")
+    .replace(/\*\*?|__?/g, "")
+    .replace(/\n+/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim()
+    .slice(0, 280)
+}
+
 export async function testConnection(): Promise<boolean> {
   try {
     await callDeepSeek([{ role: "user", content: "hi" }])
@@ -74,25 +118,31 @@ export async function testConnection(): Promise<boolean> {
 
 function buildNotesPrompt(rawNotes: string, transcript: string, templateSections?: string[]): string {
   const hasTemplate = templateSections && templateSections.length > 0
+  const priority = `The user's handwritten / shorthand notes are the PRIMARY signal — treat them as intentional structure and emphasis. Use the transcript to fill gaps, recover exact quotes, names, numbers, and decisions the shorthand omitted. Prefer the user's wording when both cover the same point. Do not invent content absent from both sources.`
+
   if (hasTemplate) {
-    return `You are a professional meeting assistant. Create clean, organized meeting notes from the raw notes and transcript below. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, tables for comparisons or multi-column data, and clear section structure.
+    return `You are a professional meeting assistant. Create clean, organized meeting notes by merging the user's notes with the transcript.
+
+${priority}
 
 SECTIONS:
 ${templateSections!.map((s) => `## ${s}`).join("\n")}
 
-TRANSCRIPT:
-${transcript || "(none)"}
+USER NOTES (primary):
+${rawNotes || "(none)"}
 
-RAW NOTES:
-${rawNotes || "(none)"}`
+TRANSCRIPT (supporting):
+${transcript || "(none)"}`
   }
-  return `You are a professional meeting assistant. Create clean, organized meeting notes from the raw notes and transcript below. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, tables for comparisons or multi-column data, and clear section structure.
+  return `You are a professional meeting assistant. Create clean, organized meeting notes by merging the user's notes with the transcript. Use structured markdown formatting — headings (##), bullet points (-), bold (**) for key terms, tables for comparisons or multi-column data, and clear section structure.
 
-TRANSCRIPT:
-${transcript || "(none)"}
+${priority}
 
-RAW NOTES:
-${rawNotes || "(none)"}`
+USER NOTES (primary):
+${rawNotes || "(none)"}
+
+TRANSCRIPT (supporting):
+${transcript || "(none)"}`
 }
 
 export async function* streamGenerateNotes(
@@ -179,17 +229,19 @@ export async function enhanceNotes(
 ): Promise<MeetingSection[]> {
   const sectionList = sections.map((s) => `- ${s}`).join("\n")
 
-  const prompt = `You are a professional meeting assistant. Take the raw notes and transcript below, and organize the information into clean, structured meeting notes.
+  const prompt = `You are a professional meeting assistant. Take the user's notes and transcript below, and organize the information into clean, structured meeting notes.
+
+The user's handwritten / shorthand notes are the PRIMARY signal. Use the transcript to fill gaps and recover details. Prefer the user's wording when both cover the same point.
 
 Return ONLY valid JSON — a JSON array of objects with "title" and "content" fields, one for each section below. No markdown, no code fences, no extra text.
 
 SECTIONS:
 ${sectionList}
 
-RAW NOTES:
+USER NOTES (primary):
 ${rawNotes || "(none)"}
 
-TRANSCRIPT:
+TRANSCRIPT (supporting):
 ${transcript || "(none)"}
 
 Rules:
@@ -404,6 +456,73 @@ ${transcript.slice(0, 4000)}`
   }
 }
 
+/**
+ * Suggest concept tags for a meeting. Prefers reusing existing tag names
+ * so related meetings cluster; invents short new tags only when needed.
+ * Returns 1–5 display names (not ids).
+ */
+export async function suggestMeetingTags(input: {
+  title: string
+  notes: string
+  transcript: string
+  existingTags: string[]
+}): Promise<string[]> {
+  const body = [input.notes, input.transcript].filter((s) => s.trim()).join("\n\n").trim()
+  if (!body && !input.title.trim()) return []
+
+  const existing = input.existingTags.map((t) => t.trim()).filter(Boolean)
+  const existingBlock =
+    existing.length > 0
+      ? `EXISTING TAGS (prefer reusing these exact names when they fit):\n${existing.map((t) => `- ${t}`).join("\n")}`
+      : "EXISTING TAGS: (none yet — invent short concept tags)"
+
+  const prompt = `You tag meeting notes by concept so similar meetings can be found later.
+
+Rules:
+- Return ONLY a JSON array of 1 to 5 short tag strings (1–3 words each)
+- Prefer reusing EXISTING TAGS when the meeting is about that concept (match meaning, not just keywords)
+- Only invent a new tag when no existing tag fits
+- Tags are topics/concepts (e.g. "Hiring", "Q3 roadmap", "Billing", "1:1s") — not person names, dates, or "meeting"
+- No duplicates; Title Case preferred
+
+${existingBlock}
+
+MEETING TITLE: ${input.title || "(untitled)"}
+
+MEETING CONTENT:
+${body.slice(0, 6000) || "(empty)"}`
+
+  try {
+    const response = await callDeepSeek([
+      {
+        role: "system",
+        content: withVocabulary(
+          "You assign concept tags to meetings. Respond only with a JSON array of short tag name strings.",
+        ),
+      },
+      { role: "user", content: prompt },
+    ], { temperature: 0.3, maxTokens: 256 })
+
+    const raw: unknown = JSON.parse(cleanJsonResponse(response))
+    if (!Array.isArray(raw)) return []
+    const seen = new Set<string>()
+    const tags: string[] = []
+    for (const item of raw) {
+      if (typeof item !== "string") continue
+      const name = item.trim().replace(/\s+/g, " ")
+      if (!name || name.length > 40) continue
+      const key = name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      tags.push(name)
+      if (tags.length >= 5) break
+    }
+    return tags
+  } catch {
+    return []
+  }
+}
+
 async function generateMeetingDigest(meeting: Meeting): Promise<string> {
   const content = buildMeetingContent(meeting)
   if (!content.trim()) return meeting.title || "Untitled meeting"
@@ -432,18 +551,62 @@ export async function indexMeetingInMemory(meeting: Meeting): Promise<string> {
   return digest
 }
 
+/** Light AI polish of a locally assembled pre-meeting brief. */
+export async function polishBrief(localMarkdown: string, title: string): Promise<string> {
+  const prompt = `Polish this pre-meeting brief for "${title}". Keep all facts; tighten wording; keep Markdown structure. Do not invent attendees, actions, or meetings.
+
+BRIEF:
+${localMarkdown}`
+
+  const response = await callDeepSeek([
+    { role: "system", content: withVocabulary("You polish meeting briefs. Output Markdown only.") },
+    { role: "user", content: prompt },
+  ], { temperature: 0.3, maxTokens: 2048 })
+  return response.trim()
+}
+
+/** Run a post-meeting recipe prompt against notes + transcript. */
+export async function runRecipe(
+  recipePrompt: string,
+  notes: string,
+  transcript: string,
+  title?: string,
+): Promise<string> {
+  const prompt = `${recipePrompt}
+
+MEETING TITLE: ${title || "(untitled)"}
+
+NOTES:
+${notes || "(none)"}
+
+TRANSCRIPT:
+${(transcript || "").slice(0, 20000) || "(none)"}`
+
+  const response = await callDeepSeek([
+    { role: "system", content: withVocabulary("You produce meeting follow-up artifacts. Follow the recipe exactly. Output only the artifact.") },
+    { role: "user", content: prompt },
+  ], { temperature: 0.4, maxTokens: 4096 })
+  return response.trim()
+}
+
 export async function* streamGlobalChat(
   query: string,
   chatHistory: ChatMessage[],
   allMeetings: Meeting[],
   signal?: AbortSignal,
+  opts?: { folderId?: string },
 ): AsyncGenerator<string> {
+  let meetings = allMeetings
+  if (opts?.folderId) {
+    meetings = allMeetings.filter((m) => m.folderIds?.includes(opts.folderId!))
+  }
+
   let knowledgeContext = ""
   let meetingContext = ""
 
   try {
     const { searchKnowledge, buildKnowledgeContextBlock } = await import("@/lib/knowledge-search")
-    const results = await searchKnowledge(query, allMeetings, { limit: 25 })
+    const results = await searchKnowledge(query, meetings, { limit: 25 })
     knowledgeContext = buildKnowledgeContextBlock(results, 4000)
   } catch { /* knowledge search optional */ }
 
@@ -457,13 +620,14 @@ export async function* streamGlobalChat(
       transcript: query,
       notes: query,
     }
-    const related = findRelatedMeetings(queryMeeting, allMeetings, 10)
-    meetingContext = buildMemoryContextBlock(related, allMeetings, 6000)
+    const related = findRelatedMeetings(queryMeeting, meetings, 10)
+    meetingContext = buildMemoryContextBlock(related, meetings, 6000)
   }
 
   const context = knowledgeContext || meetingContext
+  const folderHint = opts?.folderId ? " Scope answers to the selected folder's meetings only." : ""
 
-  const systemMsg = withVocabulary(`You are a helpful assistant with access to context from the user's past meetings. Answer questions based on this context. If the answer cannot be found in the meeting context, say so honestly. Be concise and specific. Use markdown formatting — headings, bullet points, tables, and bold for emphasis where appropriate.
+  const systemMsg = withVocabulary(`You are a helpful assistant with access to context from the user's past meetings.${folderHint} Answer questions based on this context. If the answer cannot be found in the meeting context, say so honestly. Be concise and specific. Use markdown formatting — headings, bullet points, tables, and bold for emphasis where appropriate.
 
 ${context || "(no relevant meetings found)"}
 

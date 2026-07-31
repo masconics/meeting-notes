@@ -2,9 +2,10 @@
 //
 // All audio capture now lives in the Swift sidecar: the mic via AVAudioEngine
 // (with Apple voice-processing AEC) and system output via a Core Audio process
-// tap. This Rust layer just spawns the streaming sidecar, relays its
-// confirmed/volatile transcript and audio-level JSON as Tauri events, and
-// signals "stop" by closing the sidecar's stdin (EOF).
+// tap. This Rust layer just acquires the streaming sidecar (reusing a
+// pre-warmed one when available so recording starts without the model load),
+// relays its confirmed/volatile transcript and audio-level JSON as Tauri
+// events, and signals "stop" by closing the sidecar's stdin (EOF).
 //
 // Previously the mic was captured here with cpal and shipped to the sidecar as
 // raw f32 frames over stdin; moving it into the sidecar removed that IPC, the
@@ -126,11 +127,11 @@ pub fn stop_continuous_sync() {
     }
 }
 
-// Streaming live-caption path (Parakeet). Spawns the long-lived streaming sidecar
-// (which captures all audio itself), relays its confirmed/volatile updates and
-// per-source levels, and closes stdin to stop. No audio crosses the process
-// boundary anymore — the sidecar's sliding window and Silero VAD handle
-// segmentation.
+// Streaming live-caption path. Reuses the pre-warmed streaming sidecar when one
+// is parked (model already loaded — recording starts instantly), otherwise
+// spawns fresh. Relays confirmed/volatile updates and per-source levels, and
+// closes stdin to stop. No audio crosses the process boundary — the sidecar
+// captures, VAD-gates, and transcribes on its own.
 async fn run_stream_processor(
     app: AppHandle,
     stop: Arc<AtomicBool>,
@@ -138,97 +139,97 @@ async fn run_stream_processor(
     source: String,
     model: String,
 ) {
-    // The sidecar captures audio at its own rate now; the config frame's rate field
-    // is vestigial, so pass a placeholder.
-    let (sidecar, mut stdout) =
-        match fluid::spawn_stream_sidecar(&app, 16000, &language, &source, Some(&model)).await {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("stream sidecar failed: {e}");
-                let _ = app.emit("capture-error", CaptureError { text: e });
-                return;
-            }
-        };
-
-    // Relay JSON updates from the sidecar as `transcript-stream` / `audio-level`.
-    let reader_app = app.clone();
-    let reader = tokio::task::spawn(async move {
-        use tokio::io::AsyncBufReadExt;
-        let mut line = String::new();
-        loop {
-            line.clear();
-            match stdout.read_line(&mut line).await {
-                Ok(0) => break, // EOF
-                Ok(_) => {
-                    let t = line.trim();
-                    if t.is_empty() {
-                        continue;
-                    }
-                    if t == "DONE" {
-                        break;
-                    }
-                    if let Some(msg) = t
-                        .strip_prefix("FATAL\t")
-                        .or_else(|| t.strip_prefix("ERR\t"))
-                    {
-                        log::error!("stream sidecar error: {msg}");
-                        let _ = reader_app.emit(
-                            "capture-error",
-                            CaptureError {
-                                text: msg.to_string(),
-                            },
-                        );
-                        continue;
-                    }
-                    if t.starts_with('{') {
-                        match serde_json::from_str::<SourceLevel>(t) {
-                            Ok(l) => {
-                                let _ = reader_app.emit(
-                                    "audio-level",
-                                    AudioLevel {
-                                        rms: l.rms,
-                                        source: l.source,
-                                    },
-                                );
-                            }
-                            Err(_) => match serde_json::from_str::<StreamUpdate>(t) {
-                                Ok(u) => {
-                                    let _ = reader_app.emit(
-                                        "transcript-stream",
-                                        TranscriptStream {
-                                            source: u.source,
-                                            confirmed: u.confirmed,
-                                            volatile: u.volatile,
-                                        },
-                                    );
-                                }
-                                Err(e) => log::debug!("stream update parse error: {e} (line={t})"),
-                            },
-                        }
-                    }
-                }
-                Err(e) => {
-                    log::error!("stream read error: {e}");
-                    break;
-                }
-            }
+    let mut sidecar = match fluid::acquire_stream_sidecar(&app, Some(&model), &source).await {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("stream sidecar failed: {e}");
+            let _ = app.emit("capture-error", CaptureError { text: e });
+            return;
         }
-    });
+    };
 
-    // Park until asked to stop. The sidecar is capturing and transcribing on its
-    // own; we only need to notice the stop flag and tear it down.
-    while !stop.load(Ordering::Acquire) {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    // The sidecar captures audio at its own rate; the config frame's rate field
+    // is vestigial, so pass a placeholder. `begin` is what unparks a pre-warmed
+    // sidecar — models are typically already loaded at this point.
+    if let Err(e) = sidecar.begin(16000, &language).await {
+        log::error!("stream sidecar config failed: {e}");
+        let _ = app.emit("capture-error", CaptureError { text: e });
+        return;
+    }
+    if let Err(e) = sidecar.wait_ready(&app).await {
+        log::error!("stream sidecar failed: {e}");
+        let _ = app.emit("capture-error", CaptureError { text: e });
+        return;
     }
 
-    // Closing stdin (inside finish) is the EOF the sidecar waits on to flush finals.
-    sidecar.finish().await;
-    let reader_abort = reader.abort_handle();
-    match tokio::time::timeout(Duration::from_secs(6), reader).await {
-        Ok(_) => {}
-        Err(_) => {
-            log::warn!("[capture] reader task timeout, aborting");
-            reader_abort.abort();
+    // Single relay loop: forward transcript/level JSON to the frontend while
+    // watching the stop flag (checked between lines every 100ms, matching the
+    // old poll cadence). On stop, close stdin — the EOF the sidecar waits on to
+    // flush its final transcripts — then keep reading until DONE/EOF with an
+    // overall 6s deadline so a stuck sidecar can't hang teardown.
+    let mut eof_at: Option<tokio::time::Instant> = None;
+    loop {
+        if eof_at.is_none() && stop.load(Ordering::Acquire) {
+            sidecar.close_stdin();
+            eof_at = Some(tokio::time::Instant::now());
+        }
+        if let Some(t) = eof_at {
+            if t.elapsed() > Duration::from_secs(6) {
+                log::warn!("[capture] stream sidecar final flush timed out");
+                break;
+            }
+        }
+        let line = match tokio::time::timeout(Duration::from_millis(100), sidecar.next_line()).await
+        {
+            Ok(Some(line)) => line,
+            Ok(None) => break, // EOF
+            Err(_) => continue, // tick: re-check stop flag / teardown deadline
+        };
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t == "DONE" {
+            break;
+        }
+        if let Some(msg) = t
+            .strip_prefix("FATAL\t")
+            .or_else(|| t.strip_prefix("ERR\t"))
+        {
+            log::error!("stream sidecar error: {msg}");
+            let _ = app.emit(
+                "capture-error",
+                CaptureError {
+                    text: msg.to_string(),
+                },
+            );
+            continue;
+        }
+        if t.starts_with('{') {
+            match serde_json::from_str::<SourceLevel>(t) {
+                Ok(l) => {
+                    let _ = app.emit(
+                        "audio-level",
+                        AudioLevel {
+                            rms: l.rms,
+                            source: l.source,
+                        },
+                    );
+                }
+                Err(_) => match serde_json::from_str::<StreamUpdate>(t) {
+                    Ok(u) => {
+                        let _ = app.emit(
+                            "transcript-stream",
+                            TranscriptStream {
+                                source: u.source,
+                                confirmed: u.confirmed,
+                                volatile: u.volatile,
+                            },
+                        );
+                    }
+                    Err(e) => log::debug!("stream update parse error: {e} (line={t})"),
+                },
+            }
         }
     }
 }

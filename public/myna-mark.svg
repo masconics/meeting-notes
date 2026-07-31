@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" role="img" aria-label="Myna Notes">
+  <title>Myna Notes</title>
+  <!-- Plate = app dark background (oklch 0.145 → #0a0a0a); bird = foreground -->
+  <rect width="128" height="128" rx="28" fill="#0a0a0a"/>
+  <defs>
+    <mask id="myna-eye-app" maskUnits="userSpaceOnUse" x="0" y="0" width="112" height="96">
+      <rect width="112" height="96" fill="#fff"/>
+      <circle cx="54" cy="40" r="6" fill="#000"/>
+    </mask>
+  </defs>
+  <g transform="translate(10 16)" fill="#fafafa" mask="url(#myna-eye-app)">
+    <circle cx="40" cy="48" r="36"/>
+    <polygon points="62,36 110,48 62,60"/>
+  </g>
+</svg>

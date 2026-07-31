@@ -8,7 +8,7 @@ export async function exportAllMeetings(): Promise<boolean> {
   if (meetings.length === 0) return false
 
   const data = JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), meetings }, null, 2)
-  const filename = `meeting-notes-export-${new Date().toISOString().slice(0, 10)}.json`
+  const filename = `myna-notes-export-${new Date().toISOString().slice(0, 10)}.json`
 
   try {
     const { save } = await import("@tauri-apps/plugin-dialog")
@@ -44,7 +44,7 @@ export async function exportAllMeetingsMarkdown(): Promise<boolean> {
     const md = toMarkdown(m)
     return i === 0 ? md : `\n\n---\n\n${md}`
   }).join("")
-  const filename = `meetings-${dateStr}.md`
+  const filename = `myna-notes-${dateStr}.md`
 
   try {
     const { save } = await import("@tauri-apps/plugin-dialog")
@@ -72,7 +72,7 @@ export async function exportAllMeetingsMarkdown(): Promise<boolean> {
 
 function sanitizeFilename(title: string): string {
   const slug = title.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").toLowerCase().slice(0, 60)
-  return slug || "meeting-notes"
+  return slug || "myna-notes"
 }
 
 /** Export a single meeting as a .md file. Returns false when the user cancels

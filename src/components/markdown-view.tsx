@@ -1,10 +1,13 @@
 import { useMemo } from "react"
 import { ProseMirrorEditor } from "@/components/ProseMirrorEditor"
 import { renderMarkdownHtml } from "@/lib/render-markdown"
+import { cn } from "@/lib/utils"
 
 interface MarkdownViewProps {
   markdown?: string | null
   className?: string
+  /** Typography root class. Defaults to full note prose (`.mdx-content`). Use `"mdx-brief"` for compact prep type. */
+  proseClassName?: string
   editable?: boolean
   onChange?: (markdown: string) => void
   editorLabel?: string
@@ -16,6 +19,7 @@ interface MarkdownViewProps {
 export function MarkdownView({
   markdown,
   className,
+  proseClassName = "mdx-content",
   editable = false,
   onChange,
   editorLabel = "Edit markdown",
@@ -37,5 +41,10 @@ export function MarkdownView({
     )
   }
 
-  return <div className={`mdx-content ${className ?? ""}`} dangerouslySetInnerHTML={{ __html: html }} />
+  return (
+    <div
+      className={cn(proseClassName, className)}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  )
 }

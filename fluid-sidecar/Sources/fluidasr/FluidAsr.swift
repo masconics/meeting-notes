@@ -184,6 +184,128 @@ final class SystemAudioCapturer: @unchecked Sendable {
     }
 }
 
+/// Gates a live capture to speech regions using Silero VAD, so the recognizer
+/// mostly sees speech. Without it, silence/noise/music flows into ASR and —
+/// because the streaming confirmation gates are zeroed (see `liveConfig`) — any
+/// hallucinated text decoded from non-speech audio is promoted into the
+/// permanent transcript.
+///
+/// Tuned for live mic use: thresholds are deliberately permissive, hangover is
+/// long, and frames with clear acoustic energy still pass even when VAD is
+/// unsure. An earlier 0.5 enter threshold with no energy fallback dropped real
+/// speech (especially quieter mics) and produced "levels move, no text".
+/// Fail-open: if the VAD errors or is unavailable, audio flows through unchanged.
+final class SpeechGate: @unchecked Sendable {
+    private var vad: VadManager?
+    private var state = VadStreamState.initial()
+    private var pending: [Float] = []
+    private var preroll: [[Float]] = []
+    private var inSpeech = false
+    private var silenceRun = 0
+    private var disabled = false
+    private var passedFrames = 0
+    private var droppedFrames = 0
+
+    private let frameSize = VadManager.chunkSize // 4096 samples (256ms @16kHz)
+    private let hangoverFrames: Int
+    private let prerollFrames: Int
+    private let enterThreshold: Float
+    private let softEnterThreshold: Float
+    private let exitThreshold: Float
+    private let energyFloor: Float
+
+    /// - Parameter sensitive: mic capture — user is intentionally speaking, so
+    ///   prefer letting borderline frames through. System audio stays stricter
+    ///   to keep music/noise from hallucinating into the transcript.
+    init(vad: VadManager?, sensitive: Bool = false) {
+        self.vad = vad
+        self.disabled = vad == nil
+        if sensitive {
+            hangoverFrames = 8
+            prerollFrames = 4
+            enterThreshold = 0.28
+            softEnterThreshold = 0.12
+            exitThreshold = 0.08
+            energyFloor = 0.008
+        } else {
+            hangoverFrames = 6
+            prerollFrames = 3
+            enterThreshold = 0.35
+            softEnterThreshold = 0.18
+            exitThreshold = 0.12
+            energyFloor = 0.012
+        }
+    }
+
+    private func peak(of frame: [Float]) -> Float {
+        var p: Float = 0
+        for s in frame { let a = abs(s); if a > p { p = a } }
+        return p
+    }
+
+    /// Push 16kHz mono samples; returns the chunks that should reach the
+    /// recognizer (empty while in silence). Chunks are 4096 samples, except a
+    /// flushed pre-roll keeps its original frame boundaries.
+    func push(_ samples: [Float]) async -> [[Float]] {
+        guard !disabled, let vad = vad else { return samples.isEmpty ? [] : [samples] }
+        pending.append(contentsOf: samples)
+        var out: [[Float]] = []
+        while pending.count >= frameSize {
+            let frame = Array(pending.prefix(frameSize))
+            pending.removeFirst(frameSize)
+            do {
+                let result = try await vad.processStreamingChunk(frame, state: state)
+                state = result.state
+                let p = result.probability
+                let energetic = peak(of: frame) >= energyFloor
+                // Firm VAD hit, or energetic audio where VAD is only unsure —
+                // never require a high VAD score when the mic clearly has signal.
+                let speechNow = p >= enterThreshold || (energetic && p >= softEnterThreshold)
+
+                if speechNow {
+                    if !inSpeech {
+                        inSpeech = true
+                        out.append(contentsOf: preroll)
+                        passedFrames += preroll.count
+                        preroll.removeAll()
+                        sysLog("vad: speech start (p=\(String(format: "%.2f", p)), energy=\(energetic))")
+                    }
+                    silenceRun = 0
+                    out.append(frame)
+                    passedFrames += 1
+                } else if inSpeech {
+                    if p < exitThreshold && !energetic { silenceRun += 1 } else { silenceRun = 0 }
+                    if silenceRun > hangoverFrames {
+                        inSpeech = false
+                        silenceRun = 0
+                        preroll = [frame]
+                        droppedFrames += 1
+                        sysLog("vad: speech end (passed=\(passedFrames), dropped=\(droppedFrames))")
+                    } else {
+                        out.append(frame)
+                        passedFrames += 1
+                    }
+                } else {
+                    droppedFrames += 1
+                    preroll.append(frame)
+                    if preroll.count > prerollFrames {
+                        preroll.removeFirst(preroll.count - prerollFrames)
+                    }
+                }
+            } catch {
+                disabled = true
+                sysLog("vad: gate disabled after error: \(error.localizedDescription)")
+                var rest = frame
+                rest.append(contentsOf: pending)
+                pending.removeAll()
+                out.append(rest)
+                break
+            }
+        }
+        return out
+    }
+}
+
 /// Captures the default input device (mic) with AVAudioEngine and exposes it as
 /// 16kHz mono float chunks — the mirror of `SystemAudioCapturer`, so both sources
 /// now live in this one process (the Rust side no longer runs cpal or ships audio
@@ -289,7 +411,7 @@ struct FluidAsr {
         FileHandle.standardOutput.write(("\n" + s + "\n").data(using: .utf8)!)
     }
 
-    static func progressPhase(_ phase: DownloadUtils.DownloadPhase) -> String {
+    static func progressPhase(_ phase: DownloadPhase) -> String {
         switch phase {
         case .listing:
             return "listing"
@@ -300,7 +422,7 @@ struct FluidAsr {
         }
     }
 
-    static func emitProgress(_ progress: DownloadUtils.DownloadProgress) {
+    static func emitProgress(_ progress: DownloadProgress) {
         let fraction = min(1.0, max(0.0, progress.fractionCompleted))
         emit("PROGRESS\t\(String(format: "%.4f", fraction))\t\(progressPhase(progress.phase))")
     }
@@ -351,26 +473,14 @@ struct FluidAsr {
         let noVad = args.contains("--no-vad")
         let stream = args.contains("--stream")
         let downloadOnly = args.contains("--download-only")
-        let modelName = args.first(where: { $0.hasPrefix("--model=") })?
-            .replacingOccurrences(of: "--model=", with: "") ?? "parakeet"
-        let useQwen3 = modelName == "qwen3" || modelName == "qwen3-asr"
 
-        let progressHandler: DownloadUtils.ProgressHandler = { progress in
+        let progressHandler: ProgressHandler = { progress in
             emitProgress(progress)
         }
 
         if downloadOnly {
             do {
-                if useQwen3 {
-                    if #available(macOS 15, *) {
-                        _ = try await Qwen3AsrModels.download(variant: .int8, progressHandler: progressHandler)
-                    } else {
-                        emit("FATAL\tQwen3 ASR requires macOS 15 or newer")
-                        exit(1)
-                    }
-                } else {
-                    _ = try await AsrModels.download(version: useV2 ? .v2 : .v3, encoderPrecision: .int4, progressHandler: progressHandler)
-                }
+                _ = try await AsrModels.download(version: useV2 ? .v2 : .v3, encoderPrecision: .int4, progressHandler: progressHandler)
                 emit("READY")
             } catch {
                 emit("FATAL\t\(error.localizedDescription)")
@@ -390,7 +500,7 @@ struct FluidAsr {
                 }
                 return "mic"
             }()
-            await runStream(useV2: useV2, useQwen3: useQwen3, source: source)
+            await runStream(useV2: useV2, source: source)
             return
         }
 
@@ -401,44 +511,7 @@ struct FluidAsr {
         let vad: VadManager? = noVad ? nil : (try? await VadManager(config: .default))
 
         do {
-            if useQwen3 {
-                if #available(macOS 15, *) {
-                    _ = try await Qwen3AsrModels.download(variant: .int8, progressHandler: progressHandler)
-                    emit("PROGRESS\t0.9900\tloading")
-                    let qwen = Qwen3AsrManager()
-                    try await qwen.loadModels(from: Qwen3AsrModels.defaultCacheDirectory(variant: .int8))
-                    emit("READY")
-                    while let line = readLine(strippingNewline: true) {
-                        let trimmed = line.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-                        if trimmed.isEmpty { continue }
-                        let parts = trimmed.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-                        let (langCode, path): (String?, String) = parts.count == 2
-                            ? (String(parts[0]), String(parts[1]))
-                            : (nil, trimmed)
-                        if path.isEmpty { continue }
-                        do {
-                            guard let audio = await Self.prepareAudio(vad: vad, path: path) else {
-                                emit("OK\t")
-                                continue
-                            }
-                            let text = try await qwen.transcribe(
-                                audioSamples: audio,
-                                language: langCode.flatMap { Qwen3AsrConfig.Language(from: $0) },
-                                maxNewTokens: 512
-                            )
-                            .replacingOccurrences(of: "\t", with: " ")
-                            .replacingOccurrences(of: "\n", with: " ")
-                            .trimmingCharacters(in: CharacterSet.whitespaces)
-                            emit("OK\t\(text)")
-                        } catch {
-                            emit("ERR\t\(error.localizedDescription)")
-                        }
-                    }
-                } else {
-                    emit("FATAL\tQwen3 ASR requires macOS 15 or newer")
-                    exit(1)
-                }
-            } else if useSenseVoice {
+            if useSenseVoice {
                 let models = try await SenseVoiceModels.downloadAndLoad(precision: .int8, progressHandler: progressHandler)
                 emit("READY")
                 while let line = readLine(strippingNewline: true) {
@@ -455,6 +528,7 @@ struct FluidAsr {
                             emit("OK\t")
                             continue
                         }
+                        emit("INFO\tduration=\(String(format: "%.1f", Double(audio.count) / 16000.0))")
                         let sv = SenseVoiceManager(models: models, language: language)
                         let text = try await sv.transcribe(audio: audio)
                             .replacingOccurrences(of: "\t", with: " ")
@@ -486,6 +560,9 @@ struct FluidAsr {
                             emit("OK\t")
                             continue
                         }
+                        // Duration hint: lets the Rust side scale its request
+                        // timeout to the audio length (long imports take minutes).
+                        emit("INFO\tduration=\(String(format: "%.1f", Double(audio.count) / 16000.0))")
                         var decoderState = try TdtDecoderState()
                         let result = try await asr.transcribe(
                             audio, decoderState: &decoderState, language: language)
@@ -614,27 +691,12 @@ struct FluidAsr {
     ///   frame 0 : UTF8 "<sampleRate>\t<lang>" config (mic sample rate)
     ///   frame n : raw Float32 LE mono mic samples at <sampleRate>
     ///   EOF     : finish and emit the final transcripts
-    static func runStream(useV2: Bool, useQwen3: Bool, source: String) async {
+    static func runStream(useV2: Bool, source: String) async {
         let micActive = source != "system"
         let systemActive = source != "mic"
         do {
-            let progressHandler: DownloadUtils.ProgressHandler = { progress in
+            let progressHandler: ProgressHandler = { progress in
                 emitProgress(progress)
-            }
-
-            if useQwen3 {
-                if #available(macOS 15, *) {
-                    try await runQwen3Stream(
-                        source: source,
-                        micActive: micActive,
-                        systemActive: systemActive,
-                        progressHandler: progressHandler
-                    )
-                    return
-                } else {
-                    emit("FATAL\tQwen3 ASR requires macOS 15 or newer")
-                    exit(1)
-                }
             }
 
             // Load models once; share across both source streams.
@@ -642,20 +704,29 @@ struct FluidAsr {
                 ? AsrModels.downloadAndLoad(version: .v2, progressHandler: progressHandler)
                 : AsrModels.downloadAndLoad(version: .v3, encoderPrecision: .int4, progressHandler: progressHandler))
 
-            // `.default` waits chunk+rightContext (17s) of audio before the first
-            // update — far too laggy for live captions. Smaller windows trade a
-            // little accuracy for ~4s update cadence on both mic and system.
+            // Silero VAD for the per-source speech gates. Lower threshold than
+            // VadConfig.default (0.85) — that value is for batch segmentation and
+            // was dropping real mic speech in live mode. Fail-open if load fails.
+            let streamVad: VadManager? = try? await VadManager(
+                config: VadConfig(defaultThreshold: 0.45)
+            )
+            if streamVad == nil { sysLog("stream: VAD unavailable, speech gating off") }
+
+            // Window sizing: encoder input is fixed at 15s. Prefer FluidAudio's
+            // 2s left-context streaming shape for latency, with a 4s center chunk
+            // so the first caption appears after ~5s of gated audio (chunk+right)
+            // instead of the library default's ~13s.
             //
             // Confirmation gates are zeroed deliberately: the manager *drops* a
             // window's text when it isn't promoted to confirmed (the next window
             // overwrites volatile), so any non-zero confidence threshold loses
             // words whenever a window decodes below it. Promoting every window
             // keeps the transcript lossless; the UI renders confirmed+volatile
-            // the same way regardless.
+            // the same way regardless. SpeechGate keeps non-speech audio out.
             let liveConfig = SlidingWindowAsrConfig(
-                chunkSeconds: 3.0,
+                chunkSeconds: 4.0,
                 hypothesisChunkSeconds: 1.0,
-                leftContextSeconds: 5.0,
+                leftContextSeconds: 9.0,
                 rightContextSeconds: 1.0,
                 minContextForConfirmation: 0.0,
                 confirmationThreshold: 0.0
@@ -698,9 +769,12 @@ struct FluidAsr {
                     }
                     do {
                         try cap.start()
+                        let gate = SpeechGate(vad: streamVad, sensitive: false)
                         let feed = Task {
                             for await samples in cap.samples {
-                                if let buf = makeBuffer16k(samples) { await m.streamAudio(buf) }
+                                for chunk in await gate.push(samples) {
+                                    if let buf = makeBuffer16k(chunk) { await m.streamAudio(buf) }
+                                }
                             }
                         }
                         stopSystem = { cap.stop(); feed.cancel() }
@@ -725,9 +799,12 @@ struct FluidAsr {
                 }
                 do {
                     try cap.start()
+                    let gate = SpeechGate(vad: streamVad, sensitive: true)
                     let feed = Task {
                         for await samples in cap.samples {
-                            if let buf = makeBuffer16k(samples) { await m.streamAudio(buf) }
+                            for chunk in await gate.push(samples) {
+                                if let buf = makeBuffer16k(chunk) { await m.streamAudio(buf) }
+                            }
                         }
                     }
                     stopMic = { cap.stop(); feed.cancel() }
@@ -774,107 +851,6 @@ struct FluidAsr {
             emit("FATAL\t\(error.localizedDescription)")
             exit(1)
         }
-    }
-
-    @available(macOS 15, *)
-    static func runQwen3Stream(
-        source: String,
-        micActive: Bool,
-        systemActive: Bool,
-        progressHandler: DownloadUtils.ProgressHandler?
-    ) async throws {
-        _ = try await Qwen3AsrModels.download(variant: .int8, progressHandler: progressHandler)
-        emit("PROGRESS\t0.9900\tloading")
-        let qwen = Qwen3AsrManager()
-        try await qwen.loadModels(from: Qwen3AsrModels.defaultCacheDirectory(variant: .int8))
-
-        guard let cfgData = readFrame(),
-              let cfg = String(data: cfgData, encoding: .utf8) else {
-            emit("FATAL\tmissing stream config frame")
-            exit(1)
-        }
-        let parts = cfg.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
-        let language = parts.count > 1
-            ? Qwen3AsrConfig.Language(from: String(parts[1]))
-            : nil
-        let config = Qwen3StreamingConfig(
-            minAudioSeconds: 1.0,
-            chunkSeconds: 2.0,
-            maxAudioSeconds: 30.0,
-            language: language
-        )
-
-        let micMgr = micActive ? Qwen3StreamingManager(asrManager: qwen, config: config) : nil
-        let sysMgr = systemActive ? Qwen3StreamingManager(asrManager: qwen, config: config) : nil
-
-        emit("READY")
-
-        var stopSystem: (() -> Void)?
-        if let m = sysMgr {
-            let cap = SystemAudioCapturer()
-            cap.onLevel = { peak in
-                emit("{\"source\":\"system\",\"rms\":\(peak)}")
-            }
-            do {
-                try cap.start()
-                let feed = Task {
-                    for await samples in cap.samples {
-                        do {
-                            if let result = try await m.addAudio(samples) {
-                                emitState(source: "system", confirmed: result.transcript, vol: "")
-                            }
-                        } catch {
-                            emit("ERR\tsystem\t\(error.localizedDescription)")
-                        }
-                    }
-                }
-                stopSystem = { cap.stop(); feed.cancel() }
-            } catch {
-                sysLog("sys: start failed: \(error.localizedDescription)")
-                emit("ERR\tsystem\t\(error.localizedDescription)")
-            }
-        }
-
-        // AEC only alongside the system tap ("both") — see runStream.
-        var stopMic: (() -> Void)?
-        if let m = micMgr {
-            let cap = MicAudioCapturer(enableAEC: systemActive)
-            cap.onLevel = { peak in
-                emit("{\"source\":\"mic\",\"rms\":\(peak)}")
-            }
-            do {
-                try cap.start()
-                let feed = Task {
-                    for await samples in cap.samples {
-                        do {
-                            if let result = try await m.addAudio(samples) {
-                                emitState(source: "mic", confirmed: result.transcript, vol: "")
-                            }
-                        } catch {
-                            emit("ERR\tmic\t\(error.localizedDescription)")
-                        }
-                    }
-                }
-                stopMic = { cap.stop(); feed.cancel() }
-            } catch {
-                sysLog("mic: start failed: \(error.localizedDescription)")
-                emit("ERR\tmic\t\(error.localizedDescription)")
-            }
-        }
-
-        while readFrame() != nil { continue }
-
-        stopMic?()
-        stopSystem?()
-        if let m = micMgr {
-            let final = try await m.finish()
-            emitState(source: "mic", confirmed: final.transcript, vol: "")
-        }
-        if let m = sysMgr {
-            let final = try await m.finish()
-            emitState(source: "system", confirmed: final.transcript, vol: "")
-        }
-        emit("DONE")
     }
 
     private static func senseVoiceLang(_ code: String) -> Int32? {

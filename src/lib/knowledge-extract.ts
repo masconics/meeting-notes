@@ -1,6 +1,7 @@
 import type { Meeting, KnowledgeItem, KnowledgeKind } from "@/types"
 import { callDeepSeek } from "@/lib/deepseek-client"
 import { withVocabulary } from "@/lib/dictionary"
+import { parseChecklistMarkdown } from "@/lib/checklist"
 
 function cleanJsonResponse(text: string): string {
   return text.trim()
@@ -87,4 +88,44 @@ ${notes.slice(0, 8000)}`
   } catch {
     return []
   }
+}
+
+/**
+ * Fallback: turn an action-digest checklist into knowledge action items when
+ * the dedicated extractor returns nothing (or to fill gaps).
+ */
+export function knowledgeItemsFromActionDigest(
+  meetingId: string,
+  digestMarkdown: string,
+): KnowledgeItem[] {
+  if (!digestMarkdown.trim()) return []
+  const now = new Date().toISOString()
+  const items: KnowledgeItem[] = []
+
+  for (const line of parseChecklistMarkdown(digestMarkdown)) {
+    if (line.kind !== "item" || !line.body?.trim()) continue
+    // Prefer "Owner — task" / "Owner - task" patterns from the recipe prompt.
+    const split = line.body.match(/^(.+?)\s+[—–-]\s+(.+)$/)
+    let assignee: string | undefined
+    let text = line.body.trim()
+    if (split) {
+      const maybeOwner = split[1].trim()
+      const maybeTask = split[2].trim()
+      if (maybeOwner && maybeOwner.toLowerCase() !== "unassigned" && maybeTask) {
+        assignee = maybeOwner
+        text = maybeTask
+      }
+    }
+    items.push({
+      id: crypto.randomUUID(),
+      kind: "action_item",
+      text,
+      meetingId,
+      assignee,
+      status: line.checked ? "resolved" : "open",
+      topics: [],
+      extractedAt: now,
+    })
+  }
+  return items
 }

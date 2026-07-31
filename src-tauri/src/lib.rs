@@ -1,6 +1,8 @@
 mod capture;
+mod calendar;
 mod embed;
 mod fluid;
+mod mcp_snapshot;
 
 use log;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -62,7 +64,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let show = MenuItemBuilder::with_id("show", "Show Notes").build(app)?;
+            let show = MenuItemBuilder::with_id("show", "Show Myna Notes").build(app)?;
             let recording = MenuItemBuilder::with_id("recording", "Not Recording").build(app)?;
             let separator = tauri::menu::PredefinedMenuItem::separator(app)?;
             let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
@@ -72,7 +74,7 @@ pub fn run() {
 
             let _tray = TrayIconBuilder::with_id("main-tray")
                 .menu(&menu)
-                .tooltip("Notes")
+                .tooltip("Myna Notes")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
@@ -106,9 +108,9 @@ pub fn run() {
 
                 if let Some(tray) = handle.tray_by_id("main-tray") {
                     let tooltip = if recording {
-                        "Notes — Recording"
+                        "Myna Notes — Recording"
                     } else {
-                        "Notes"
+                        "Myna Notes"
                     };
                     let _ = tray.set_tooltip(Some(tooltip));
                 }
@@ -143,11 +145,17 @@ pub fn run() {
             fluid::delete_model,
             fluid::check_screen_permission,
             fluid::request_screen_permission,
+            fluid::prewarm_stream,
             capture::start_continuous,
             capture::stop_continuous,
             embed::embed_text,
             embed::embed_batch,
             embed::unload_embed,
+            calendar::request_calendar_access,
+            calendar::list_upcoming_events,
+            calendar::calendar_authorization_status,
+            mcp_snapshot::write_mcp_snapshot,
+            mcp_snapshot::mcp_snapshot_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

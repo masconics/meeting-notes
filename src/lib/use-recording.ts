@@ -188,6 +188,17 @@ export function useRecording({
     [speechLang, audioSource, transcriptionModel],
   )
 
+  /** Pre-spawn the streaming sidecar so the ASR model is already loaded when the
+   *  user hits record. The backend parks the process (no capture, no mic
+   *  indicator) behind a short TTL; `start` then reuses it instead of paying
+   *  the multi-second model load. Best-effort — failures just mean a normal
+   *  (slower) start. */
+  const prewarm = useCallback(() => {
+    invoke("prewarm_stream", { model: transcriptionModel, source: audioSource }).catch((e) =>
+      logError(String(e)),
+    )
+  }, [transcriptionModel, audioSource])
+
   const start = useCallback(async () => {
     streamMergeRef.current = newStreamMerge()
     resetLiveState()
@@ -229,7 +240,10 @@ export function useRecording({
     streamMergeRef.current = newStreamMerge()
     setVolatileText("")
     await invoke("stop_continuous").catch(() => {})
-  }, [clearTick])
+    // Re-prewarm so resume skips the model load (the stopped sidecar exits with
+    // its session; a parked replacement loads in the background while paused).
+    prewarm()
+  }, [clearTick, prewarm])
 
   const resume = useCallback(async () => {
     // The resumed sidecar session restarts its confirmed text from empty, so
@@ -246,5 +260,5 @@ export function useRecording({
     }
   }, [invokeStart, beginTick, teardown, anchorText, onError])
 
-  return { volatileText, audioLevel, isSpeaking, duration, silenceSeconds, start, stop, pause, resume, abort }
+  return { volatileText, audioLevel, isSpeaking, duration, silenceSeconds, start, stop, pause, resume, abort, prewarm }
 }

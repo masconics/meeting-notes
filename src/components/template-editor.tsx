@@ -1,6 +1,8 @@
-import { useState, useCallback } from "react"
+import { useState, useCallback, useMemo } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import {
   Dialog,
   DialogContent,
@@ -20,6 +22,12 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   UserSearchIcon,
@@ -45,8 +53,8 @@ import {
   NoteAddIcon,
   ArrowUp01Icon,
   ArrowDown01Icon,
-  ArrowRight01Icon,
   Copy01Icon,
+  Add01Icon,
 } from "@hugeicons/core-free-icons"
 import type { IconSvgElement } from "@hugeicons/react"
 import type { MeetingTemplate, QuickAction, WritingStyle } from "@/types"
@@ -107,18 +115,37 @@ function emptyTemplate(): MeetingTemplate {
   }
 }
 
+/**
+ * Settings → Templates list + editor.
+ * Production settings pattern: dense rows, quiet chrome, clear edit dialog.
+ */
 export function TemplateEditor() {
   const [templates, setTemplates] = useState(() => getTemplates())
+  const [query, setQuery] = useState("")
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<MeetingTemplate | null>(null)
   const [form, setForm] = useState<MeetingTemplate>(emptyTemplate())
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
 
   const refresh = useCallback(() => {
     setTemplates(getTemplates())
   }, [])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return templates
+    return templates.filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        t.sections.some((s) => s.toLowerCase().includes(q)),
+    )
+  }, [templates, query])
+
+  const builtinCount = templates.filter((t) => DEFAULT_IDS.has(t.id)).length
+  const customCount = templates.length - builtinCount
 
   function openCreate() {
     setEditing(null)
@@ -160,7 +187,7 @@ export function TemplateEditor() {
   function removeSection(index: number) {
     setForm((f) => ({
       ...f,
-      sections: f.sections.filter((_, i) => i !== index),
+      sections: f.sections.length <= 1 ? [""] : f.sections.filter((_, i) => i !== index),
     }))
   }
 
@@ -173,22 +200,10 @@ export function TemplateEditor() {
     })
   }
 
-  function toggleExpand(id: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
-      } else {
-        next.add(id)
-      }
-      return next
-    })
-  }
-
   function updateQuickAction(index: number, patch: Partial<QuickAction>) {
     setForm((f) => {
       const quickActions = f.quickActions.map((a, i) =>
-        i === index ? { ...a, ...patch } : a
+        i === index ? { ...a, ...patch } : a,
       )
       return { ...f, quickActions }
     })
@@ -208,8 +223,6 @@ export function TemplateEditor() {
     }))
   }
 
-  const [saving, setSaving] = useState(false)
-
   function handleSave() {
     if (!form.name.trim() || saving) return
     setSaving(true)
@@ -217,7 +230,7 @@ export function TemplateEditor() {
     saveTemplate({
       ...form,
       id,
-      sections: form.sections.filter((s) => s.trim()),
+      sections: form.sections.map((s) => s.trim()).filter(Boolean),
       quickActions: form.quickActions.filter((a) => a.label.trim()),
     })
     closeDialog()
@@ -244,227 +257,267 @@ export function TemplateEditor() {
     const copy: MeetingTemplate = {
       ...template,
       id: crypto.randomUUID(),
-      name: `Copy of ${template.name}`,
+      name: `${template.name} copy`,
       sections: [...template.sections],
       quickActions: template.quickActions.map((a) => ({ ...a })),
     }
     saveTemplate(copy)
     refresh()
+    openEdit(copy)
   }
 
-  const inputClass =
-    "h-8 w-full min-w-0 rounded-2xl border border-transparent bg-input/50 px-2.5 py-1 text-sm transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-
   return (
-    <>
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-medium">Templates</h3>
-            <p className="text-xs text-muted-foreground">
-              {templates.length} template{templates.length !== 1 ? "s" : ""}
-              {" — "}
-              {templates.filter((t) => DEFAULT_IDS.has(t.id)).length} built-in,{" "}
-              {templates.filter((t) => !DEFAULT_IDS.has(t.id)).length} custom
+    <TooltipProvider delayDuration={280}>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[13px] text-muted-foreground">
+              <span className="tabular-nums text-foreground/90">{templates.length}</span>
+              {" · "}
+              <span className="tabular-nums">{builtinCount}</span> built-in
+              {customCount > 0 && (
+                <>
+                  {" · "}
+                  <span className="tabular-nums">{customCount}</span> custom
+                </>
+              )}
             </p>
           </div>
-          <div className="flex gap-2">
-            <AlertDialog
-              open={showResetConfirm}
-              onOpenChange={setShowResetConfirm}
-            >
+          <div className="flex shrink-0 items-center gap-1.5">
+            <AlertDialog open={showResetConfirm} onOpenChange={setShowResetConfirm}>
               <AlertDialogTrigger asChild>
-                <Button variant="outline" size="sm">
+                <Button variant="ghost" size="sm" className="h-8 text-muted-foreground">
                   Reset defaults
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent size="sm">
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Reset default templates?</AlertDialogTitle>
+                  <AlertDialogTitle>Reset built-in templates?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This will restore all built-in templates to their original
-                    state. Custom templates will not be affected.
+                    Restores original built-ins. Your custom templates stay.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    variant="destructive"
-                    onClick={handleResetDefaults}
-                  >
+                  <AlertDialogAction variant="destructive" onClick={handleResetDefaults}>
                     Reset
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-            <Button size="sm" onClick={openCreate}>
-              <HugeiconsIcon
-                icon={NoteAddIcon}
-                strokeWidth={2}
-                data-icon="inline-start"
-              />
-              New Template
+            <Button size="sm" className="h-8 rounded-xl" onClick={openCreate}>
+              <HugeiconsIcon icon={NoteAddIcon} strokeWidth={2} data-icon="inline-start" className="size-3.5" />
+              New
             </Button>
           </div>
         </div>
 
-        {templates.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4 text-center">
-            No templates yet. Create one or reset to defaults.
-          </p>
+        {templates.length > 6 && (
+          <Input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Filter templates…"
+            className="h-8 text-[13px]"
+            aria-label="Filter templates"
+          />
         )}
 
-        <div className="flex flex-col gap-2">
-          {templates.map((t) => {
-            const isExpanded = expandedIds.has(t.id)
-            return (
-              <div key={t.id}>
-                <div
-                  className="flex items-center gap-3 rounded-2xl border p-3 cursor-pointer"
-                  onClick={() => toggleExpand(t.id)}
-                >
-                  <TemplateIcon name={t.icon} className="size-5" />
-                  <div className="flex flex-col gap-0.5 min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{t.name}</span>
-                      {DEFAULT_IDS.has(t.id) && (
-                        <Badge variant="secondary" className="text-[10px] py-0">
-                          Built-in
-                        </Badge>
-                      )}
-                    </div>
-                    <span className="text-xs text-muted-foreground">
-                      {t.sections.length} sections &middot; {t.quickActions.length}{" "}
-                      quick actions
-                    </span>
-                  </div>
-                  <div className="flex gap-1 shrink-0">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      onClick={(e) => { e.stopPropagation(); openEdit(t) }}
-                    >
-                      <HugeiconsIcon icon={Edit01Icon} strokeWidth={2} />
-                    </Button>
-                    {DEFAULT_IDS.has(t.id) && (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="text-muted-foreground"
-                        onClick={(e) => { e.stopPropagation(); handleDuplicate(t) }}
-                        title="Duplicate"
-                      >
-                        <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} />
-                      </Button>
+        {templates.length === 0 ? (
+          <div className="rounded-2xl bg-muted/30 px-4 py-8 text-center">
+            <p className="text-[13px] font-medium">No templates</p>
+            <p className="mt-1 text-[12px] text-muted-foreground">
+              Create one or reset defaults.
+            </p>
+            <Button size="sm" className="mt-3 h-8" onClick={openCreate}>
+              New template
+            </Button>
+          </div>
+        ) : filtered.length === 0 ? (
+          <p className="py-6 text-center text-[13px] text-muted-foreground">
+            No matches for “{query.trim()}”
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-0.5" aria-label="Templates">
+            {filtered.map((t) => {
+              const isBuiltin = DEFAULT_IDS.has(t.id)
+              const open = previewId === t.id
+              return (
+                <li key={t.id}>
+                  <div
+                    className={cn(
+                      "group rounded-xl transition-colors",
+                      open ? "bg-muted/60" : "hover:bg-muted/40",
                     )}
-                    {!DEFAULT_IDS.has(t.id) && (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="text-destructive hover:text-destructive"
-                        onClick={(e) => { e.stopPropagation(); setDeleteId(t.id) }}
+                  >
+                    <div className="flex min-h-11 items-center gap-2.5 px-2 py-1.5">
+                      <button
+                        type="button"
+                        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+                        onClick={() => openEdit(t)}
                       >
-                        <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
-                      </Button>
-                    )}
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="text-muted-foreground"
-                      onClick={(e) => { e.stopPropagation(); toggleExpand(t.id) }}
-                    >
-                      <HugeiconsIcon
-                        icon={isExpanded ? ArrowDown01Icon : ArrowRight01Icon}
-                        strokeWidth={2}
-                        className="size-4"
-                      />
-                    </Button>
-                  </div>
-                </div>
-                {isExpanded && (
-                  <div className="ml-[52px] border-l-2 border-muted pl-4 py-1 space-y-0.5">
-                    {t.sections.map((section, i) => (
-                      <div key={i} className="text-xs text-muted-foreground">
-                        {section}
+                        <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-background ring-1 ring-border/50">
+                          <TemplateIcon name={t.icon} className="size-4" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-1.5">
+                            <span className="truncate text-[13px] font-medium">{t.name}</span>
+                            {isBuiltin && (
+                              <Badge variant="secondary" className="h-5 shrink-0 px-1.5 text-[10px]">
+                                Built-in
+                              </Badge>
+                            )}
+                          </span>
+                          <span className="block truncate text-[11px] text-muted-foreground">
+                            {t.sections.length} section{t.sections.length === 1 ? "" : "s"}
+                            {t.quickActions.length > 0 &&
+                              ` · ${t.quickActions.length} action${t.quickActions.length === 1 ? "" : "s"}`}
+                          </span>
+                        </span>
+                      </button>
+
+                      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="size-7"
+                              onClick={() => openEdit(t)}
+                              aria-label={`Edit ${t.name}`}
+                            >
+                              <HugeiconsIcon icon={Edit01Icon} strokeWidth={2} className="size-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Edit</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="size-7 text-muted-foreground"
+                              onClick={() => handleDuplicate(t)}
+                              aria-label={`Duplicate ${t.name}`}
+                            >
+                              <HugeiconsIcon icon={Copy01Icon} strokeWidth={2} className="size-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Duplicate</TooltipContent>
+                        </Tooltip>
+                        {!isBuiltin && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                className="size-7 text-muted-foreground hover:text-destructive"
+                                onClick={() => setDeleteId(t.id)}
+                                aria-label={`Delete ${t.name}`}
+                              >
+                                <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-3.5" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Delete</TooltipContent>
+                          </Tooltip>
+                        )}
                       </div>
-                    ))}
+                    </div>
+
+                    {t.sections.length > 0 && (
+                      <button
+                        type="button"
+                        className="w-full px-2 pb-2 pl-[3.25rem] text-left text-[11px] text-muted-foreground/80 transition-colors hover:text-foreground"
+                        onClick={() => setPreviewId(open ? null : t.id)}
+                      >
+                        {open ? "Hide sections" : "Show sections"}
+                      </button>
+                    )}
+                    {open && (
+                      <ul className="flex flex-wrap gap-1 px-2 pb-2.5 pl-[3.25rem]">
+                        {t.sections.map((s) => (
+                          <li
+                            key={s}
+                            className="rounded-md bg-background px-1.5 py-0.5 text-[11px] text-muted-foreground ring-1 ring-border/50"
+                          >
+                            {s}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </div>
 
+      {/* Editor dialog */}
       <Dialog open={dialogOpen} onOpenChange={(o) => { if (!o) closeDialog() }}>
         <DialogContent
-          className="sm:max-w-lg max-h-[85vh] overflow-y-auto"
+          className="flex max-h-[min(85vh,40rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-lg"
           showCloseButton
         >
-          <DialogHeader>
-            <DialogTitle>
-              {editing ? "Edit Template" : "New Template"}
+          <DialogHeader className="shrink-0 border-b border-border/50 px-5 py-4">
+            <DialogTitle className="text-[15px] font-medium tracking-tight">
+              {editing ? "Edit template" : "New template"}
             </DialogTitle>
-            <DialogDescription>
-              {editing
-                ? "Modify this template's name, sections, and quick actions."
-                : "Create a custom meeting template with sections and quick actions."}
+            <DialogDescription className="text-[13px]">
+              Sections shape enhanced notes. Quick actions are optional AI prompts.
             </DialogDescription>
           </DialogHeader>
 
-          {editing && DEFAULT_IDS.has(editing.id) && (
-            <div className="flex items-start gap-2 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-amber-600 dark:text-amber-400 text-xs">
-              <svg className="size-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-              </svg>
-              <span>Editing a built-in template will create a custom version. Reset defaults to restore the original.</span>
-            </div>
-          )}
+          <div className="scroll-fade min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
+            {editing && DEFAULT_IDS.has(editing.id) && (
+              <p className="rounded-xl bg-amber-500/8 px-3 py-2 text-[12px] text-amber-700 dark:text-amber-400">
+                Built-in — edits stay as a customized version. Reset defaults restores the original.
+              </p>
+            )}
 
-          <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium">Template Name</label>
-              <input
-                type="text"
+              <label htmlFor="tpl-name" className="text-[12px] font-medium">
+                Name
+              </label>
+              <Input
+                id="tpl-name"
                 value={form.name}
                 onChange={(e) => updateForm({ name: e.target.value })}
-                placeholder="e.g. Sprint Retrospective"
-                className={inputClass}
+                placeholder="Sprint retrospective"
+                className="h-9 text-[13px]"
+                autoFocus
               />
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium">Icon</label>
-              <div className="grid grid-cols-5 gap-1.5">
+              <span className="text-[12px] font-medium">Icon</span>
+              <div className="flex flex-wrap gap-1">
                 {ICON_OPTIONS.map(({ name, icon }) => (
                   <button
                     key={name}
                     type="button"
+                    aria-label={name}
+                    aria-pressed={form.icon === name}
                     className={cn(
-                      "size-11 inline-flex items-center justify-center rounded-xl border transition-colors cursor-pointer",
+                      "inline-flex size-9 items-center justify-center rounded-xl transition-colors",
                       form.icon === name
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border hover:bg-muted text-muted-foreground"
+                        ? "bg-muted text-foreground shadow-sm ring-1 ring-border/70"
+                        : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                     )}
                     onClick={() => updateForm({ icon: name })}
                   >
-                    <HugeiconsIcon
-                      icon={icon}
-                      strokeWidth={2}
-                      className="size-5"
-                    />
+                    <HugeiconsIcon icon={icon} strokeWidth={2} className="size-4" />
                   </button>
                 ))}
               </div>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-medium">Writing Style</label>
+              <label className="text-[12px] font-medium">Writing style</label>
               <Select
                 value={form.style ?? "default"}
                 onValueChange={(v) => updateForm({ style: v as WritingStyle })}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-9 text-[13px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -477,134 +530,121 @@ export function TemplateEditor() {
                   </SelectGroup>
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground">
-                Persona for notes generated with this template. "Default" follows the global writing style.
-              </p>
             </div>
 
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium">Sections</label>
-                <Button variant="outline" size="xs" onClick={addSection}>
-                  <HugeiconsIcon
-                    icon={NoteAddIcon}
-                    strokeWidth={2}
-                    data-icon="inline-start"
-                  />
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[12px] font-medium">Sections</label>
+                <Button variant="ghost" size="sm" className="h-7 text-[12px]" onClick={addSection}>
+                  <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" className="size-3.5" />
                   Add
                 </Button>
               </div>
-              <div className="flex flex-col gap-1.5">
+              <div className="flex flex-col gap-1">
                 {form.sections.map((section, i) => (
-                  <div key={i} className="flex items-center gap-1.5">
-                    <div className="flex flex-col gap-0.5 shrink-0">
+                  <div key={i} className="flex items-center gap-1">
+                    <div className="flex shrink-0 flex-col">
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon-xs"
                         disabled={i === 0}
-                        className="text-muted-foreground hover:text-foreground"
+                        className="size-6 text-muted-foreground"
                         onClick={() => moveSection(i, i - 1)}
+                        aria-label="Move up"
                       >
-                        <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} />
+                        <HugeiconsIcon icon={ArrowUp01Icon} strokeWidth={2} className="size-3" />
                       </Button>
                       <Button
                         variant="ghost"
-                        size="icon-sm"
+                        size="icon-xs"
                         disabled={i === form.sections.length - 1}
-                        className="text-muted-foreground hover:text-foreground"
+                        className="size-6 text-muted-foreground"
                         onClick={() => moveSection(i, i + 1)}
+                        aria-label="Move down"
                       >
-                        <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} />
+                        <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-3" />
                       </Button>
                     </div>
-                    <input
-                      type="text"
+                    <Input
                       value={section}
                       onChange={(e) => updateSection(i, e.target.value)}
                       placeholder={`Section ${i + 1}`}
-                      className={inputClass}
+                      className="h-8 flex-1 text-[13px]"
                     />
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      className="text-muted-foreground hover:text-destructive shrink-0"
+                      className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
                       onClick={() => removeSection(i)}
+                      aria-label="Remove section"
                     >
-                      <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
+                      <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-3.5" />
                     </Button>
                   </div>
                 ))}
-                {form.sections.length === 0 && (
-                  <p className="text-xs text-muted-foreground py-1">
-                    No sections. Add one to get started.
-                  </p>
-                )}
               </div>
             </div>
 
             <div className="flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-medium">Quick Actions</label>
-                <Button variant="outline" size="xs" onClick={addQuickAction}>
-                  <HugeiconsIcon
-                    icon={NoteAddIcon}
-                    strokeWidth={2}
-                    data-icon="inline-start"
-                  />
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[12px] font-medium">Quick actions</label>
+                <Button variant="ghost" size="sm" className="h-7 text-[12px]" onClick={addQuickAction}>
+                  <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" className="size-3.5" />
                   Add
                 </Button>
               </div>
-              <div className="flex flex-col gap-2">
-                {form.quickActions.map((action, i) => (
-                  <div
-                    key={i}
-                    className="flex flex-col gap-1.5 rounded-2xl border p-3"
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <input
-                        type="text"
-                        value={action.label}
-                        onChange={(e) =>
-                          updateQuickAction(i, { label: e.target.value })
-                        }
-                        placeholder="Action label"
-                        className={inputClass}
+              {form.quickActions.length === 0 ? (
+                <p className="text-[12px] text-muted-foreground">
+                  Optional — prompts you can run from the note after enhance.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {form.quickActions.map((action, i) => (
+                    <div
+                      key={i}
+                      className="flex flex-col gap-1.5 rounded-xl bg-muted/40 p-2.5 ring-1 ring-border/50"
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          value={action.label}
+                          onChange={(e) => updateQuickAction(i, { label: e.target.value })}
+                          placeholder="Label"
+                          className="h-8 flex-1 text-[13px]"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => removeQuickAction(i)}
+                          aria-label="Remove action"
+                        >
+                          <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-3.5" />
+                        </Button>
+                      </div>
+                      <Textarea
+                        value={action.prompt}
+                        onChange={(e) => updateQuickAction(i, { prompt: e.target.value })}
+                        placeholder="AI prompt for this action"
+                        rows={2}
+                        className="min-h-[3rem] resize-y bg-background text-[12px] leading-relaxed"
                       />
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="text-muted-foreground hover:text-destructive shrink-0"
-                        onClick={() => removeQuickAction(i)}
-                      >
-                        <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
-                      </Button>
                     </div>
-                    <input
-                      type="text"
-                      value={action.prompt}
-                      onChange={(e) =>
-                        updateQuickAction(i, { prompt: e.target.value })
-                      }
-                      placeholder="AI prompt for this action"
-                      className={cn(inputClass, "text-xs")}
-                    />
-                  </div>
-                ))}
-                {form.quickActions.length === 0 && (
-                  <p className="text-xs text-muted-foreground py-1">
-                    No quick actions. Add one to get started.
-                  </p>
-                )}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={closeDialog}>
+          <DialogFooter className="shrink-0 border-t border-border/50 px-5 py-3">
+            <Button variant="ghost" onClick={closeDialog} className="h-8">
               Cancel
             </Button>
-            <Button onClick={handleSave} disabled={!form.name.trim()}>
-              {editing ? "Save Changes" : "Create Template"}
+            <Button
+              onClick={handleSave}
+              disabled={!form.name.trim() || saving}
+              className="h-8 rounded-xl active:scale-[0.96]"
+            >
+              {editing ? "Save" : "Create"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -620,8 +660,7 @@ export function TemplateEditor() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete template?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this custom template. This action
-              cannot be undone.
+              This custom template will be removed. Notes that used it keep their content.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -632,6 +671,6 @@ export function TemplateEditor() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </TooltipProvider>
   )
 }

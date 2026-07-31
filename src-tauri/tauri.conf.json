@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicehash/tauri/dev/crates/tauri-config-schema/schema.json",
-  "productName": "Meeting Notes",
+  "productName": "Myna Notes",
   "version": "0.1.0",
   "identifier": "com.notes.desktop",
   "build": {
@@ -13,9 +13,11 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Meeting Notes",
-        "width": 1024,
-        "height": 768,
+        "title": "Myna Notes",
+        "width": 1100,
+        "height": 740,
+        "minWidth": 880,
+        "minHeight": 600,
         "resizable": true,
         "maximizable": true,
         "fullscreen": false,

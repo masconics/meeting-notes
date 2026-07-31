@@ -4,8 +4,8 @@
 <dict>
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
-	<key>com.apple.security.automation.apple-events</key>
-	<true/>
+	<!-- EventKit calendar read is gated by Info.plist usage strings + TCC;
+	     no Apple Events automation is required for native EventKit. -->
 	<key>com.apple.security.device.camera</key>
 	<false/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>

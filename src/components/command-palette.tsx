@@ -55,6 +55,24 @@ function PalettePanel({ meetings, onOpenMeeting, onNewNote, onOpenSettings, onCl
     const actions: PaletteItem[] = [
       { id: "new-note", kind: "action", label: "New note", hint: "⌘N", run: onNewNote },
       { id: "settings", kind: "action", label: "Open Settings", hint: "⌘,", run: onOpenSettings },
+      {
+        id: "actions-inbox",
+        kind: "action",
+        label: "Open Actions inbox",
+        run: () => {
+          onClose()
+          window.dispatchEvent(new CustomEvent("dashboard-pane", { detail: { pane: "actions" } }))
+        },
+      },
+      {
+        id: "people",
+        kind: "action",
+        label: "Open People memory",
+        run: () => {
+          onClose()
+          window.dispatchEvent(new CustomEvent("dashboard-pane", { detail: { pane: "people" } }))
+        },
+      },
     ]
     for (const a of actions) {
       if (!q || a.label.toLowerCase().includes(q)) out.push(a)
@@ -128,7 +146,7 @@ function PalettePanel({ meetings, onOpenMeeting, onNewNote, onOpenSettings, onCl
             <kbd className="shrink-0 rounded border border-border/70 bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">esc</kbd>
           </div>
 
-          <div ref={listRef} className="max-h-72 overflow-y-auto p-1.5">
+          <div ref={listRef} className="scroll-fade max-h-72 overflow-y-auto p-1.5">
             {items.length === 0 ? (
               <div className="px-3 py-6 text-center text-xs text-muted-foreground">
                 No notes match "{query}"

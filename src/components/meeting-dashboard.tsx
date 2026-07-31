@@ -1,5 +1,3 @@
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   InputGroup,
@@ -22,7 +20,6 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { motion } from "framer-motion"
 import { cn } from "@/lib/utils"
 import { formatTime, formatDuration, relativeDate } from "@/lib/format"
 import {
@@ -30,54 +27,32 @@ import {
   Cancel01Icon,
   FolderOpenIcon,
   DeleteIcon,
-  Calendar01Icon,
-  Clock01Icon,
   Settings02Icon,
   AiMagicIcon,
   AiChat02Icon,
   Search01Icon,
   SortingAZIcon,
   ArrowDown01Icon,
-  AiBrain01Icon,
   Bookmark01Icon,
   UserGroupIcon,
-  CheckListIcon,
   CheckmarkCircle02Icon,
   FileImportIcon,
 } from "@hugeicons/core-free-icons"
 import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback, useRef, useEffect } from "react"
-import { TemplateIcon } from "@/components/template-icon"
 import { getTemplateById } from "@/lib/templates"
 import { loadKnowledgeGraph, loadSavedSearches, saveSavedSearches, saveSortPreference } from "@/lib/storage"
 import { toast } from "@/components/ui/toaster"
-import { MarkdownView } from "@/components/markdown-view"
 import { GlobalChat } from "@/components/global-chat"
-
-function stripMarkdown(md: string): string {
-  return md
-    .replace(/^#{1,6}\s+/gm, "")
-    .replace(/(\*{1,3}|_{1,3})(.*?)\1/g, "$2")
-    .replace(/`{1,3}[^`]*`{1,3}/g, "")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/^>\s*/gm, "")
-    .replace(/^[-*+]\s+/gm, "")
-    .replace(/^\d+\.\s+/gm, "")
-    .replace(/^-{3,}|_{3,}|\*{3,}/gm, "")
-    .replace(/\n{2,}/g, " · ")
-    .replace(/\n/g, " ")
-    .trim()
-}
-
-const stripMarkdownCache = new Map<string, string>()
-function memoStripMarkdown(md: string): string {
-  if (stripMarkdownCache.has(md)) return stripMarkdownCache.get(md)!
-  const result = stripMarkdown(md)
-  if (stripMarkdownCache.size > 500) stripMarkdownCache.clear()
-  stripMarkdownCache.set(md, result)
-  return result
-}
+import { MynaLogo } from "@/components/myna-logo"
+import {
+  ActionsInbox,
+  FolderChips,
+  MeetingFolderMenu,
+  PeopleMemory,
+  UpcomingEvents,
+  type DashboardPane,
+} from "@/components/dashboard-views"
 
 type SortKey = "date-desc" | "date-asc" | "duration-desc" | "duration-asc" | "title-asc" | "title-desc"
 
@@ -106,12 +81,43 @@ function sortMeetings(meetings: Meeting[], key: SortKey): Meeting[] {
 function getSearchableText(meeting: Meeting): string {
   const parts = [
     meeting.title,
+    meeting.description,
     meeting.transcript,
     meeting.notes,
     meeting.enhancedNotes,
     ...(meeting.structuredNotes?.map((s) => `${s.title} ${s.content}`) ?? []),
   ]
   return parts.filter(Boolean).join(" ")
+}
+
+/** Granola-style day buckets for the notes list. */
+function dayGroupLabel(dateStr: string): string {
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return "Earlier"
+  const now = new Date()
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+  const day = startOf(date)
+  const today = startOf(now)
+  const diffDays = Math.round((today - day) / 86_400_000)
+  if (diffDays === 0) return "Today"
+  if (diffDays === 1) return "Yesterday"
+  if (diffDays > 1 && diffDays < 7) return "This week"
+  if (diffDays >= 7 && diffDays < 30) return "This month"
+  return date.toLocaleDateString(undefined, { month: "long", year: "numeric" })
+}
+
+function groupMeetingsByDay(meetings: Meeting[]): { label: string; items: Meeting[] }[] {
+  const order: string[] = []
+  const map = new Map<string, Meeting[]>()
+  for (const m of meetings) {
+    const label = dayGroupLabel(m.date)
+    if (!map.has(label)) {
+      map.set(label, [])
+      order.push(label)
+    }
+    map.get(label)!.push(m)
+  }
+  return order.map((label) => ({ label, items: map.get(label)! }))
 }
 
 function highlightMatches(text: string | null | undefined, query: string): React.ReactNode {
@@ -162,12 +168,35 @@ export function MeetingDashboard({
   const [debouncedQuery, setDebouncedQuery] = useState("")
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
+  const [pane, setPane] = useState<DashboardPane>(() => {
+    try {
+      const saved = sessionStorage.getItem("dashboard-pane") as DashboardPane | null
+      if (saved === "actions" || saved === "people" || saved === "notes") {
+        sessionStorage.removeItem("dashboard-pane")
+        return saved
+      }
+    } catch { /* ignore */ }
+    return "notes"
+  })
+  const [folderFilter, setFolderFilter] = useState<string | null>(null)
+  const [folderTick, setFolderTick] = useState(0)
+  const [chatFolderId, setChatFolderId] = useState<string | undefined>()
 
   // ⌘F on the dashboard jumps straight to search (dispatched from App).
   useEffect(() => {
     const handler = () => { searchInputRef.current?.focus(); searchInputRef.current?.select() }
     window.addEventListener("focus-dashboard-search", handler)
     return () => window.removeEventListener("focus-dashboard-search", handler)
+  }, [])
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { pane?: DashboardPane }
+      if (detail?.pane === "actions" || detail?.pane === "people" || detail?.pane === "notes") {
+        setPane(detail.pane)
+      }
+    }
+    window.addEventListener("dashboard-pane", handler)
+    return () => window.removeEventListener("dashboard-pane", handler)
   }, [])
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>(() => {
@@ -201,9 +230,8 @@ export function MeetingDashboard({
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
   const [editTitleText, setEditTitleText] = useState("")
-  const [briefLoadingId, setBriefLoadingId] = useState<string | null>(null)
-  const [briefResult, setBriefResult] = useState<string | null>(null)
-  const [briefMeetingId, setBriefMeetingId] = useState<string | null>(null)
+  const [editingDescriptionId, setEditingDescriptionId] = useState<string | null>(null)
+  const [editDescriptionText, setEditDescriptionText] = useState("")
   const [showGlobalChat, setShowGlobalChat] = useState(false)
   const [savedSearches, setSavedSearches] = useState<string[]>(() => loadSavedSearches())
 
@@ -211,6 +239,9 @@ export function MeetingDashboard({
 
   const filteredMeetings = useMemo(() => {
     let result = sorted
+    if (folderFilter) {
+      result = result.filter((m) => m.folderIds?.includes(folderFilter))
+    }
     if (debouncedQuery.trim()) {
       const q = debouncedQuery.toLowerCase()
       result = result.filter((m) => getSearchableText(m).toLowerCase().includes(q))
@@ -219,7 +250,8 @@ export function MeetingDashboard({
       result = result.filter((m) => m.speakerLabels?.some(s => s.name === speakerFilter))
     }
     return result
-  }, [sorted, debouncedQuery, speakerFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sorted, debouncedQuery, speakerFilter, folderFilter, folderTick])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -319,6 +351,7 @@ export function MeetingDashboard({
   }, [selected, onDeleteMeeting])
 
   const handleTitleEditStart = useCallback((meeting: Meeting) => {
+    setEditingDescriptionId(null)
     setEditingTitleId(meeting.id)
     setEditTitleText(meeting.title)
   }, [])
@@ -331,424 +364,567 @@ export function MeetingDashboard({
     setEditTitleText("")
   }, [editingTitleId, editTitleText, onUpdateMeeting])
 
-  const handleGenerateBrief = useCallback(async (meeting: Meeting) => {
-    setBriefLoadingId(meeting.id)
-    setBriefResult(null)
-    try {
-      const { generateBrief, isAIConfigured } = await import("@/lib/ai-service")
-      if (!isAIConfigured()) {
-        setBriefResult("AI is not configured. Set your API key in Settings.")
-        return
-      }
-      const { loadMeetings } = await import("@/lib/storage")
-      const result = await generateBrief(meeting, loadMeetings())
-      setBriefResult(result)
-      setBriefMeetingId(meeting.id)
-      onUpdateMeeting(meeting.id, { brief: result })
-    } catch (e) {
-      setBriefResult((e as Error).message)
-    } finally {
-      setBriefLoadingId(null)
+  const handleDescriptionEditStart = useCallback((meeting: Meeting) => {
+    setEditingTitleId(null)
+    setEditingDescriptionId(meeting.id)
+    setEditDescriptionText(meeting.description ?? "")
+  }, [])
+
+  const handleDescriptionEditSave = useCallback(() => {
+    if (editingDescriptionId) {
+      const next = editDescriptionText.trim()
+      onUpdateMeeting(editingDescriptionId, {
+        description: next || undefined,
+      })
     }
-  }, [onUpdateMeeting])
+    setEditingDescriptionId(null)
+    setEditDescriptionText("")
+  }, [editingDescriptionId, editDescriptionText, onUpdateMeeting])
+
+  const handleDescriptionEditCancel = useCallback(() => {
+    setEditingDescriptionId(null)
+    setEditDescriptionText("")
+  }, [])
+
+  const meetingGroups = useMemo(
+    () => groupMeetingsByDay(filteredMeetings),
+    [filteredMeetings],
+  )
 
   return (
-    <div className="app-page">
-      <div className="app-page-header">
-        <div>
-          <h1 className="app-page-title">Notes</h1>
-          <p className="app-page-description">
-            {meetings.length === 0
-              ? "Create your first note"
-              : hasQuery
-                ? `${filteredMeetings.length} of ${meetings.length} note${meetings.length === 1 ? "" : "s"} match`
-                : `${meetings.length} note${meetings.length === 1 ? "" : "s"}`}
-          </p>
-        </div>
-        <div className="app-toolbar shrink-0">
-          <Button variant="ghost" size="icon-sm" onClick={() => setShowGlobalChat(true)} title="Ask about all meetings" aria-label="Ask about all meetings">
-            <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} />
-          </Button>
-          <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
-            <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
-          </Button>
-          <Button variant="outline" onClick={handleImportAudio} disabled={importing} title="Transcribe an existing audio file into a new note">
-            {importing ? (
-              <span className="size-4 rounded-full border-2 border-current border-t-transparent animate-spin" data-icon="inline-start" />
-            ) : (
-              <HugeiconsIcon icon={FileImportIcon} strokeWidth={2} data-icon="inline-start" />
-            )}
-            Import Audio
-          </Button>
-          <Button onClick={onNewMeeting}>
-            <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
-            New Note
-          </Button>
-        </div>
-      </div>
+    <div className="dashboard-shell">
+      {/* Granola-style top bar: nav center, actions right */}
+      <header className="dashboard-topbar">
+        <div className="dashboard-topbar-inner">
+          <div className="flex min-w-0 items-center">
+            <MynaLogo className="size-6 text-foreground" title="Myna Notes" />
+          </div>
 
-      <div className="app-toolbar flex-col items-stretch gap-2">
-        <div className="flex items-center gap-2">
-          <InputGroup className="h-8 flex-1 bg-transparent shadow-none ring-0">
-            <InputGroupInput
-              ref={searchInputRef}
-              type="search"
-              placeholder="Search notes... (⌘F)"
-              aria-label="Search notes"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-            {hasQuery ? (
-              <InputGroupButton
-                size="icon-sm"
-                onClick={() => { setSearchQuery(""); setDebouncedQuery("") }}
-                aria-label="Clear search"
-              >
-                <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
-              </InputGroupButton>
-            ) : (
-              <InputGroupButton size="icon-sm" tabIndex={-1} className="pointer-events-none" aria-label="Search notes">
-                <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
-              </InputGroupButton>
-            )}
-          </InputGroup>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={handleSaveSearch}
-            disabled={!hasQuery}
-            title="Save search"
-            aria-label="Save search"
-          >
-            <HugeiconsIcon icon={Bookmark01Icon} strokeWidth={2} />
-          </Button>
-          {allSpeakers.length > 0 && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant={speakerFilter ? "outline" : "ghost"} size="sm" className="shrink-0">
-                  <HugeiconsIcon icon={UserGroupIcon} strokeWidth={2} data-icon="inline-start" />
-                  {speakerFilter ?? "Speaker"}
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setSpeakerFilter(null)}>
-                  All speakers
-                  {!speakerFilter && (
-                    <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-4 ml-auto" />
-                  )}
-                </DropdownMenuItem>
-                {allSpeakers.map((name) => (
-                  <DropdownMenuItem key={name} onClick={() => setSpeakerFilter(name)}>
-                    {name}
-                    {name === speakerFilter && (
-                      <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-4 ml-auto" />
-                    )}
-                  </DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className="shrink-0">
-                <HugeiconsIcon icon={SortingAZIcon} strokeWidth={2} data-icon="inline-start" />
-                {SORT_LABELS[sortKey]}
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
-                <DropdownMenuItem key={key} onClick={() => handleSortChange(key)}>
-                  {SORT_LABELS[key]}
-                  {key === sortKey && (
-                    <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-4 ml-auto" />
-                  )}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        {savedSearches.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {savedSearches.map((q) => (
+          <div className="dashboard-nav" role="tablist" aria-label="Dashboard views">
+            {(
+              [
+                { id: "notes" as const, label: "Notes" },
+                { id: "actions" as const, label: "Actions" },
+                { id: "people" as const, label: "People" },
+              ] as const
+            ).map((tab) => (
               <button
-                key={q}
+                key={tab.id}
                 type="button"
-                className="inline-flex items-center gap-1 rounded-full border border-border/60 bg-muted/50 px-2.5 py-0.5 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors"
-                onClick={() => handleSelectSavedSearch(q)}
+                role="tab"
+                className="dashboard-nav-item"
+                data-active={pane === tab.id}
+                aria-selected={pane === tab.id}
+                onClick={() => setPane(tab.id)}
               >
-                {q}
-                <span
-                  className="inline-flex items-center justify-center size-3.5 rounded-full hover:bg-muted-foreground/20"
-                  onClick={(e) => { e.stopPropagation(); handleRemoveSavedSearch(q) }}
-                  role="button"
-                  aria-label={`Remove saved search "${q}"`}
-                >
-                  <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-2.5" />
-                </span>
+                {tab.label}
               </button>
             ))}
           </div>
-        )}
-      </div>
 
-      {meetings.length > 0 && filteredMeetings.length > 0 && (
-        <div className="flex items-center justify-between border-b border-border/60 pb-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => { setBatchMode(!batchMode); setSelected(new Set()) }}
-          >
-            {batchMode ? "Done" : "Select"}
-          </Button>
-          {batchMode && (
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={selectAll}>
-                {selected.size === filteredMeetings.length ? "Deselect All" : "Select All"}
-              </Button>
-              {hasQuery && (
-                <Button variant="ghost" size="sm" onClick={() => setSelected(new Set(filteredMeetings.map((m) => m.id)))}>
-                  Select All Matching
-                </Button>
-              )}
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={selected.size === 0}
-                onClick={() => setBatchDeleteConfirm(true)}
-              >
-                <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} data-icon="inline-start" />
-                Delete ({selected.size})
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {meetings.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="app-empty">
-            <div className="inline-flex size-9 items-center justify-center rounded-2xl bg-muted ring-1 ring-border/70">
-              <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={2} className="size-5 text-muted-foreground" />
-            </div>
-            <p className="text-muted-foreground text-sm">No notes yet</p>
-            <Button variant="outline" onClick={onNewMeeting}>
-              Create your first note
-            </Button>
-          </CardContent>
-        </Card>
-      ) : filteredMeetings.length === 0 ? (
-        <Card className="border-dashed">
-          <CardContent className="app-empty">
-            <p className="text-muted-foreground text-sm">No notes match "{searchQuery}"</p>
-            <Button variant="outline" onClick={() => setSearchQuery("")}>
-              Clear search
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="flex flex-col gap-3">
-          {filteredMeetings.map((meeting) => {
-            const template = meeting.templateId ? getTemplateById(meeting.templateId) : undefined
-            const previewText = meeting.structuredNotes?.[0]?.content
-              ? memoStripMarkdown(meeting.structuredNotes[0].content)
-              : meeting.notes
-                ? memoStripMarkdown(meeting.notes)
-                : meeting.transcript?.replace(/\n/g, " ") || ""
-            const isEditing = editingTitleId === meeting.id
-            const isSelected = selected.has(meeting.id)
-            const openActions = openActionsByMeeting.get(meeting.id) ?? 0
-            return (
-            <motion.div
-              key={meeting.id}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25, ease: "easeOut" }}
-              whileHover={batchMode ? undefined : { scale: 1.01, y: -1 }}
-              whileTap={batchMode ? undefined : { scale: 0.99 }}
-            >
-            <Card
-              size="sm"
-              role="button"
-              tabIndex={0}
-              className={cn(
-                "transition-colors hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring outline-none",
-                !batchMode && "cursor-pointer",
-                isSelected && "ring-2 ring-primary/50"
-              )}
+          <div className="flex items-center justify-end gap-1 sm:gap-1.5">
+            <Button
+              variant="ghost"
+              size="icon-sm"
               onClick={() => {
-                if (batchMode) {
-                  toggleSelect(meeting.id)
-                } else {
-                  onViewMeeting(meeting)
-                }
+                setChatFolderId(folderFilter ?? undefined)
+                setShowGlobalChat(true)
               }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault()
-                  if (batchMode) {
-                    toggleSelect(meeting.id)
-                  } else {
-                    onViewMeeting(meeting)
-                  }
-                }
-              }}
+              title="Ask about all meetings"
+              aria-label="Ask about all meetings"
+              className="text-brand hover:text-brand"
             >
-              <CardHeader>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex flex-col gap-1 min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      {batchMode && (
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => toggleSelect(meeting.id)}
-                          className="size-4 rounded border-border shrink-0 mt-0.5"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      )}
-                      {isEditing ? (
-                        <div className="flex items-center gap-1 flex-1">
-                          <Input
-                            value={editTitleText}
-                            onChange={(e) => setEditTitleText(e.target.value)}
-                            className="h-7 text-base font-semibold"
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleTitleEditSave()
-                              if (e.key === "Escape") {
-                                setEditingTitleId(null)
-                                setEditTitleText("")
-                              }
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            onClick={(e) => { e.stopPropagation(); handleTitleEditSave() }}
-                          >
-                            Save
-                          </Button>
-                        </div>
-                      ) : (
-                        <CardTitle
-                          className="text-base cursor-pointer hover:text-primary transition-colors"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleTitleEditStart(meeting)
-                          }}
-                          title="Click to rename"
-                        >
-                          {highlightMatches(meeting.title, searchQuery)}
-                        </CardTitle>
-                      )}
-                      {template && (
-                        <Badge variant="outline" className="text-[10px] py-0 gap-1">
-                          <TemplateIcon name={template.icon} className="size-3" inline />
-                          {template.name}
-                        </Badge>
-                      )}
-                      {meeting.structuredNotes && meeting.structuredNotes.length > 0 && (
-                        <Badge variant="secondary" className="text-[10px] py-0 gap-1">
-                          <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} className="size-3" />
-                          Enhanced
-                        </Badge>
-                      )}
-                      {openActions > 0 && (
-                        <Badge variant="outline" className="text-[10px] py-0 gap-1">
-                          <HugeiconsIcon icon={CheckListIcon} strokeWidth={1.5} className="size-3" />
-                          {openActions} open {openActions === 1 ? "action" : "actions"}
-                        </Badge>
-                      )}
-                    </div>
-                    <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                      <span className="inline-flex items-center gap-1">
-                        <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
-                        {relativeDate(meeting.date)}
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.5} className="size-3" />
-                        {formatTime(meeting.date)}
-                      </span>
-                      {meeting.speakerLabels && meeting.speakerLabels.length > 0 && (
-                        <span className="inline-flex items-center gap-2">
-                          {meeting.speakerLabels.slice(0, 3).map(s => (
-                            <span key={s.name} className="inline-flex items-center gap-1">
-                              <span className="size-1.5 rounded-full" style={{ backgroundColor: s.color }} />
-                              {s.name}
-                            </span>
-                          ))}
-                          {meeting.speakerLabels.length > 3 && (
-                            <span className="text-muted-foreground/70">+{meeting.speakerLabels.length - 3}</span>
-                          )}
-                        </span>
-                      )}
-                    </CardDescription>
-                  </div>
-                  <Badge variant="secondary">{formatDuration(meeting.duration)}</Badge>
-                </div>
-              </CardHeader>
-              {previewText && (
-                <CardContent className="pt-0 pb-0">
-                  <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                    {highlightMatches(previewText, searchQuery)}
-                  </p>
-                </CardContent>
-              )}
-              {!batchMode && (
-              <CardFooter className="justify-end gap-1 pt-3">
+              <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="ai-icon" />
+            </Button>
+            <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
+              <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
+            </Button>
+            {pane === "notes" && (
+              <>
                 <Button
                   variant="ghost"
-                  size="sm"
-                  title="Generate brief"
-                  aria-label="Generate brief"
-                  onClick={(e) => { e.stopPropagation(); handleGenerateBrief(meeting) }}
-                  disabled={briefLoadingId === meeting.id}
+                  size="icon-sm"
+                  onClick={handleImportAudio}
+                  disabled={importing}
+                  title="Import audio"
+                  aria-label="Import audio"
+                  className="hidden sm:inline-flex"
                 >
-                  <HugeiconsIcon icon={AiBrain01Icon} strokeWidth={2} className="size-4" />
+                  {importing ? (
+                    <span className="size-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  ) : (
+                    <HugeiconsIcon icon={FileImportIcon} strokeWidth={2} />
+                  )}
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  title="Delete note"
-                  aria-label="Delete note"
-                  onClick={(e) => { e.stopPropagation(); setDeleteConfirm(meeting.id) }}
-                >
-                  <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-4" />
+                <Button size="sm" onClick={onNewMeeting} className="ml-0.5">
+                  <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
+                  New note
                 </Button>
-              </CardFooter>
-              )}
-            </Card>
-            {briefMeetingId === meeting.id && briefResult && (
-              <Card size="sm" className="border-primary/30 mt-2">
-                <CardHeader className="py-2.5 cursor-pointer" onClick={() => { setBriefMeetingId(null); setBriefResult(null) }}>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-xs flex items-center gap-1.5">
-                      <HugeiconsIcon icon={AiBrain01Icon} strokeWidth={2} className="size-3.5 text-primary" />
-                      Pre-Meeting Brief
-                    </CardTitle>
-                    <Button variant="ghost" size="icon-sm" className="size-5" type="button" onClick={(e) => { e.stopPropagation(); setBriefMeetingId(null); setBriefResult(null) }}>
-                      <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-3" />
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="mdx-brief text-xs leading-relaxed text-muted-foreground max-h-48 overflow-y-auto">
-                    <MarkdownView markdown={briefResult} />
-                  </div>
-                </CardContent>
-              </Card>
+              </>
             )}
-            {briefLoadingId === meeting.id && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground px-1 py-1.5">
-                <div className="size-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                Generating brief...
+          </div>
+        </div>
+      </header>
+
+      <div className="dashboard-body">
+        {pane === "notes" && (
+          <UpcomingEvents
+            onStartFromEvent={(meeting) => {
+              onImportMeeting(meeting)
+            }}
+          />
+        )}
+
+        {pane === "actions" ? (
+          <ActionsInbox meetings={meetings} onOpenMeeting={onViewMeeting} />
+        ) : pane === "people" ? (
+          <PeopleMemory meetings={meetings} onOpenMeeting={onViewMeeting} />
+        ) : (
+          <>
+            {/* Search + filters — Linear-style: tags live in the toolbar, not a pill rail */}
+            <div className="dashboard-filters">
+              <div className="flex items-center gap-1.5">
+                <InputGroup className="h-9 min-w-0 flex-1 border-0 bg-muted/40 shadow-none ring-1 ring-border/50">
+                  <InputGroupInput
+                    ref={searchInputRef}
+                    type="search"
+                    placeholder="Search notes…"
+                    aria-label="Search notes"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                  />
+                  {hasQuery ? (
+                    <InputGroupButton
+                      size="icon-sm"
+                      onClick={() => {
+                        setSearchQuery("")
+                        setDebouncedQuery("")
+                      }}
+                      aria-label="Clear search"
+                    >
+                      <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+                    </InputGroupButton>
+                  ) : (
+                    <InputGroupButton
+                      size="icon-sm"
+                      tabIndex={-1}
+                      className="pointer-events-none"
+                      aria-label="Search notes"
+                    >
+                      <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
+                    </InputGroupButton>
+                  )}
+                </InputGroup>
+                <FolderChips
+                  meetings={meetings}
+                  folderFilter={folderFilter}
+                  onFilter={setFolderFilter}
+                  onFoldersChanged={() => setFolderTick((t) => t + 1)}
+                  refreshKey={folderTick}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={handleSaveSearch}
+                  disabled={!hasQuery}
+                  title="Save search"
+                  aria-label="Save search"
+                >
+                  <HugeiconsIcon icon={Bookmark01Icon} strokeWidth={2} />
+                </Button>
+                {allSpeakers.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant={speakerFilter ? "secondary" : "ghost"}
+                        size="icon-sm"
+                        title={speakerFilter ?? "Filter by speaker"}
+                        aria-label="Filter by speaker"
+                      >
+                        <HugeiconsIcon icon={UserGroupIcon} strokeWidth={2} />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={() => setSpeakerFilter(null)}>
+                        All speakers
+                        {!speakerFilter && (
+                          <HugeiconsIcon
+                            icon={CheckmarkCircle02Icon}
+                            strokeWidth={2}
+                            className="ml-auto size-4"
+                          />
+                        )}
+                      </DropdownMenuItem>
+                      {allSpeakers.map((name) => (
+                        <DropdownMenuItem key={name} onClick={() => setSpeakerFilter(name)}>
+                          {name}
+                          {name === speakerFilter && (
+                            <HugeiconsIcon
+                              icon={CheckmarkCircle02Icon}
+                              strokeWidth={2}
+                              className="ml-auto size-4"
+                            />
+                          )}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" title={SORT_LABELS[sortKey]} aria-label="Sort notes">
+                      <HugeiconsIcon icon={SortingAZIcon} strokeWidth={2} />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+                      <DropdownMenuItem key={key} onClick={() => handleSortChange(key)}>
+                        {SORT_LABELS[key]}
+                        {key === sortKey && (
+                          <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="ml-auto size-4" />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              {savedSearches.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {savedSearches.map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-2.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      onClick={() => handleSelectSavedSearch(q)}
+                    >
+                      {q}
+                      <span
+                        className="inline-flex size-3.5 items-center justify-center rounded-full hover:bg-muted-foreground/20"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleRemoveSavedSearch(q)
+                        }}
+                        role="button"
+                        aria-label={`Remove saved search "${q}"`}
+                      >
+                        <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-2.5" />
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {meetings.length > 0 && filteredMeetings.length > 0 && (
+                <div className="flex items-center justify-between pt-0.5">
+                  <p className="text-[12px] tabular-nums text-muted-foreground">
+                    {hasQuery
+                      ? `${filteredMeetings.length} of ${meetings.length}`
+                      : `${meetings.length} note${meetings.length === 1 ? "" : "s"}`}
+                  </p>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      className="text-muted-foreground"
+                      onClick={() => {
+                        setBatchMode(!batchMode)
+                        setSelected(new Set())
+                      }}
+                    >
+                      {batchMode ? "Done" : "Select"}
+                    </Button>
+                    {batchMode && (
+                      <>
+                        <Button variant="ghost" size="xs" onClick={selectAll}>
+                          {selected.size === filteredMeetings.length ? "Deselect all" : "Select all"}
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="xs"
+                          disabled={selected.size === 0}
+                          onClick={() => setBatchDeleteConfirm(true)}
+                        >
+                          Delete ({selected.size})
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {meetings.length === 0 ? (
+              <div className="dashboard-empty">
+                <div className="inline-flex size-12 items-center justify-center rounded-3xl bg-muted/70">
+                  <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={1.75} className="size-6 text-muted-foreground" />
+                </div>
+                <div className="max-w-sm text-center">
+                  <p className="text-base font-medium">No notes yet</p>
+                  <p className="mt-1 text-sm text-pretty text-muted-foreground">
+                    Start a note, record mic or system audio, then Enhance for structured notes, tags, and actions.
+                    Speech stays on this Mac.
+                  </p>
+                </div>
+                <Button onClick={onNewMeeting}>
+                  <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
+                  New note
+                </Button>
+              </div>
+            ) : filteredMeetings.length === 0 ? (
+              <div className="dashboard-empty">
+                <p className="text-sm text-muted-foreground">
+                  {folderFilter && !hasQuery
+                    ? "No notes with this concept tag yet"
+                    : hasQuery
+                      ? `No notes match “${searchQuery}”`
+                      : "No notes match these filters"}
+                </p>
+                <div className="flex flex-wrap items-center justify-center gap-2">
+                  {folderFilter && (
+                    <Button variant="outline" size="sm" onClick={() => setFolderFilter(null)}>
+                      Clear tag filter
+                    </Button>
+                  )}
+                  {hasQuery && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setSearchQuery("")
+                        setDebouncedQuery("")
+                      }}
+                    >
+                      Clear search
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-6">
+                {meetingGroups.map((group) => (
+                  <section key={group.label} className="flex flex-col gap-2">
+                    <h2 className="dashboard-day-label">{group.label}</h2>
+                    <ul className="flex flex-col gap-2">
+                      {group.items.map((meeting) => {
+                        const template = meeting.templateId
+                          ? getTemplateById(meeting.templateId)
+                          : undefined
+                        const previewText = meeting.description?.trim() || ""
+                        const isEditing = editingTitleId === meeting.id
+                        const isEditingDescription = editingDescriptionId === meeting.id
+                        const isSelected = selected.has(meeting.id)
+                        const openActions = openActionsByMeeting.get(meeting.id) ?? 0
+                        const enhanced =
+                          Boolean(meeting.autoEnhancedAt) ||
+                          Boolean(meeting.structuredNotes?.length) ||
+                          Boolean(meeting.description)
+
+                        return (
+                          <li key={meeting.id}>
+                            <div
+                              role="button"
+                              tabIndex={0}
+                              className={cn(
+                                "dashboard-note-row group",
+                                isSelected && "bg-primary/5 ring-1 ring-primary/25",
+                              )}
+                              onClick={() => {
+                                if (batchMode) toggleSelect(meeting.id)
+                                else onViewMeeting(meeting)
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault()
+                                  if (batchMode) toggleSelect(meeting.id)
+                                  else onViewMeeting(meeting)
+                                }
+                              }}
+                            >
+                              {batchMode && (
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleSelect(meeting.id)}
+                                  className="mt-1 size-4 shrink-0 rounded border-border"
+                                  onClick={(e) => e.stopPropagation()}
+                                  aria-label={`Select ${meeting.title}`}
+                                />
+                              )}
+                              <div className="min-w-0 flex-1">
+                                {isEditing ? (
+                                  <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                                    <Input
+                                      value={editTitleText}
+                                      onChange={(e) => setEditTitleText(e.target.value)}
+                                      className="h-8 text-[15px] font-semibold"
+                                      autoFocus
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") handleTitleEditSave()
+                                        if (e.key === "Escape") {
+                                          setEditingTitleId(null)
+                                          setEditTitleText("")
+                                        }
+                                      }}
+                                    />
+                                    <Button size="xs" variant="secondary" onClick={handleTitleEditSave}>
+                                      Save
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                    <h3
+                                      className="truncate text-[15px] font-semibold tracking-tight text-foreground"
+                                      title="Click to rename"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleTitleEditStart(meeting)
+                                      }}
+                                    >
+                                      {highlightMatches(meeting.title, searchQuery)}
+                                    </h3>
+                                    {enhanced && (
+                                      <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-brand">
+                                        <HugeiconsIcon
+                                          icon={AiMagicIcon}
+                                          strokeWidth={1.75}
+                                          className="ai-icon size-3"
+                                        />
+                                      </span>
+                                    )}
+                                    {openActions > 0 && (
+                                      <span className="text-[11px] tabular-nums text-muted-foreground">
+                                        {openActions} action{openActions === 1 ? "" : "s"}
+                                      </span>
+                                    )}
+                                    {template && (
+                                      <span className="hidden text-[11px] text-muted-foreground sm:inline">
+                                        {template.name}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                                {isEditingDescription ? (
+                                  <div
+                                    className="mt-1.5 flex flex-col gap-1.5"
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <textarea
+                                      value={editDescriptionText}
+                                      onChange={(e) => setEditDescriptionText(e.target.value)}
+                                      className="min-h-[3.25rem] w-full resize-none rounded-xl border-0 bg-muted/50 px-2.5 py-2 text-[13px] leading-relaxed text-foreground outline-none ring-1 ring-border/60 focus-visible:ring-2 focus-visible:ring-ring"
+                                      rows={2}
+                                      autoFocus
+                                      maxLength={280}
+                                      placeholder="Short description for this meeting…"
+                                      aria-label="Meeting description"
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Escape") {
+                                          e.preventDefault()
+                                          handleDescriptionEditCancel()
+                                        }
+                                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                          e.preventDefault()
+                                          handleDescriptionEditSave()
+                                        }
+                                      }}
+                                      onBlur={() => handleDescriptionEditSave()}
+                                    />
+                                    <p className="text-[10px] text-muted-foreground">
+                                      ⌘↵ to save · Esc to cancel
+                                    </p>
+                                  </div>
+                                ) : previewText ? (
+                                  <p
+                                    className="mt-1 line-clamp-2 cursor-text text-[13px] leading-relaxed text-muted-foreground transition-colors hover:text-foreground/80"
+                                    title="Click to edit description"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleDescriptionEditStart(meeting)
+                                    }}
+                                  >
+                                    {highlightMatches(previewText, searchQuery)}
+                                  </p>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    className="mt-1 text-left text-[13px] text-muted-foreground/55 transition-colors hover:text-muted-foreground"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      handleDescriptionEditStart(meeting)
+                                    }}
+                                  >
+                                    {meeting.duration > 0
+                                      ? "Add a short description…"
+                                      : "Empty note · Add description"}
+                                  </button>
+                                )}
+                                <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] tabular-nums text-muted-foreground/80">
+                                  <span>{formatTime(meeting.date)}</span>
+                                  {meeting.duration > 0 && (
+                                    <>
+                                      <span className="text-border">·</span>
+                                      <span>{formatDuration(meeting.duration)}</span>
+                                    </>
+                                  )}
+                                  {meeting.speakerLabels && meeting.speakerLabels.length > 0 && (
+                                    <>
+                                      <span className="text-border">·</span>
+                                      <span className="truncate">
+                                        {meeting.speakerLabels
+                                          .slice(0, 3)
+                                          .map((s) => s.name)
+                                          .join(", ")}
+                                        {meeting.speakerLabels.length > 3
+                                          ? ` +${meeting.speakerLabels.length - 3}`
+                                          : ""}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                                <div className="mt-2">
+                                  <MeetingFolderMenu
+                                    meeting={meeting}
+                                    onChanged={(folderIds) => {
+                                      setFolderTick((t) => t + 1)
+                                      // Push folderIds into app state so filter/list stay in sync
+                                      // (storage already updated by assign/remove helpers).
+                                      onUpdateMeeting(meeting.id, { folderIds })
+                                    }}
+                                    onTagClick={(tagId) => setFolderFilter(tagId)}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex shrink-0 flex-col items-end gap-2 self-start pt-0.5">
+                                <span className="text-[11px] tabular-nums text-muted-foreground">
+                                  {relativeDate(meeting.date)}
+                                </span>
+                                {!batchMode && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    className="opacity-0 transition-opacity group-hover:opacity-100"
+                                    title="Delete note"
+                                    aria-label="Delete note"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setDeleteConfirm(meeting.id)
+                                    }}
+                                  >
+                                    <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} className="size-3.5" />
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </section>
+                ))}
               </div>
             )}
-            </motion.div>
-          )})}
-        </div>
-      )}
+          </>
+        )}
+      </div>
 
       <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
         <DialogContent showCloseButton={false}>
@@ -798,6 +974,7 @@ export function MeetingDashboard({
         open={showGlobalChat}
         onClose={() => setShowGlobalChat(false)}
         onOpenSettings={onSettings}
+        folderId={chatFolderId}
       />
     </div>
   )

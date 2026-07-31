@@ -2,15 +2,23 @@ import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   AiVoiceIcon,
@@ -18,11 +26,14 @@ import {
   Cancel01Icon, AiMagicIcon,
   AiChat02Icon, ArrowRight01Icon, ArrowLeft01Icon,
   MicIcon, ComputerIcon,
-  Calendar01Icon, Clock01Icon,
   Copy01Icon, FileAddIcon, CodeIcon, FileExportIcon, FileImportIcon,
   StopIcon, AlertCircleIcon, RefreshIcon,
-  UserAdd02Icon, Add01Icon,
   MoreHorizontalIcon, SaveIcon,
+  CenterFocusIcon,
+  AlignBoxMiddleLeftIcon,
+  PauseIcon,
+  PlayIcon,
+  ArrowDown01Icon,
 } from "@hugeicons/core-free-icons"
 import { toast } from "@/components/ui/toaster"
 import { copyRichText, exportMeetingMarkdown } from "@/lib/export"
@@ -31,6 +42,9 @@ import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
 import { TemplateIcon } from "@/components/template-icon"
 import { NoteRenderer } from "@/components/note-renderer"
 import { MarkdownView } from "@/components/markdown-view"
+import { EditorInfoSidebar } from "@/components/editor-info-sidebar"
+import { EditorArtifacts, ARTIFACT_RECIPE_IDS } from "@/components/editor-artifacts"
+import { buildSidebarPeople } from "@/lib/sidebar-people"
 import { Waveform } from "@/components/Waveform"
 import { useRecording } from "@/lib/use-recording"
 import { saveTemplate as persistTemplate } from "@/lib/templates"
@@ -38,10 +52,12 @@ import { useChat } from "@/lib/use-chat"
 import { cn } from "@/lib/utils"
 import { formatDate, formatTime, formatTimer, stripMarkdown, stripMarkdownFence } from "@/lib/format"
 import { SPEAKER_TAILWIND_COLORS } from "@/lib/constants"
-import type { Meeting, AppSettings, MeetingTemplate, ChatMessage, SpeakerLabel } from "@/types"
+import type { Meeting, AppSettings, MeetingTemplate, ChatMessage, SpeakerLabel, Recipe } from "@/types"
 import { findRelatedMeetings } from "@/lib/context-memory"
 import { correctWithSavedDictionary } from "@/lib/dictionary"
-import { replaceKnowledgeForMeeting, loadKnowledgeGraph, addKnowledgeEdges } from "@/lib/storage"
+import { replaceKnowledgeForMeeting, loadKnowledgeGraph, addKnowledgeEdges, loadRecipes, updateMeeting as persistMeetingFields, linkPeopleFromMeeting, loadPeople, updateKnowledgeItem } from "@/lib/storage"
+import { shareViaEmail, shareExportToFolder, shareViaSlack } from "@/lib/share"
+import { getPrepContext } from "@/lib/meeting-brief"
 
 interface NoteEditorProps {
   note?: Meeting
@@ -79,33 +95,59 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<MeetingTemplate | undefined>(undefined)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
+  // Side panels: hidden by default; user opens via header toggles. Focus mode hides both.
+  const [showInfoPanel, setShowInfoPanel] = useState(false)
   const [showAIPanel, setShowAIPanel] = useState(false)
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [isTitling, setIsTitling] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [viewMode, setViewMode] = useState<"wysiwyg" | "source">("wysiwyg")
-  // Distraction-free writing (⌘⇧F): chrome (capture bar, chat, chips)
-  // recedes so only title + text remain. An active recording stays
-  // reachable — hiding its Stop control would trap the user.
+  // Distraction-free writing (⌘⇧F): side panels + capture chrome recede so
+  // only title + text remain. An active recording stays reachable.
   const [focusMode, setFocusMode] = useState(false)
   const focusModeRef = useRef(focusMode)
   useEffect(() => { focusModeRef.current = focusMode }, [focusMode])
   const [isPaused, setIsPaused] = useState(false)
   const [rawTranscript, setRawTranscript] = useState(note?.transcript || "")
   const [showRawTranscript, setShowRawTranscript] = useState(false)
-  const [chatWidth, setChatWidth] = useState(360)
+  const [chatWidth, setChatWidth] = useState(320)
+  const [infoWidth] = useState(296)
   // Snapshot of the last-persisted title/notes. Drives the dirty indicator and
   // lets it clear correctly after a save (manual or auto), instead of comparing
   // against the never-updated `note` prop.
   const [savedSnapshot, setSavedSnapshot] = useState(() => ({
     title: note?.title ?? settings.titlePrefix,
     notes: note?.notes || note?.transcript || "",
+    description: note?.description ?? "",
   }))
 
   const [speakerLabels, setSpeakerLabels] = useState<SpeakerLabel[]>(note?.speakerLabels ?? [])
   const [isAddingSpeaker, setIsAddingSpeaker] = useState(false)
   const [newSpeakerName, setNewSpeakerName] = useState("")
+  const [manualNotes, setManualNotes] = useState(note?.manualNotes ?? "")
+  /** Plain-text list blurb — editable; AI may overwrite on Enhance. */
+  const [description, setDescription] = useState(note?.description ?? "")
+  /** Concept tags — local so autosave/buildMeeting never wipe AI or manual tags. */
+  const [folderIds, setFolderIds] = useState<string[]>(() => note?.folderIds ?? [])
+  const folderIdsRef = useRef(folderIds)
+  useEffect(() => { folderIdsRef.current = folderIds }, [folderIds])
+  useEffect(() => {
+    setFolderIds(note?.folderIds ?? [])
+  }, [note?.id, note?.folderIds])
+  const [dualFocus, setDualFocus] = useState<"notes" | "transcript" | "split">("split")
+  const [recipeOutputs, setRecipeOutputs] = useState<Record<string, string>>(note?.recipeOutputs ?? {})
+  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(() => {
+    const outs = note?.recipeOutputs ?? {}
+    return ARTIFACT_RECIPE_IDS.find((id) => outs[id]?.trim()) ?? null
+  })
+  const [runningRecipeId, setRunningRecipeId] = useState<string | null>(null)
+  /** Bumps after enhance so open loops re-read the knowledge graph. */
+  const [prepTick, setPrepTick] = useState(0)
+  const manualNotesRef = useRef(manualNotes)
+  useEffect(() => { manualNotesRef.current = manualNotes }, [manualNotes])
+  const autoEnhanceRanRef = useRef(false)
+  const pendingAutoEnhanceRef = useRef(false)
 
   const resizeRef = useRef(false)
   const chatPanelRef = useRef<HTMLDivElement>(null)
@@ -138,7 +180,15 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const recorderStateRef = useRef(recorderState)
   useEffect(() => { recorderStateRef.current = recorderState }, [recorderState])
   const titleRef = useRef(title)
+  const titleInputRef = useRef<HTMLTextAreaElement | null>(null)
   useEffect(() => { titleRef.current = title }, [title])
+  // Auto-grow the title field so long titles wrap instead of clipping.
+  useEffect(() => {
+    const el = titleInputRef.current
+    if (!el) return
+    el.style.height = "0px"
+    el.style.height = `${el.scrollHeight}px`
+  }, [title])
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Note body from before the last AI enhance/transcription, so the user can
   // back out. State (not a ref) because it controls the Undo button's render.
@@ -172,6 +222,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     pause: pauseCapture,
     resume: resumeCapture,
     abort: abortCapture,
+    prewarm: prewarmCapture,
   } = useRecording({
     audioSource,
     speechLang: settings.speechLang,
@@ -183,6 +234,13 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     onSilenceLimit,
   })
 
+  // Pre-load the ASR model in a parked sidecar as soon as the editor opens (and
+  // whenever the source/model choice changes), so pressing record starts
+  // capturing immediately instead of waiting through the model load.
+  useEffect(() => {
+    prewarmCapture()
+  }, [prewarmCapture])
+
   const relatedMeetings = useMemo(() => {
     if (!note) return []
     return findRelatedMeetings(note, meetings, 3)
@@ -190,8 +248,35 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       .filter((m): m is Meeting => Boolean(m))
   }, [note, meetings])
 
-  const isDirty = title !== savedSnapshot.title || notes !== savedSnapshot.notes
-  const isEmpty = !notes.trim()
+  // Speakers first, then memory links, then calendar invitees (de-duped).
+  const sidebarPeople = useMemo(() => {
+    const people = loadPeople()
+    const byId = new Set(note?.personIds ?? [])
+    const fromGraph = people.filter((p) => byId.has(p.id))
+    return buildSidebarPeople(speakerLabels, note?.attendees, fromGraph)
+  }, [note?.personIds, note?.attendees, speakerLabels])
+
+  // Open loops from knowledge graph — real carry-over work, not an AI essay.
+  // prepTick intentionally invalidates after enhance so the graph re-reads.
+  const openLoops = useMemo(() => {
+    void prepTick
+    return getPrepContext({
+      title: title || note?.title || "Meeting",
+      attendees: note?.attendees,
+      calendarEventId: note?.calendarEventId,
+      meetingId: note?.id,
+    }).openLoops
+  }, [title, note?.title, note?.attendees, note?.calendarEventId, note?.id, prepTick])
+
+  const isDirty =
+    title !== savedSnapshot.title ||
+    notes !== savedSnapshot.notes ||
+    manualNotes !== (note?.manualNotes ?? "") ||
+    description !== savedSnapshot.description
+  const isEmpty = !notes.trim() && !manualNotes.trim()
+  const sidePanelsVisible = !focusMode
+  const infoOpen = sidePanelsVisible && showInfoPanel
+  const chatOpen = sidePanelsVisible && showAIPanel
 
   // Word count + reading time for the note body. stripMarkdown removes the
   // heaviest syntax so the count reflects prose. ~200 wpm reading speed.
@@ -258,44 +343,51 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     }
   }, [resumeCapture])
 
-  const autoDetectSpeakers = useCallback(async (transcript: string) => {
-    if (speakerLabels.length > 0) return
+  const autoDetectSpeakers = useCallback(async (transcript: string): Promise<SpeakerLabel[]> => {
+    if (speakerLabels.length > 0) return speakerLabels
     try {
       const { detectSpeakers, isAIConfigured } = await import("@/lib/ai-service")
-      if (!isAIConfigured()) return
+      if (!isAIConfigured()) return []
       const names = await detectSpeakers(transcript)
-      if (names.length > 0) {
-        setSpeakerLabels((prev) => {
-          const existing = new Set(prev.map((s) => s.name.toLowerCase()))
-          const newLabels = names
-            .filter((n) => !existing.has(n.toLowerCase()))
-            .map((name, i) => ({
-              name,
-              color: SPEAKER_TAILWIND_COLORS[(prev.length + i) % SPEAKER_TAILWIND_COLORS.length],
-            }))
-          return [...prev, ...newLabels]
-        })
-      }
-    } catch { /* silent */ }
-  }, [speakerLabels.length])
+      if (names.length === 0) return []
+      const newLabels = names.map((name, i) => ({
+        name,
+        color: SPEAKER_TAILWIND_COLORS[i % SPEAKER_TAILWIND_COLORS.length],
+      }))
+      setSpeakerLabels((prev) => {
+        const existing = new Set(prev.map((s) => s.name.toLowerCase()))
+        const extra = newLabels.filter((s) => !existing.has(s.name.toLowerCase()))
+        return extra.length === 0 ? prev : [...prev, ...extra]
+      })
+      return newLabels
+    } catch {
+      return []
+    }
+  }, [speakerLabels])
 
   const stopRecording = useCallback(async () => {
     setRecorderState("idle")
     setIsPaused(false)
     setIsTranscribing(true)
+    autoEnhanceRanRef.current = false
+    pendingAutoEnhanceRef.current = true
 
     try {
       await stopCapture(800)
 
-      // The live transcript is written directly — no automatic AI rewrite of the
-      // note text. Enhancement stays opt-in via the Enhance button.
+      // Live captions land in `notes` during recording; treat that as the
+      // transcript. User shorthand lives in `manualNotes` and is merged on Enhance.
       const content = notesRef.current.trim()
       if (content) {
-        // Custom dictionary: fix mis-heard names/jargon before the transcript
-        // is stored, so everything downstream (title, speakers, knowledge) is
-        // spelled right. previousNotes keeps the uncorrected text for Undo.
         setPreviousNotes(notesRef.current)
-        const corrected = correctWithSavedDictionary(content)
+        // Protect People + this meeting's attendees/speakers so e.g. "Christy"
+        // is not force-rewritten to "Christian" when both are real names.
+        const corrected = correctWithSavedDictionary(content, {
+          protectNames: [
+            ...(note?.attendees?.map((a) => a.name) ?? []),
+            ...speakerLabels.map((s) => s.name),
+          ],
+        })
         if (corrected !== content) {
           setNotes(corrected)
           notesRef.current = corrected
@@ -308,7 +400,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             const defaultTitle = titleRef.current.trim() === "" || titleRef.current === settings.titlePrefix
             if (defaultTitle) {
               const { generateTitle } = await import("@/lib/ai-service")
-              const autoTitle = await generateTitle(corrected, corrected)
+              const seed = `${manualNotesRef.current}\n${corrected}`.trim()
+              const autoTitle = await generateTitle(seed, corrected)
               if (autoTitle) setTitle(autoTitle)
             }
           } catch { /* ignore title generation failure */ }
@@ -318,7 +411,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     } finally {
       setIsTranscribing(false)
     }
-  }, [stopCapture, settings.titlePrefix, autoDetectSpeakers])
+  }, [stopCapture, settings.titlePrefix, autoDetectSpeakers, note?.attendees, speakerLabels])
 
   // Import an existing audio file and append its transcript to this note,
   // mirroring the live-recording stop flow (dictionary corrections, undo via
@@ -332,7 +425,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       if (!result) { toast.dismiss("import-audio"); return }
       if (!result.text) { toast.error("No speech detected in that file", { id: "import-audio" }); return }
       setPreviousNotes(notesRef.current)
-      const corrected = correctWithSavedDictionary(result.text)
+      const corrected = correctWithSavedDictionary(result.text, {
+        protectNames: [
+          ...(note?.attendees?.map((a) => a.name) ?? []),
+          ...speakerLabels.map((s) => s.name),
+        ],
+      })
       const base = notesRef.current.trim()
       const next = base ? `${base}\n\n${corrected}` : corrected
       setNotes(next)
@@ -343,29 +441,25 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     } catch (e) {
       toast.error("Import failed", { id: "import-audio", description: e instanceof Error ? e.message : "Transcription failed" })
     }
-  }, [autoDetectSpeakers])
+  }, [autoDetectSpeakers, note?.attendees, speakerLabels])
 
   const handleEnhance = useCallback(async () => {
-    const content = notes.trim()
-    if (!content) return
+    const transcript = (rawTranscript || notes).trim()
+    const primary = (manualNotesRef.current || notes).trim()
+    if (!primary && !transcript) return
     setPreviousNotes(notesRef.current)
     setIsEnhancing(true)
+    setIsStreaming(true)
     try {
-      const { streamGenerateNotes, isAIConfigured } = await import("@/lib/ai-service")
-      if (!isAIConfigured()) { toast.error("AI is not configured", { description: "Set your API key in Settings.", action: { label: "Open Settings", onClick: onSettings } }); return }
+      const { streamGenerateNotes, isAIConfigured, runRecipe, generateMeetingDescription } = await import("@/lib/ai-service")
+      if (!isAIConfigured()) {
+        toast.error("AI is not configured", { description: "Set your API key in Settings.", action: { label: "Open Settings", onClick: onSettings } })
+        return
+      }
       const sections = selectedTemplate?.sections
-      setIsStreaming(true)
       let streamed = ""
-      const gen = streamGenerateNotes(content, content, sections, selectedTemplate?.id)
-      // WYSIWYG: stream through the editor's milkdown streaming plugin (via
-      // the window bridge) so notes write in live with the AI glow. Source
-      // mode has no editor mounted — fall back to per-chunk setNotes there.
-      const viaEditor = viewMode === "wysiwyg"
-      // Models sometimes wrap the whole answer in a ```markdown fence. If one
-      // reached the editor mid-stream it would swallow the note into a code
-      // block, so the first line is held back until the fence decision is
-      // made, and the last few chars are held back so a closing fence never
-      // gets pushed. stripMarkdownFence still normalizes the stored result.
+      const gen = streamGenerateNotes(primary || transcript, transcript, sections, selectedTemplate?.id)
+      const viaEditor = viewMode === "wysiwyg" && recorderState !== "recording"
       let pending = ""
       let headDecided = false
       let fenced = false
@@ -403,55 +497,270 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       }
       const cleaned = stripMarkdownFence(streamed)
       setNotes(cleaned)
+      notesRef.current = cleaned
+      // Writing is done — clear stream busy UI immediately (before recipes / knowledge).
       setIsStreaming(false)
-      // Fire-and-forget: derive chat suggestions from the transcript that was
-      // just enhanced. `content` is the pre-enhance text (the raw transcript),
-      // which grounds the questions in what was actually said.
       import("@/lib/ai-service")
-        .then(({ suggestQuestions }) => suggestQuestions(rawTranscript || content, cleaned))
+        .then(({ suggestQuestions }) => suggestQuestions(transcript || primary, cleaned))
         .then(setSuggestedQuestions)
         .catch(() => { /* suggestions are optional */ })
-      if (note) {
-        import("@/lib/knowledge-extract")
-          .then(({ extractKnowledgeItems }) =>
-            extractKnowledgeItems(
-              { ...note, title: titleRef.current, notes: cleaned },
-              cleaned,
-            )
-          )
-          .then(async (items) => {
-            if (items.length === 0) return
-            try {
-              const { embedBatch } = await import("@/lib/embedding")
-              const vectors = await embedBatch(items.map((i) => i.text))
-              items.forEach((item, i) => {
-                if (vectors[i]) item.embedding = vectors[i]
-              })
-            } catch { /* embeddings are optional */ }
-            replaceKnowledgeForMeeting(note.id, items)
-            try {
-              const { findLinkCandidates, linkKnowledgeItems } = await import("@/lib/knowledge-link")
-              const existing = loadKnowledgeGraph().items.filter((i) => i.meetingId !== note.id)
-              if (existing.length > 0) {
-                const candidates = findLinkCandidates(items, existing)
-                if (candidates.size > 0) {
-                  const edges = await linkKnowledgeItems(items, candidates, meetings)
-                  if (edges.length > 0) addKnowledgeEdges(edges)
-                }
-              }
-            } catch { /* cross-meeting linking is optional */ }
-          })
-          .catch(() => { /* knowledge extraction is optional */ })
+
+      // Always use a stable meeting id. New notes mint one and persist via onSave
+      // so knowledge items / people attach to a real meeting that exists in App state.
+      const meetingId = note?.id ?? crypto.randomUUID()
+      const enhancedAt = new Date().toISOString()
+      const meetingTitle = titleRef.current.trim() || deriveTitle(cleaned || manualNotesRef.current)
+
+      // Plain-text list blurb — not the markdown note body.
+      let nextDescription = description
+      try {
+        const generated = await generateMeetingDescription(cleaned, transcript, meetingTitle)
+        if (generated) {
+          nextDescription = generated
+          setDescription(generated)
+        }
+      } catch {
+        /* description is optional; card falls back to empty */
       }
+
+      let meetingForKnowledge: Meeting = {
+        id: meetingId,
+        title: meetingTitle,
+        date: note?.date ?? new Date().toISOString(),
+        duration: (note?.duration ?? 0) + duration,
+        transcript,
+        notes: cleaned,
+        manualNotes: manualNotesRef.current || undefined,
+        description: nextDescription || undefined,
+        templateId: selectedTemplate?.id ?? note?.templateId,
+        speakerLabels: speakerLabels.length > 0 ? speakerLabels : note?.speakerLabels,
+        attendees: note?.attendees,
+        personIds: note?.personIds,
+        folderIds: folderIdsRef.current.length > 0 ? folderIdsRef.current : undefined,
+        calendarEventId: note?.calendarEventId,
+        chatHistory: chatHistoryRef.current.length > 0 ? chatHistoryRef.current : note?.chatHistory,
+        autoEnhancedAt: enhancedAt,
+        recipeOutputs: Object.keys(recipeOutputs).length > 0 ? recipeOutputs : note?.recipeOutputs,
+      }
+      // Persist before knowledge so updateMeeting / dashboard lookups succeed for new notes.
+      onSave(meetingForKnowledge, true)
+      setSavedSnapshot({ title: titleRef.current, notes: cleaned, description: nextDescription })
+
+      // Recipes first — action digest feeds knowledge fallback when extract is thin.
+      const outputs = { ...(meetingForKnowledge.recipeOutputs ?? {}) }
+      const recipes = loadRecipes().filter((r) => r.runOnStop)
+      if (recipes.length > 0 && isAIConfigured()) {
+        for (const recipe of recipes) {
+          try {
+            const out = await runRecipe(recipe.prompt, cleaned, transcript, titleRef.current)
+            outputs[recipe.id] = out
+          } catch { /* recipe optional */ }
+        }
+        setRecipeOutputs(outputs)
+        const firstArtifact = ARTIFACT_RECIPE_IDS.find((id) => outputs[id]?.trim())
+        if (firstArtifact) setActiveArtifactId(firstArtifact)
+      }
+
+      // Detect speakers before people-link so names land in People memory.
+      const detectedSpeakers = await autoDetectSpeakers(transcript || primary)
+      if (detectedSpeakers.length > 0) {
+        meetingForKnowledge = {
+          ...meetingForKnowledge,
+          speakerLabels: detectedSpeakers,
+        }
+      }
+
+      // Awaited knowledge + people so home Actions/People tabs see data after enhance.
+      try {
+        const { extractKnowledgeItems, knowledgeItemsFromActionDigest } = await import(
+          "@/lib/knowledge-extract"
+        )
+        let items = await extractKnowledgeItems(meetingForKnowledge, cleaned)
+        const digest = outputs["recipe-action-digest"]
+        const hasActionItems = items.some((i) => i.kind === "action_item")
+        if (digest?.trim() && !hasActionItems) {
+          items = [...items, ...knowledgeItemsFromActionDigest(meetingId, digest)]
+        }
+        if (items.length > 0) {
+          try {
+            const { embedBatch } = await import("@/lib/embedding")
+            const vectors = await embedBatch(items.map((i) => i.text))
+            items.forEach((item, i) => {
+              if (vectors[i]) item.embedding = vectors[i]
+            })
+          } catch { /* embeddings are optional */ }
+          replaceKnowledgeForMeeting(meetingId, items)
+          try {
+            const { findLinkCandidates, linkKnowledgeItems } = await import("@/lib/knowledge-link")
+            const existing = loadKnowledgeGraph().items.filter((i) => i.meetingId !== meetingId)
+            if (existing.length > 0) {
+              const candidates = findLinkCandidates(items, existing)
+              if (candidates.size > 0) {
+                const edges = await linkKnowledgeItems(items, candidates, meetings)
+                if (edges.length > 0) addKnowledgeEdges(edges)
+              }
+            }
+          } catch { /* cross-meeting linking is optional */ }
+        }
+        // Always link attendees / speakers / assignees (even when extract is empty).
+        linkPeopleFromMeeting({ ...meetingForKnowledge, recipeOutputs: outputs })
+      } catch { /* knowledge extraction is optional */ }
+
+      // Concept tags from content — reuses existing tags so similar meetings cluster.
+      let nextFolderIds = meetingForKnowledge.folderIds ?? folderIdsRef.current
+      if (settings.autoTagOnEnhance !== false && isAIConfigured()) {
+        try {
+          const { autoTagMeeting } = await import("@/lib/auto-tag")
+          const tagResult = await autoTagMeeting({
+            ...meetingForKnowledge,
+            notes: cleaned,
+            folderIds: nextFolderIds,
+          })
+          nextFolderIds = tagResult.folderIds
+          setFolderIds(nextFolderIds)
+          folderIdsRef.current = nextFolderIds
+          if (tagResult.applied.length > 0) {
+            toast.success("Tagged meeting", {
+              description: tagResult.applied.join(" · "),
+            })
+          }
+        } catch { /* auto-tag optional */ }
+      }
+
+      onSave(
+        {
+          ...meetingForKnowledge,
+          notes: cleaned,
+          description: nextDescription || undefined,
+          folderIds: nextFolderIds.length > 0 ? nextFolderIds : undefined,
+          recipeOutputs: Object.keys(outputs).length > 0 ? outputs : meetingForKnowledge.recipeOutputs,
+          autoEnhancedAt: enhancedAt,
+        },
+        true,
+      )
     } catch (e) {
-      // Keep whatever partial stream reached the editor (abort, don't roll
-      // back) — same net result as the old per-chunk setNotes behavior.
       window.dispatchEvent(new CustomEvent("editor-stream-abort"))
       toast.error(e instanceof Error ? e.message : "AI enhancement failed")
-    } finally { setIsEnhancing(false); setIsStreaming(false) }
+    } finally {
+      setIsEnhancing(false)
+      setIsStreaming(false)
+      setPrepTick((t) => t + 1)
+    }
+  }, [
+    notes,
+    description,
+    rawTranscript,
+    selectedTemplate,
+    autoDetectSpeakers,
+    note,
+    meetings,
+    onSettings,
+    onSave,
+    settings.autoTagOnEnhance,
+    viewMode,
+    recorderState,
+    recipeOutputs,
+    duration,
+    speakerLabels,
+  ])
 
-    autoDetectSpeakers(content)
-  }, [notes, rawTranscript, selectedTemplate, autoDetectSpeakers, note, meetings, onSettings, viewMode])
+  // Auto-enhance after recording stops when the setting is on and AI is configured.
+  useEffect(() => {
+    if (isTranscribing) return
+    if (recorderState !== "idle") return
+    if (!settings.autoEnhanceOnStop) return
+    if (!pendingAutoEnhanceRef.current) return
+    if (autoEnhanceRanRef.current) return
+    const hasContent = Boolean((rawTranscript || notes).trim() || manualNotes.trim())
+    if (!hasContent) {
+      pendingAutoEnhanceRef.current = false
+      return
+    }
+    autoEnhanceRanRef.current = true
+    pendingAutoEnhanceRef.current = false
+    void handleEnhance()
+  }, [isTranscribing, recorderState, settings.autoEnhanceOnStop, rawTranscript, notes, manualNotes, handleEnhance])
+
+  const handleRunRecipe = useCallback(async (recipe: Recipe) => {
+    setRunningRecipeId(recipe.id)
+    setActiveArtifactId(recipe.id)
+    try {
+      const { runRecipe, isAIConfigured } = await import("@/lib/ai-service")
+      if (!isAIConfigured()) {
+        toast.error("AI is not configured", { action: { label: "Open Settings", onClick: onSettings } })
+        return
+      }
+      const out = await runRecipe(
+        recipe.prompt,
+        notes.trim() || manualNotes,
+        rawTranscript || notes,
+        title,
+      )
+      const next = { ...recipeOutputs, [recipe.id]: out }
+      setRecipeOutputs(next)
+
+      // Ensure a real meeting id so digests can land in home Actions / People.
+      const meetingId = note?.id ?? crypto.randomUUID()
+      const meeting: Meeting = {
+        id: meetingId,
+        title: title.trim() || deriveTitle(notes || manualNotes),
+        date: note?.date ?? new Date().toISOString(),
+        duration: (note?.duration ?? 0) + duration,
+        transcript: rawTranscript || note?.transcript || "",
+        notes: notes.trim(),
+        manualNotes: manualNotes.trim() || undefined,
+        templateId: selectedTemplate?.id ?? note?.templateId,
+        speakerLabels: speakerLabels.length > 0 ? speakerLabels : note?.speakerLabels,
+        attendees: note?.attendees,
+        personIds: note?.personIds,
+        folderIds: note?.folderIds,
+        calendarEventId: note?.calendarEventId,
+        chatHistory: chatHistoryRef.current.length > 0 ? chatHistoryRef.current : note?.chatHistory,
+        recipeOutputs: next,
+      }
+      onSave(meeting, true)
+
+      if (recipe.id === "recipe-action-digest" && out.trim()) {
+        try {
+          const { knowledgeItemsFromActionDigest } = await import("@/lib/knowledge-extract")
+          const graph = loadKnowledgeGraph()
+          const existing = graph.items.filter((i) => i.meetingId === meetingId)
+          const hasOpenActions = existing.some(
+            (i) => i.kind === "action_item" && (i.status === "open" || i.status === "unknown"),
+          )
+          if (!hasOpenActions) {
+            const fromDigest = knowledgeItemsFromActionDigest(meetingId, out)
+            if (fromDigest.length > 0) {
+              replaceKnowledgeForMeeting(meetingId, [
+                ...existing.filter((i) => i.kind !== "action_item"),
+                ...fromDigest,
+              ])
+            }
+          }
+          linkPeopleFromMeeting(meeting)
+          setPrepTick((t) => t + 1)
+        } catch { /* optional */ }
+      }
+
+      toast.success(`${recipe.name} ready`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Recipe failed")
+    } finally {
+      setRunningRecipeId(null)
+    }
+  }, [
+    notes,
+    manualNotes,
+    rawTranscript,
+    title,
+    recipeOutputs,
+    note,
+    onSettings,
+    onSave,
+    duration,
+    selectedTemplate,
+    speakerLabels,
+  ])
 
   const handleUndoEnhance = useCallback(() => {
     if (!previousNotes) return
@@ -459,6 +768,19 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     notesRef.current = previousNotes
     setPreviousNotes("")
   }, [previousNotes])
+
+  const handleToggleLoop = useCallback((id: string, resolved: boolean) => {
+    updateKnowledgeItem(id, { status: resolved ? "resolved" : "open" })
+    setPrepTick((t) => t + 1)
+  }, [])
+
+  const handleUpdateArtifactOutput = useCallback((recipeId: string, markdown: string) => {
+    setRecipeOutputs((prev) => {
+      const next = { ...prev, [recipeId]: markdown }
+      if (note?.id) persistMeetingFields(note.id, { recipeOutputs: next })
+      return next
+    })
+  }, [note])
 
   const handleEnhanceTitle = useCallback(async () => {
     const content = notes.trim()
@@ -536,19 +858,54 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   // Shared by manual save, save-and-new, and autosave so they never drift.
   const buildMeeting = useCallback((id: string): Meeting => ({
     id,
-    title: title.trim() || deriveTitle(notes),
+    title: title.trim() || deriveTitle(notes || manualNotes),
     date: note?.date ?? new Date().toISOString(),
     duration: (note?.duration ?? 0) + duration,
     transcript: rawTranscript || note?.transcript || "",
     notes: notes.trim(),
+    manualNotes: manualNotes.trim() || undefined,
+    description: description.trim() || undefined,
     templateId: selectedTemplate?.id ?? note?.templateId,
     structuredNotes: note?.structuredNotes,
     enhancedNotes: note?.enhancedNotes,
     chatHistory: chatHistoryRef.current.length > 0 ? chatHistoryRef.current : note?.chatHistory,
     speakerLabels: speakerLabels.length > 0 ? speakerLabels : note?.speakerLabels,
     transcriptSegments: note?.transcriptSegments,
+    // Legacy field — no longer generated in-editor; preserve if present.
     brief: note?.brief,
-  }), [title, note, duration, rawTranscript, notes, selectedTemplate, speakerLabels])
+    folderIds: folderIds.length > 0 ? folderIds : undefined,
+    calendarEventId: note?.calendarEventId,
+    attendees: note?.attendees,
+    personIds: note?.personIds,
+    autoEnhancedAt: note?.autoEnhancedAt,
+    recipeOutputs: Object.keys(recipeOutputs).length > 0 ? recipeOutputs : note?.recipeOutputs,
+  }), [title, note, duration, rawTranscript, notes, manualNotes, description, selectedTemplate, speakerLabels, recipeOutputs, folderIds])
+
+  const handleShareEmail = useCallback(async () => {
+    try {
+      await shareViaEmail(title, notes)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not open Mail")
+    }
+  }, [title, notes])
+
+  const handleShareFolder = useCallback(async () => {
+    try {
+      const ok = await shareExportToFolder(buildMeeting(note?.id ?? "draft"))
+      if (ok) toast.success("Exported to folder")
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Export failed")
+    }
+  }, [buildMeeting, note])
+
+  const handleShareSlack = useCallback(async () => {
+    try {
+      await shareViaSlack(title, notes)
+      toast.success("Sent to Slack")
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Slack share failed")
+    }
+  }, [title, notes])
 
   const handleExportMarkdown = useCallback(async () => {
     try {
@@ -563,16 +920,17 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const handleSave = useCallback(() => {
     const meeting = buildMeeting(note?.id ?? crypto.randomUUID())
     onSave(meeting)
-    setSavedSnapshot({ title, notes })
+    setSavedSnapshot({ title, notes, description })
     setJustSaved(true)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000)
-  }, [title, notes, note, onSave, buildMeeting])
+  }, [title, notes, description, note, onSave, buildMeeting])
 
   const handleSaveAndNew = useCallback(() => {
     onSave(buildMeeting(note?.id ?? crypto.randomUUID()), true)
     setTitle(settings.titlePrefix)
     setNotes("")
+    setDescription("")
     setRawTranscript("")
     setShowRawTranscript(false)
     setSelectedTemplate(undefined)
@@ -586,7 +944,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setRecorderState("idle")
     setIsPaused(false)
     // Fresh form is a clean slate, not dirty against the note we just saved.
-    setSavedSnapshot({ title: settings.titlePrefix, notes: "" })
+    setSavedSnapshot({ title: settings.titlePrefix, notes: "", description: "" })
     setJustSaved(true)
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
     savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000)
@@ -655,13 +1013,17 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     if (autosaveRef.current) clearTimeout(autosaveRef.current)
     autosaveRef.current = setTimeout(() => {
       onSave(buildMeeting(note.id), true)
-      setSavedSnapshot({ title: titleRef.current, notes: notesRef.current })
+      setSavedSnapshot({
+        title: titleRef.current,
+        notes: notesRef.current,
+        description,
+      })
       setJustSaved(true)
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
       savedTimerRef.current = setTimeout(() => setJustSaved(false), 2000)
     }, 1200)
     return () => { if (autosaveRef.current) clearTimeout(autosaveRef.current) }
-  }, [notes, title, note, isDirty, isStreaming, isEnhancing, isTitling, onSave, buildMeeting])
+  }, [notes, title, description, note, isDirty, isStreaming, isEnhancing, isTitling, onSave, buildMeeting])
 
   // Flush a pending autosave if the editor unmounts (navigates away / closes)
   // within the debounce window, so the last edits to an existing note are never
@@ -677,200 +1039,527 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   })
   useEffect(() => () => { flushSaveRef.current() }, [])
 
-  return (
-    <main className="flex h-full w-full flex-col bg-muted/35">
-      <h1 className="sr-only">{note ? `Edit note: ${note.title}` : "New note"}</h1>
-      <header data-tauri-drag-region className="flex min-h-14 shrink-0 items-center justify-between gap-4 border-b border-border/70 bg-background/90 px-4 backdrop-blur">
-        <div className="flex min-w-0 items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={onCancel} className="text-muted-foreground hover:text-foreground" aria-label="Back to dashboard">
-            <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
-          </Button>
-          <div className="h-5 w-px bg-border" aria-hidden="true" />
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium">{note ? "Meeting note" : "New meeting note"}</p>
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
-              {isEnhancing ? (
-                <><span className="size-1.5 rounded-full bg-primary animate-pulse" />Enhancing note</>
-              ) : justSaved ? (
-                <>All changes saved</>
-              ) : isDirty ? (
-                <><span className="size-1.5 rounded-full bg-amber-500" />Unsaved changes</>
-              ) : (
-                <>{note ? "Autosave is on" : "Ready to write"}</>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {!focusMode && (
-            <>
-              <Button variant="ghost" onClick={handleSaveAndNew}>Save & New</Button>
-              <Button onClick={handleSave} title="Save (⌘S)">
-                <HugeiconsIcon icon={SaveIcon} strokeWidth={1.8} data-icon="inline-start" />
-                Save
-              </Button>
-            </>
-          )}
-        </div>
-      </header>
+  // AI chrome: "Enhancing" only while tokens are streaming.
+  // isEnhancing may stay true for quieter post-work (recipes, knowledge) —
+  // that must not keep the busy label/button after writing ends.
+  const aiPhase: "idle" | "enhance" | "titling" = isStreaming
+    ? "enhance"
+    : isTitling
+      ? "titling"
+      : "idle"
+  const aiBusy = aiPhase !== "idle"
+  const enhanceBusy = isStreaming
+  const chatAiState = chatStreaming ? "busy" : showAIPanel ? "active" : "idle"
 
-      <div className="relative flex min-h-0 flex-1 overflow-hidden">
-        <section className="mx-auto flex min-w-0 max-w-5xl flex-1 flex-col overflow-hidden bg-card">
-          <div className="app-scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-8 pb-16 pt-10 sm:px-12">
-              <div className="flex items-start gap-3">
-                <input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Untitled meeting"
-                  aria-label="Note title"
-                  className="h-auto min-w-0 flex-1 border-none bg-transparent px-0 py-0 text-4xl font-bold leading-tight tracking-tight outline-none placeholder:text-muted-foreground/35 focus-visible:ring-0"
-                />
+  const statusLabel = aiPhase === "enhance"
+    ? "Enhancing"
+    : aiPhase === "titling"
+      ? "Naming"
+      : justSaved
+        ? "Saved"
+        : isDirty
+          ? "Unsaved"
+          : note
+            ? "Autosave on"
+            : "Ready"
+
+  const audioSourceMeta = {
+    mic: { label: "Mic", icon: MicIcon },
+    system: { label: "System", icon: ComputerIcon },
+    both: { label: "Both", icon: AiVoiceIcon },
+  } as const
+  const activeSource = audioSourceMeta[audioSource]
+  const captureDockState =
+    recorderState === "recording" ? (isPaused ? "paused" : "live") : isTranscribing ? "processing" : "idle"
+
+  return (
+    <TooltipProvider delayDuration={280}>
+      <main className="editor-shell">
+        <h1 className="sr-only">{note ? `Edit note: ${note.title}` : "New note"}</h1>
+
+        <header data-tauri-drag-region className="editor-header">
+          {/* Left — navigate + identity */}
+          <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+            <Tooltip>
+              <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  onClick={handleEnhanceTitle}
-                  disabled={isTitling || !notes.trim()}
-                  className="mt-1 shrink-0 text-muted-foreground/50 hover:text-foreground"
-                  aria-label="AI generate title"
+                  onClick={onCancel}
+                  className="size-8 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
+                  aria-label="Back to dashboard"
                 >
-                  {isTitling ? (
-                    <div className="size-3 rounded-full border border-muted-foreground/40 border-t-transparent animate-spin" />
-                  ) : (
-                    <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} />
-                  )}
+                  <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
                 </Button>
-              </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Back</TooltipContent>
+            </Tooltip>
 
-              <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5">
-                  <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
-                  {formatDate(note?.date ?? new Date().toISOString())}
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.5} className="size-3" />
-                  {formatTime(note?.date ?? new Date().toISOString())}
-                </span>
-                {noteStats.words > 0 && (
-                  <span title={`${noteStats.words.toLocaleString()} words · ~${noteStats.minutes} min read`}>
-                    {noteStats.words.toLocaleString()} {noteStats.words === 1 ? "word" : "words"} · {noteStats.minutes} min read
-                  </span>
-                )}
-                {recorderState === "recording" && silenceSeconds > 30 && (
-                  <span className="inline-flex items-center gap-1 text-amber-500">
-                    <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} className="size-3" />
-                    Silent {silenceSeconds}s
-                  </span>
-                )}
-              </div>
-
-              {!focusMode && (
-              <div className="mt-5 flex flex-wrap items-center gap-2">
-                {speakerLabels.map((label, i) => (
-                  <span key={i} className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium", label.color)}>
-                    <span className="size-1.5 shrink-0 rounded-full bg-current opacity-60" />
-                    {label.name}
-                    <button type="button" onClick={() => handleRemoveSpeaker(i)} className="rounded-full p-0.5 transition-colors hover:bg-foreground/10" aria-label={`Remove ${label.name}`}>
-                      <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} className="size-2.5" />
-                    </button>
-                  </span>
-                ))}
-                {isAddingSpeaker ? (
-                  <div className="flex items-center gap-1">
-                    <Input value={newSpeakerName} onChange={(e) => setNewSpeakerName(e.target.value)} placeholder="Speaker name" className="h-7 w-32 text-xs" autoFocus
-                      onKeyDown={(e) => { if (e.key === "Enter") handleAddSpeaker(); if (e.key === "Escape") { setIsAddingSpeaker(false); setNewSpeakerName("") } }} />
-                    <Button size="icon-sm" variant="ghost" onClick={handleAddSpeaker} aria-label="Add speaker"><HugeiconsIcon icon={Add01Icon} strokeWidth={2} /></Button>
-                    <Button size="icon-sm" variant="ghost" onClick={() => { setIsAddingSpeaker(false); setNewSpeakerName("") }} aria-label="Cancel adding speaker"><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
-                  </div>
-                ) : (
-                  <Button variant="ghost" size="sm" onClick={() => setIsAddingSpeaker(true)} className="text-muted-foreground hover:text-foreground">
-                    <HugeiconsIcon icon={UserAdd02Icon} strokeWidth={1.5} data-icon="inline-start" />Add speaker
-                  </Button>
-                )}
-              </div>
-              )}
-
-              {!focusMode && relatedMeetings.length > 0 && (
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium text-muted-foreground">Related</span>
-                  {relatedMeetings.map(m => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      className="inline-flex items-center rounded-full border border-border/70 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                      onClick={() => {
-                        if (note?.id !== m.id) {
-                          window.dispatchEvent(new CustomEvent("navigate-meeting", { detail: { id: m.id } }))
-                        }
-                      }}
-                    >
-                      {m.title}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              <div className="mt-7 flex min-h-[28rem] flex-1 flex-col border-t border-border/70 pt-3">
-                {isStreaming && (
-                  <div className="mb-3 flex items-center gap-2 text-xs text-primary">
-                    <div className="size-2 rounded-full border border-primary border-t-transparent animate-spin" />
-                    Enhancing note…
-                  </div>
-                )}
-
-                <div className={cn("flex min-h-0 flex-1 flex-col", viewMode === "wysiwyg" && "pb-10")}>
-                  {showRawTranscript && rawTranscript ? (
-                    <pre className="min-h-[24rem] flex-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground" style={{ fontFamily: "inherit" }}>{rawTranscript}</pre>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <p className="truncate text-[13px] font-medium leading-tight tracking-tight">
+                  {title.trim() || (note ? "Meeting note" : "New note")}
+                </p>
+                <span
+                  className="editor-header-status shrink-0"
+                  data-state={aiBusy ? "busy" : justSaved ? "saved" : isDirty ? "dirty" : undefined}
+                  aria-live="polite"
+                >
+                  {aiBusy ? (
+                    <>
+                      <span className="ai-dot" data-ai="busy" />
+                      <span className="ai-label" data-ai="busy">{statusLabel}</span>
+                    </>
                   ) : (
-                    <NoteRenderer
-                      content={notes}
-                      editable
-                      onChange={setNotes}
-                      viewMode={viewMode}
-                      aiPopup={settings.aiSelectionPopup}
-                      className="min-h-[24rem]"
-                    />
+                    <>
+                      {isDirty ? (
+                        <span className="size-1.5 shrink-0 rounded-full bg-amber-500" />
+                      ) : justSaved ? (
+                        <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
+                      ) : (
+                        <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
+                      )}
+                      <span>{statusLabel}</span>
+                    </>
                   )}
-                </div>
-
-                {isEmpty && recorderState === "idle" && viewMode !== "source" && !focusMode && !isStreaming && (
-                  <div className="mt-6 rounded-xl border border-dashed border-border bg-muted/35 px-4 py-3">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="text-sm font-medium">Start with a recording or a template</p>
-                        <p className="mt-0.5 text-xs text-muted-foreground">You can also click above and begin typing.</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={startRecording}>
-                          <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />Start recording
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={() => setShowTemplatePicker(true)}>Choose template</Button>
-                      </div>
-                    </div>
-                    <p className="mt-3 border-t border-border/50 pt-2.5 text-[11px] leading-relaxed text-muted-foreground/70">
-                      Power features: type <kbd className="rounded border border-border/60 bg-muted px-1 font-sans">/</kbd> for blocks · select text to format or ask AI · <kbd className="rounded border border-border/60 bg-muted px-1 font-sans">⌘⇧F</kbd> for focus mode · type <kbd className="rounded border border-border/60 bg-muted px-1 font-sans">;trigger</kbd> + space to expand a snippet ·{" "}
-                      <button type="button" onClick={onSettings} className="underline underline-offset-2 transition-colors hover:text-foreground">
-                        dictionary, styles &amp; snippets live in Settings
-                      </button>
-                    </p>
-                  </div>
-                )}
+                </span>
               </div>
+              <p className="mt-0.5 hidden truncate text-[11px] text-muted-foreground sm:block">
+                {note ? "Meeting note" : "New note"}
+                {selectedTemplate ? ` · ${selectedTemplate.name}` : ""}
+              </p>
             </div>
           </div>
-        </section>
+
+          {/* Right — tools cluster + save */}
+          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+            <div className="editor-header-cluster" role="toolbar" aria-label="Editor tools">
+              {!focusMode && (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setShowInfoPanel((v) => !v)}
+                        aria-label={showInfoPanel ? "Hide info panel" : "Show info panel"}
+                        aria-pressed={showInfoPanel}
+                        className={cn(
+                          "size-8 rounded-xl text-muted-foreground hover:text-foreground",
+                          showInfoPanel && "bg-background text-foreground shadow-sm",
+                        )}
+                      >
+                        <HugeiconsIcon icon={AlignBoxMiddleLeftIcon} strokeWidth={1.8} />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{showInfoPanel ? "Hide info" : "Show info"}</TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setShowAIPanel((v) => !v)}
+                        aria-label={showAIPanel ? "Hide chat" : "Show chat"}
+                        aria-pressed={showAIPanel}
+                        data-ai={chatAiState}
+                        className={cn(
+                          "size-8 rounded-xl",
+                          chatAiState === "idle"
+                            ? "text-muted-foreground hover:text-foreground"
+                            : "text-brand",
+                          (showAIPanel || chatStreaming) && "bg-background shadow-sm",
+                          chatAiState !== "idle" && "ai-ring",
+                        )}
+                      >
+                        <HugeiconsIcon
+                          icon={AiChat02Icon}
+                          strokeWidth={1.8}
+                          className={chatAiState !== "idle" ? "ai-icon" : undefined}
+                        />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{showAIPanel ? "Hide chat" : "Show chat"}</TooltipContent>
+                  </Tooltip>
+
+                  <div className="mx-0.5 h-4 w-px shrink-0 bg-border/70" aria-hidden />
+                </>
+              )}
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => setFocusMode((v) => !v)}
+                    aria-label={focusMode ? "Exit focus mode" : "Enter focus mode"}
+                    aria-pressed={focusMode}
+                    className={cn(
+                      "size-8 rounded-xl text-muted-foreground hover:text-foreground",
+                      focusMode && "bg-background text-foreground shadow-sm",
+                    )}
+                  >
+                    <HugeiconsIcon icon={CenterFocusIcon} strokeWidth={1.8} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{focusMode ? "Exit focus · ⌘⇧F" : "Focus mode · ⌘⇧F"}</TooltipContent>
+              </Tooltip>
+            </div>
+
+            {!focusMode && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSaveAndNew}
+                  className="hidden h-8 rounded-xl px-2.5 text-muted-foreground sm:inline-flex"
+                >
+                  Save &amp; new
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="sm"
+                      onClick={handleSave}
+                      aria-label="Save note"
+                      className="h-8 gap-1.5 rounded-xl px-3 active:scale-[0.96]"
+                    >
+                      <HugeiconsIcon icon={SaveIcon} strokeWidth={1.8} data-icon="inline-start" className="size-3.5" />
+                      Save
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Save · ⌘S</TooltipContent>
+                </Tooltip>
+              </div>
+            )}
+          </div>
+        </header>
+
+        <div className="editor-layout">
+          {/* ── Left: meeting info, people, brief ───────────────────── */}
           <AnimatePresence initial={false}>
-            {showAIPanel && !focusMode && (
-              <motion.div
+            {infoOpen && (
+              <motion.aside
+                key="info-panel"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: infoWidth, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
+                className="editor-col-info"
+                aria-label="Meeting details"
+              >
+                <EditorInfoSidebar
+                  dateIso={note?.date ?? new Date().toISOString()}
+                  wordCount={noteStats.words}
+                  template={selectedTemplate}
+                  people={sidebarPeople}
+                  related={relatedMeetings}
+                  openLoops={openLoops}
+                  isAddingSpeaker={isAddingSpeaker}
+                  newSpeakerName={newSpeakerName}
+                  onClose={() => setShowInfoPanel(false)}
+                  onTemplateClick={() => setShowTemplatePicker(true)}
+                  onAddSpeakerStart={() => setIsAddingSpeaker(true)}
+                  onAddSpeakerConfirm={handleAddSpeaker}
+                  onAddSpeakerCancel={() => {
+                    setIsAddingSpeaker(false)
+                    setNewSpeakerName("")
+                  }}
+                  onNewSpeakerNameChange={setNewSpeakerName}
+                  onRemoveSpeaker={handleRemoveSpeaker}
+                  onOpenRelated={(id) => {
+                    if (note?.id !== id) {
+                      window.dispatchEvent(new CustomEvent("navigate-meeting", { detail: { id } }))
+                    }
+                  }}
+                  onToggleLoop={handleToggleLoop}
+                />
+              </motion.aside>
+            )}
+          </AnimatePresence>
+
+          {/* ── Center: writing surface ─────────────────────────────── */}
+          <section className="editor-col-main">
+            <div className="scroll-fade min-h-0 flex-1 overflow-y-auto">
+              <div className="editor-canvas">
+                <div className="editor-title-row">
+                  <textarea
+                    ref={titleInputRef}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      // Titles wrap visually; keep Enter from inserting hard line breaks.
+                      if (e.key === "Enter") e.preventDefault()
+                    }}
+                    rows={1}
+                    placeholder="Untitled meeting"
+                    aria-label="Note title"
+                    className="editor-title-input"
+                  />
+                  {!focusMode && (
+                    <div className="editor-title-action">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={handleEnhanceTitle}
+                            disabled={aiBusy || !notes.trim()}
+                            aria-busy={aiPhase === "titling"}
+                            data-ai={aiPhase === "titling" ? "busy" : "idle"}
+                            className={cn(
+                              "size-8 rounded-xl",
+                              aiPhase === "titling" ? "text-brand" : "text-muted-foreground/45 hover:text-foreground",
+                            )}
+                            aria-label="Generate title with AI"
+                          >
+                            {aiPhase === "titling" ? (
+                              <span className="size-3.5 animate-spin rounded-full border-2 border-brand/30 border-t-brand" />
+                            ) : (
+                              <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} className="opacity-70" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Generate title</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  )}
+                </div>
+                {!focusMode && (
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={2}
+                    maxLength={280}
+                    placeholder="Short description for the notes list…"
+                    aria-label="Meeting description"
+                    className="editor-description-input"
+                  />
+                )}
+
+                <div className="editor-meta">
+                  <span className="tabular-nums">
+                    {formatDate(note?.date ?? new Date().toISOString())}
+                  </span>
+                  <span className="editor-meta-sep" aria-hidden>·</span>
+                  <span className="tabular-nums">
+                    {formatTime(note?.date ?? new Date().toISOString())}
+                  </span>
+                  {noteStats.words > 0 && (
+                    <>
+                      <span className="editor-meta-sep" aria-hidden>·</span>
+                      <span title={`${noteStats.words.toLocaleString()} words`}>
+                        {noteStats.words.toLocaleString()} {noteStats.words === 1 ? "word" : "words"}
+                        <span className="text-muted-foreground/70"> · {noteStats.minutes} min</span>
+                      </span>
+                    </>
+                  )}
+                  {recorderState === "recording" && (
+                    <>
+                      <span className="editor-meta-sep" aria-hidden>·</span>
+                      <div className="app-control-strip" role="tablist" aria-label="Recording layout">
+                        {(
+                          [
+                            ["notes", "Notes"],
+                            ["split", "Split"],
+                            ["transcript", "Live"],
+                          ] as const
+                        ).map(([key, label]) => (
+                          <button
+                            key={key}
+                            type="button"
+                            role="tab"
+                            className="app-control-item h-7 px-2.5 text-xs"
+                            data-active={dualFocus === key}
+                            aria-selected={dualFocus === key}
+                            onClick={() => setDualFocus(key)}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {recorderState === "recording" && silenceSeconds > 30 && (
+                    <>
+                      <span className="editor-meta-sep" aria-hidden>·</span>
+                      <span className="text-amber-600 dark:text-amber-400">Silent {silenceSeconds}s</span>
+                    </>
+                  )}
+                </div>
+
+                {/* Action digest / Standup / Follow-up — first-class, not under ⋯ */}
+                {recorderState !== "recording" &&
+                  !focusMode &&
+                  (notes.trim() || manualNotes.trim() || Object.keys(recipeOutputs).length > 0) && (
+                    <EditorArtifacts
+                      recipes={loadRecipes()}
+                      outputs={recipeOutputs}
+                      activeId={activeArtifactId}
+                      onActiveChange={setActiveArtifactId}
+                      runningId={runningRecipeId}
+                      onRun={(recipe) => void handleRunRecipe(recipe)}
+                      onUpdateOutput={handleUpdateArtifactOutput}
+                      canRun={Boolean(notes.trim() || manualNotes.trim() || rawTranscript.trim())}
+                    />
+                  )}
+
+                <div className="mt-6 flex min-h-[28rem] flex-1 flex-col">
+                  {enhanceBusy && (
+                    <div className="ai-status mb-4" data-ai="busy">
+                      <span className="size-3 animate-spin rounded-full border-2 border-brand/30 border-t-brand" />
+                      <span className="ai-status-text">Enhancing note…</span>
+                    </div>
+                  )}
+
+                  {recorderState === "recording" ? (
+                    <div
+                      className={cn(
+                        "grid min-h-[24rem] flex-1 gap-3",
+                        dualFocus === "split" ? "md:grid-cols-2" : "grid-cols-1",
+                      )}
+                    >
+                      {(dualFocus === "notes" || dualFocus === "split") && (
+                        <div className="editor-pane">
+                          <div className="editor-pane-header border-b border-border/40">
+                            <span>My notes</span>
+                            <span className="font-normal text-muted-foreground/70">Private shorthand</span>
+                          </div>
+                          <textarea
+                            className="min-h-[22rem] flex-1 resize-none bg-transparent px-3.5 py-3 text-sm leading-relaxed text-foreground outline-none placeholder:text-muted-foreground/60"
+                            value={manualNotes}
+                            onChange={(e) => setManualNotes(e.target.value)}
+                            placeholder="Decisions, names, follow-ups…"
+                            aria-label="My notes during recording"
+                          />
+                        </div>
+                      )}
+                      {(dualFocus === "transcript" || dualFocus === "split") && (
+                        <div className="editor-pane bg-muted/20">
+                          <div className="editor-pane-header border-b border-border/40">
+                            <span>Live transcript</span>
+                            <span className="inline-flex items-center gap-1.5 font-normal text-muted-foreground/70">
+                              <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
+                              Auto
+                            </span>
+                          </div>
+                          <pre className="scroll-fade min-h-[22rem] flex-1 overflow-y-auto whitespace-pre-wrap px-3.5 py-3 font-sans text-sm leading-relaxed text-muted-foreground">
+                            {notes || "Listening…"}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className={cn("flex min-h-0 flex-1 flex-col", viewMode === "wysiwyg" && "pb-10")}>
+                      {showRawTranscript && rawTranscript ? (
+                        <pre className="min-h-[24rem] flex-1 whitespace-pre-wrap font-sans text-sm leading-relaxed text-muted-foreground">
+                          {rawTranscript}
+                        </pre>
+                      ) : (
+                        <NoteRenderer
+                          content={notes}
+                          editable
+                          onChange={setNotes}
+                          viewMode={viewMode}
+                          aiPopup={settings.aiSelectionPopup}
+                          className="min-h-[24rem]"
+                        />
+                      )}
+                      {manualNotes.trim() && !showRawTranscript && (
+                        <details className="editor-pane mt-4 text-sm open:pb-1">
+                          <summary className="cursor-pointer px-3.5 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+                            My notes from recording
+                          </summary>
+                          <pre className="whitespace-pre-wrap border-t border-border/40 px-3.5 py-2.5 font-sans text-sm leading-relaxed text-foreground">
+                            {manualNotes}
+                          </pre>
+                        </details>
+                      )}
+                      {/* Custom recipes (non-artifact) still listed compactly */}
+                      {Object.entries(recipeOutputs).some(
+                        ([id]) => !(ARTIFACT_RECIPE_IDS as readonly string[]).includes(id),
+                      ) && (
+                        <div className="mt-4 flex flex-col gap-2">
+                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Other recipes
+                          </p>
+                          {Object.entries(recipeOutputs)
+                            .filter(([id]) => !(ARTIFACT_RECIPE_IDS as readonly string[]).includes(id))
+                            .map(([id, out]) => {
+                              const recipe = loadRecipes().find((r) => r.id === id)
+                              return (
+                                <details key={id} className="editor-pane text-sm open:pb-1">
+                                  <summary className="cursor-pointer px-3.5 py-2.5 text-xs font-medium transition-colors hover:text-foreground">
+                                    {recipe?.name ?? "Recipe"}
+                                  </summary>
+                                  <div className="border-t border-border/40 px-3.5 py-2.5">
+                                    <MarkdownView markdown={out} />
+                                  </div>
+                                </details>
+                              )
+                            })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {isEmpty && recorderState === "idle" && viewMode !== "source" && !focusMode && !enhanceBusy && (
+                    <div className="mt-8 rounded-2xl bg-muted/40 px-4 py-4 ring-1 ring-foreground/5 dark:ring-foreground/10">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium tracking-tight">Start capturing</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">
+                            Record the room, pick a template, or just start typing.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button variant="default" size="sm" onClick={startRecording}>
+                            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />
+                            Record
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setShowTemplatePicker(true)}>
+                            Template
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="mt-3 border-t border-border/40 pt-3 text-[11px] leading-relaxed text-muted-foreground/75">
+                        <kbd className="rounded-md bg-background/80 px-1.5 py-0.5 font-sans ring-1 ring-border/60">/</kbd>{" "}
+                        blocks · select text for format / AI ·{" "}
+                        <kbd className="rounded-md bg-background/80 px-1.5 py-0.5 font-sans ring-1 ring-border/60">⌘⇧F</kbd>{" "}
+                        focus ·{" "}
+                        <kbd className="rounded-md bg-background/80 px-1.5 py-0.5 font-sans ring-1 ring-border/60">;trigger</kbd>{" "}
+                        snippets ·{" "}
+                        <button
+                          type="button"
+                          onClick={onSettings}
+                          className="underline decoration-border underline-offset-2 transition-colors hover:text-foreground"
+                        >
+                          Settings
+                        </button>
+                      </p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* ── Right: AI chat ──────────────────────────────────────── */}
+          <AnimatePresence initial={false}>
+            {chatOpen && (
+              <motion.aside
                 ref={chatPanelRef}
-                initial={{ width: 0 }}
-                animate={{ width: chatWidth }}
-                exit={{ width: 0 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-                className="relative flex shrink-0 flex-col overflow-hidden border-l border-border/70 bg-card max-md:absolute max-md:inset-3 max-md:z-20 max-md:rounded-lg max-md:border max-md:shadow-xl"
+                key="chat-panel"
+                initial={{ width: 0, opacity: 0.5 }}
+                animate={{ width: chatWidth, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
+                className="editor-col-chat"
+                aria-label="AI chat"
               >
                 <div
-                  className="absolute bottom-0 left-0 top-0 z-10 -ml-1 w-2 cursor-col-resize hover:bg-primary/20 active:bg-primary/30"
+                  className="absolute bottom-0 left-0 top-0 z-10 -ml-1 w-2 cursor-col-resize hover:bg-brand/15 active:bg-brand/25"
                   onMouseDown={(e) => {
                     e.preventDefault()
                     resizeRef.current = true
@@ -878,25 +1567,36 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     document.body.style.userSelect = "none"
                   }}
                 />
-                <div className="flex shrink-0 items-center justify-between border-b border-border/70 px-4 py-3">
-                  <span className="text-sm font-medium flex items-center gap-2">
-                    <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-4" />
-                    AI Chat
+                <div className="flex shrink-0 items-center justify-between px-3.5 py-2.5">
+                  <span className="flex items-center gap-2 text-sm font-medium tracking-tight">
+                    <span className="ai-mark" data-ai={chatStreaming ? "busy" : "active"}>
+                      <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-3.5 text-white" />
+                    </span>
+                    <span className="ai-label" data-ai={chatStreaming ? "busy" : "idle"}>
+                      Chat
+                    </span>
                   </span>
-                  <Button variant="ghost" size="icon-sm" onClick={() => setShowAIPanel(false)} aria-label="Close AI panel">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => setShowAIPanel(false)}
+                    aria-label="Close chat"
+                    className="text-muted-foreground"
+                  >
                     <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
                   </Button>
                 </div>
-                <div className="flex-1 min-h-0 flex flex-col">
-                  <div ref={chatScrollRef} className="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-3">
+                <div className="flex min-h-0 flex-1 flex-col border-t border-border/40">
+                  <div ref={chatScrollRef} className="scroll-fade flex flex-1 flex-col gap-3 overflow-y-auto px-3.5 py-3">
                     {messages.length === 0 && (
                       suggestedQuestions.length > 0 ? (
                         <div className="flex flex-col gap-2">
-                          <p className="text-xs text-muted-foreground">Suggested questions</p>
+                          <p className="editor-side-label">Suggested</p>
                           {suggestedQuestions.map((q) => (
                             <button
                               key={q}
-                              className="text-sm text-left px-3 py-2 rounded-lg border border-dashed hover:bg-muted/50 hover:border-border transition-colors disabled:opacity-50"
+                              type="button"
+                              className="rounded-xl bg-muted/50 px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted disabled:opacity-50"
                               onClick={() => sendMessage(q)}
                               disabled={chatStreaming}
                             >
@@ -905,9 +1605,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                           ))}
                         </div>
                       ) : (
-                        <p className="text-xs text-muted-foreground">
-                          Ask anything about this note. Enhance the transcript to get suggested questions based on what was discussed.
-                        </p>
+                        <div className="app-empty py-10">
+                          <p className="max-w-[15rem] text-sm text-muted-foreground">
+                            Ask about decisions, owners, or open loops in this note.
+                          </p>
+                        </div>
                       )
                     )}
                     {messages.map((msg, i) => {
@@ -915,24 +1617,28 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       return (
                         <div
                           key={i}
-                          className={`group flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}
+                          className={cn(
+                            "group flex flex-col gap-1",
+                            msg.role === "user" ? "items-end" : "items-start",
+                          )}
                         >
                           {msg.role === "user" ? (
-                            <div className="max-w-[85%] rounded-lg rounded-br-md px-3 py-2 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground">
+                            <div className="max-w-[88%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary px-3 py-2 text-sm text-primary-foreground">
                               {msg.content}
                             </div>
                           ) : (
-                            <div className="max-w-[85%] rounded-lg rounded-bl-md px-3 py-2 bg-muted">
+                            <div className="max-w-[92%] rounded-2xl rounded-bl-md bg-muted/70 px-3 py-2">
                               <MarkdownView markdown={msg.content} />
                               {isLast && lastIsStreaming && (
-                                <span className="inline-block w-1.5 h-4 bg-current ml-0.5 animate-pulse align-middle" />
+                                <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-current align-middle" />
                               )}
                             </div>
                           )}
                           {msg.role === "assistant" && msg.content && !(isLast && lastIsStreaming) && (
                             <button
+                              type="button"
                               onClick={() => copyMessage(msg.content, i)}
-                              className="text-[11px] text-muted-foreground/50 hover:text-foreground inline-flex items-center gap-1"
+                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 transition-colors hover:text-foreground"
                             >
                               {copiedIdx === i ? (
                                 <span className="text-emerald-500">Copied</span>
@@ -949,7 +1655,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     })}
                     {chatError && (
                       <div className="flex flex-col items-center gap-2 py-2">
-                        <div className="text-destructive text-sm text-center inline-flex items-center gap-1.5" role="alert">
+                        <div className="inline-flex items-center gap-1.5 text-center text-sm text-destructive" role="alert">
                           <HugeiconsIcon icon={AlertCircleIcon} strokeWidth={2} className="size-4" />
                           {chatError}
                         </div>
@@ -960,17 +1666,22 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       </div>
                     )}
                   </div>
-                  <div className="flex shrink-0 items-end gap-2 border-t border-border p-3">
+                  <div className="flex shrink-0 items-end gap-2 border-t border-border/40 p-3">
                     <Input
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="Ask about this meeting..."
-                      className="flex-1 h-9 text-sm"
+                      placeholder="Ask about this meeting…"
+                      className="h-9 flex-1 rounded-2xl text-sm"
                       disabled={chatStreaming}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendMessage(chatInput) } }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          sendMessage(chatInput)
+                        }
+                      }}
                     />
                     {chatStreaming ? (
-                      <Button size="icon" variant="destructive" onClick={stopChatStreaming} aria-label="Stop generating" title="Stop generating">
+                      <Button size="icon" variant="destructive" onClick={stopChatStreaming} aria-label="Stop generating">
                         <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
                       </Button>
                     ) : (
@@ -979,185 +1690,358 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                         onClick={() => sendMessage(chatInput)}
                         disabled={!chatInput.trim()}
                         aria-label="Send message"
-                        title="Send message"
                       >
                         <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
                       </Button>
                     )}
                   </div>
                 </div>
-              </motion.div>
+              </motion.aside>
             )}
           </AnimatePresence>
-      </div>
+        </div>
 
-      {/* Focus mode hides the capture bar entirely — unless a recording is
-          live or processing, in which case its controls must stay reachable. */}
-      {(!focusMode || recorderState === "recording" || isTranscribing) && (
-      <footer className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-border/70 bg-background/95 px-4 py-2.5 shadow-[0_-8px_24px_-20px_rgba(0,0,0,0.45)] backdrop-blur">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {recorderState === "recording" ? (
-            <div className="flex items-center gap-3 rounded-xl border border-border bg-card px-3 py-1.5">
-              {isPaused ? (
-                <>
-                  <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatTimer((note?.duration ?? 0) + duration)}</motion.span>
-                  <span className="text-xs font-medium text-amber-500">Paused</span>
-                  <Button variant="ghost" size="sm" onClick={resumeRecording} className="text-amber-500 hover:text-amber-600">Resume</Button>
-                  <Button variant="ghost" size="sm" onClick={stopRecording} className="text-destructive hover:text-destructive">Stop</Button>
-                </>
-              ) : (
-                <>
-                  <motion.span animate={{ opacity: [1, 0.6, 1] }} transition={{ repeat: Infinity, duration: 1 }} className="text-xs font-medium text-destructive tabular-nums">{formatTimer((note?.duration ?? 0) + duration)}</motion.span>
-                  <Waveform active={true} level={audioLevel} className="min-w-[160px]" />
-                  {isSpeaking ? (
-                    <span className="text-xs font-medium text-primary">speaking</span>
-                  ) : (
-                    <span className="text-xs text-muted-foreground/60">
-                      {silenceSeconds > 10 ? `silence ${silenceSeconds}s` : "listening"}
-                    </span>
-                  )}
-                  <Button variant="ghost" size="sm" onClick={pauseRecording} className="text-amber-500 hover:text-amber-600">Pause</Button>
-                  <Button variant="ghost" size="sm" onClick={stopRecording} className="text-destructive hover:text-destructive">Stop</Button>
-                </>
-              )}
-            </div>
-          ) : isTranscribing ? (
-            <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><div className="size-2 rounded-full border border-primary border-t-transparent animate-spin" />Processing {formatTimer((note?.duration ?? 0) + duration)} recording…</span>
-          ) : (
-            <>
-              <span className="hidden text-xs font-medium text-muted-foreground lg:inline">Capture from</span>
-              <div className="app-control-strip">
-                <button
-                  className="app-control-item"
-                  data-active={audioSource === "mic"}
-                  aria-pressed={audioSource === "mic"}
-                  onClick={() => setAudioSource("mic")}
-                >
-                  <HugeiconsIcon icon={MicIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />Mic
-                </button>
-                <button
-                  className="app-control-item"
-                  data-active={audioSource === "system"}
-                  aria-pressed={audioSource === "system"}
-                  onClick={() => setAudioSource("system")}
-                >
-                  <HugeiconsIcon icon={ComputerIcon} strokeWidth={1.5} className="size-3 mr-1 inline" />System
-                </button>
-                <button
-                  className="app-control-item"
-                  data-active={audioSource === "both"}
-                  aria-pressed={audioSource === "both"}
-                  onClick={() => setAudioSource("both")}
-                >
-                  Both
-                </button>
-              </div>
-              {audioSource !== "system" && devices.length > 1 && (
-                <Select value={selectedDevice} onValueChange={setSelectedDevice}>
-                  <SelectTrigger className="h-8 max-w-[160px] rounded-2xl border-border bg-background text-sm text-muted-foreground">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {devices.map(d => <SelectItem key={d.deviceId} value={d.deviceId}>{d.label}</SelectItem>)}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              )}
-              <Button variant="default" onClick={startRecording}>
-                <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />Record
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setShowTemplatePicker(true)}
+        {/* Floating capture dock — reachable during live recording even in focus mode */}
+        {(!focusMode || recorderState === "recording" || isTranscribing) && (
+          <footer className="editor-capture" data-state={captureDockState}>
+            <div className="editor-capture-inner">
+              <div
+                className="editor-dock"
+                data-state={captureDockState}
+                role={recorderState === "recording" || isTranscribing ? "status" : undefined}
+                aria-live={recorderState === "recording" || isTranscribing ? "polite" : undefined}
               >
-                {selectedTemplate ? <><TemplateIcon name={selectedTemplate.icon} className="size-3" />{selectedTemplate.name}</> : "Template"}
-              </Button>
-            </>
-          )}
-        </div>
-
-        <div data-tauri-drag-region className="min-w-4 flex-1 self-stretch" />
-
-        {!focusMode && (
-        <div className="flex items-center gap-2">
-          {previousNotes && (
-            <Button variant="ghost" size="sm" onClick={handleUndoEnhance} className="text-amber-500 hover:text-amber-600">
-              Undo enhance
-            </Button>
-          )}
-          {notes.trim() && (
-            <Button variant="outline" onClick={handleEnhance} disabled={isEnhancing}>
-              <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} data-icon="inline-start" />Enhance
-            </Button>
-          )}
-          <Button variant={showAIPanel ? "secondary" : "outline"} onClick={() => { setShowAIPanel(!showAIPanel) }}>
-            <HugeiconsIcon icon={AiChat02Icon} strokeWidth={1.5} data-icon="inline-start" />AI chat
-          </Button>
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="More note actions">
-                <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={1.8} />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-52">
-              <DropdownMenuLabel>Note actions</DropdownMenuLabel>
-              <DropdownMenuGroup>
-                <DropdownMenuItem onSelect={() => setViewMode(viewMode === "wysiwyg" ? "source" : "wysiwyg")}>
-                  <HugeiconsIcon icon={CodeIcon} strokeWidth={1.5} />
-                  {viewMode === "wysiwyg" ? "Edit Markdown source" : "Return to rich text"}
-                </DropdownMenuItem>
-                {rawTranscript && (
-                  <DropdownMenuItem onSelect={() => setShowRawTranscript(!showRawTranscript)}>
-                    <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} />
-                    {showRawTranscript ? "Show enhanced notes" : "Show original transcript"}
-                  </DropdownMenuItem>
+                {recorderState === "recording" && isPaused && (
+                  <>
+                    <div className="editor-dock-status">
+                      <span className="inline-flex size-2 shrink-0 rounded-full bg-amber-500" aria-hidden />
+                      <span className="text-sm font-medium tabular-nums text-foreground">
+                        {formatTimer((note?.duration ?? 0) + duration)}
+                      </span>
+                      <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Paused</span>
+                    </div>
+                    <Button variant="secondary" size="sm" onClick={resumeRecording} className="h-9 shrink-0 gap-1.5 rounded-2xl px-3">
+                      <HugeiconsIcon icon={PlayIcon} strokeWidth={2} className="size-3.5" />
+                      Resume
+                    </Button>
+                    <Button variant="destructive" size="sm" onClick={stopRecording} className="h-9 shrink-0 gap-1.5 rounded-2xl px-3">
+                      <HugeiconsIcon icon={StopIcon} strokeWidth={2} className="size-3.5" />
+                      Stop
+                    </Button>
+                  </>
                 )}
-                <DropdownMenuItem disabled={!notes.trim()} onSelect={handleCopyMarkdown}>
-                  <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
-                  Copy Markdown
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={!notes.trim()} onSelect={handleCopyRichText}>
-                  <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
-                  Copy Rich Text
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={!notes.trim()} onSelect={handleExportMarkdown}>
-                  <HugeiconsIcon icon={FileExportIcon} strokeWidth={1.5} />
-                  Export as Markdown File
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={handleImportAudio}>
-                  <HugeiconsIcon icon={FileImportIcon} strokeWidth={1.5} />
-                  Import Audio File…
-                </DropdownMenuItem>
-                <DropdownMenuItem disabled={!notes.trim() || isEmpty} onSelect={handleSaveAsTemplate}>
-                  <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
-                  Save as template
-                </DropdownMenuItem>
-              </DropdownMenuGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
 
-          <Button variant="ghost" size="icon" onClick={onSettings} className="text-muted-foreground hover:text-foreground" aria-label="Settings">
-            <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} />
-          </Button>
-        </div>
+                {recorderState === "recording" && !isPaused && (
+                  <>
+                    <div className="editor-dock-status">
+                      <span className="relative flex size-2 shrink-0" aria-hidden>
+                        <span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive/45 opacity-70" />
+                        <span className="relative inline-flex size-2 rounded-full bg-destructive" />
+                      </span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wide text-destructive">Rec</span>
+                      <span className="text-sm font-medium tabular-nums text-foreground">
+                        {formatTimer((note?.duration ?? 0) + duration)}
+                      </span>
+                      <Waveform active level={audioLevel} className="text-destructive" width={120} height={26} />
+                      <span className="hidden text-xs text-muted-foreground md:inline">
+                        {isSpeaking ? "Speaking" : silenceSeconds > 10 ? `Silent ${silenceSeconds}s` : "Listening"}
+                      </span>
+                    </div>
+                    <div className="editor-dock-divider" aria-hidden />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={pauseRecording}
+                          className="size-9 shrink-0 rounded-2xl text-muted-foreground"
+                          aria-label="Pause recording"
+                        >
+                          <HugeiconsIcon icon={PauseIcon} strokeWidth={2} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">Pause</TooltipContent>
+                    </Tooltip>
+                    <Button variant="destructive" size="sm" onClick={stopRecording} className="h-9 shrink-0 gap-1.5 rounded-2xl px-3.5">
+                      <HugeiconsIcon icon={StopIcon} strokeWidth={2} className="size-3.5" />
+                      Stop
+                    </Button>
+                  </>
+                )}
+
+                {isTranscribing && (
+                  <div className="editor-dock-status py-0.5">
+                    <span className="size-3.5 animate-spin rounded-full border-2 border-brand/30 border-t-brand" />
+                    <span className="text-sm text-muted-foreground">
+                      Processing
+                      <span className="ml-1.5 tabular-nums text-foreground">
+                        {formatTimer((note?.duration ?? 0) + duration)}
+                      </span>
+                    </span>
+                  </div>
+                )}
+
+                {recorderState === "idle" && !isTranscribing && (
+                  <>
+                    {/* Collapsed audio source: one control, full options in menu */}
+                    <DropdownMenu>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-9 gap-1.5 rounded-2xl px-2.5 text-muted-foreground"
+                              aria-label={`Audio source: ${activeSource.label}`}
+                            >
+                              <HugeiconsIcon icon={activeSource.icon} strokeWidth={1.6} className="size-3.5" />
+                              <span className="hidden text-sm sm:inline">{activeSource.label}</span>
+                              <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-3 opacity-50" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                        </TooltipTrigger>
+                        <TooltipContent side="top">Audio source</TooltipContent>
+                      </Tooltip>
+                      <DropdownMenuContent align="start" className="min-w-48" side="top" sideOffset={8}>
+                        <DropdownMenuLabel>Capture from</DropdownMenuLabel>
+                        <DropdownMenuRadioGroup
+                          value={audioSource}
+                          onValueChange={(v) => setAudioSource(v as typeof audioSource)}
+                        >
+                          <DropdownMenuRadioItem value="mic">
+                            <HugeiconsIcon icon={MicIcon} strokeWidth={1.6} className="size-3.5" />
+                            Microphone
+                          </DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="system">
+                            <HugeiconsIcon icon={ComputerIcon} strokeWidth={1.6} className="size-3.5" />
+                            System audio
+                          </DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="both">
+                            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.6} className="size-3.5" />
+                            Both
+                          </DropdownMenuRadioItem>
+                        </DropdownMenuRadioGroup>
+                        {audioSource !== "system" && devices.length > 1 && (
+                          <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel>Microphone</DropdownMenuLabel>
+                            <DropdownMenuRadioGroup value={selectedDevice} onValueChange={setSelectedDevice}>
+                              {devices.map((d) => (
+                                <DropdownMenuRadioItem key={d.deviceId} value={d.deviceId}>
+                                  <span className="truncate">{d.label}</span>
+                                </DropdownMenuRadioItem>
+                              ))}
+                            </DropdownMenuRadioGroup>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+
+                    <div className="editor-dock-divider" aria-hidden />
+
+                    <Button
+                      variant="default"
+                      onClick={startRecording}
+                      className="h-9 gap-1.5 rounded-2xl px-4 active:scale-[0.96]"
+                    >
+                      <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />
+                      Record
+                    </Button>
+
+                    {!focusMode && (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setShowTemplatePicker(true)}
+                              className="h-9 gap-1.5 rounded-2xl px-2.5 text-muted-foreground"
+                            >
+                              {selectedTemplate ? (
+                                <>
+                                  <TemplateIcon name={selectedTemplate.icon} className="size-3.5" />
+                                  <span className="hidden max-w-[6.5rem] truncate sm:inline">{selectedTemplate.name}</span>
+                                </>
+                              ) : (
+                                <span className="hidden sm:inline">Template</span>
+                              )}
+                              {!selectedTemplate && (
+                                <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} className="size-3.5 sm:hidden" />
+                              )}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">Template for enhance</TooltipContent>
+                        </Tooltip>
+
+                        {/* Only after enhance finishes — not while the API is still running */}
+                        {previousNotes && !enhanceBusy && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleUndoEnhance}
+                            className="h-9 rounded-2xl px-2.5 text-amber-600 hover:text-amber-700"
+                          >
+                            Undo
+                          </Button>
+                        )}
+
+                        {/* Glass orb enhance — coral→violet gradient from brand AI mark */}
+                        {(notes.trim() || manualNotes.trim() || enhanceBusy) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={handleEnhance}
+                                disabled={enhanceBusy}
+                                aria-busy={enhanceBusy}
+                                aria-label={enhanceBusy ? "Enhancing note" : "Enhance note"}
+                                data-ai={enhanceBusy ? "busy" : "idle"}
+                                className="ai-control ai-control--orb active:scale-[0.96] hover:bg-transparent dark:hover:bg-transparent"
+                              >
+                                <HugeiconsIcon
+                                  icon={AiMagicIcon}
+                                  strokeWidth={1.75}
+                                  className="size-4 text-white drop-shadow-[0_0_6px_rgba(255,255,255,0.45)]"
+                                />
+                                <span className="ai-control-label">
+                                  {enhanceBusy ? "Enhancing…" : "Enhance"}
+                                </span>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top">
+                              {enhanceBusy ? "Enhancing this note" : "Structure transcript into notes"}
+                            </TooltipContent>
+                          </Tooltip>
+                        )}
+
+                        <div className="editor-dock-divider" aria-hidden />
+
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="size-9 rounded-2xl" aria-label="More note actions">
+                              <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={1.8} />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="min-w-56" side="top" sideOffset={8}>
+                            <DropdownMenuLabel>Note</DropdownMenuLabel>
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem onSelect={() => setViewMode(viewMode === "wysiwyg" ? "source" : "wysiwyg")}>
+                                <HugeiconsIcon icon={CodeIcon} strokeWidth={1.5} />
+                                {viewMode === "wysiwyg" ? "Edit Markdown source" : "Return to rich text"}
+                              </DropdownMenuItem>
+                              {rawTranscript && (
+                                <DropdownMenuItem onSelect={() => setShowRawTranscript(!showRawTranscript)}>
+                                  <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} />
+                                  {showRawTranscript ? "Show enhanced notes" : "Show original transcript"}
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem disabled={!notes.trim()} onSelect={handleCopyMarkdown}>
+                                <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
+                                Copy Markdown
+                              </DropdownMenuItem>
+                              <DropdownMenuItem disabled={!notes.trim()} onSelect={handleCopyRichText}>
+                                <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
+                                Copy rich text
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuLabel>Share</DropdownMenuLabel>
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem disabled={!notes.trim()} onSelect={handleShareEmail}>
+                                <HugeiconsIcon icon={FileExportIcon} strokeWidth={1.5} />
+                                Email draft…
+                              </DropdownMenuItem>
+                              <DropdownMenuItem disabled={!notes.trim()} onSelect={handleShareFolder}>
+                                <HugeiconsIcon icon={FileExportIcon} strokeWidth={1.5} />
+                                Export to folder
+                              </DropdownMenuItem>
+                              <DropdownMenuItem disabled={!notes.trim()} onSelect={handleShareSlack}>
+                                <HugeiconsIcon icon={FileExportIcon} strokeWidth={1.5} />
+                                Share to Slack
+                              </DropdownMenuItem>
+                              <DropdownMenuItem disabled={!notes.trim()} onSelect={handleExportMarkdown}>
+                                <HugeiconsIcon icon={FileExportIcon} strokeWidth={1.5} />
+                                Export as Markdown
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                            {loadRecipes().length > 0 && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuLabel>Recipes</DropdownMenuLabel>
+                                <DropdownMenuGroup>
+                                  {loadRecipes().map((recipe) => (
+                                    <DropdownMenuItem
+                                      key={recipe.id}
+                                      disabled={(!notes.trim() && !manualNotes.trim()) || runningRecipeId === recipe.id}
+                                      onSelect={() => void handleRunRecipe(recipe)}
+                                    >
+                                      <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} />
+                                      {runningRecipeId === recipe.id ? `Running ${recipe.name}…` : recipe.name}
+                                    </DropdownMenuItem>
+                                  ))}
+                                </DropdownMenuGroup>
+                              </>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuGroup>
+                              <DropdownMenuItem onSelect={handleImportAudio}>
+                                <HugeiconsIcon icon={FileImportIcon} strokeWidth={1.5} />
+                                Import audio…
+                              </DropdownMenuItem>
+                              <DropdownMenuItem disabled={!notes.trim() || isEmpty} onSelect={handleSaveAsTemplate}>
+                                <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
+                                Save as template
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onSelect={() => setShowTemplatePicker(true)}>
+                                <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
+                                Choose template…
+                              </DropdownMenuItem>
+                            </DropdownMenuGroup>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={onSettings}
+                              className="size-9 rounded-2xl text-muted-foreground hover:text-foreground"
+                              aria-label="Settings"
+                            >
+                              <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">Settings</TooltipContent>
+                        </Tooltip>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </footer>
         )}
-      </footer>
-      )}
 
-      {/* Focus-mode exit affordance — always discoverable, never in the way. */}
-      {focusMode && (
-        <button
-          type="button"
-          onClick={() => setFocusMode(false)}
-          className="fixed bottom-5 right-5 z-30 rounded-full border border-border/70 bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
-        >
-          Focus mode · ⌘⇧F to exit
-        </button>
-      )}
+        {focusMode && recorderState !== "recording" && !isTranscribing && (
+          <button
+            type="button"
+            onClick={() => setFocusMode(false)}
+            className="fixed bottom-5 right-5 z-30 rounded-full bg-card/95 px-3.5 py-2 text-xs text-muted-foreground shadow-lg ring-1 ring-foreground/10 backdrop-blur transition-colors hover:text-foreground active:scale-[0.96]"
+          >
+            Focus · ⌘⇧F
+          </button>
+        )}
 
-      <MeetingTemplateSelector selectedId={selectedTemplate?.id} onSelect={tpl => setSelectedTemplate(tpl)} open={showTemplatePicker} onOpenChange={setShowTemplatePicker} />
-    </main>
+        <MeetingTemplateSelector
+          selectedId={selectedTemplate?.id}
+          onSelect={(tpl) => setSelectedTemplate(tpl)}
+          open={showTemplatePicker}
+          onOpenChange={setShowTemplatePicker}
+        />
+      </main>
+    </TooltipProvider>
   )
 }

@@ -29,15 +29,26 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               <HugeiconsIcon icon={AlertCircleIcon} className="size-10 text-destructive" />
             </div>
             <h2 className="text-lg font-semibold">Something went wrong</h2>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-sm text-pretty text-muted-foreground">
               {this.state.error.message || "An unexpected error occurred."}
             </p>
-            <Button
-              variant="outline"
-              onClick={() => this.setState({ error: null })}
-            >
-              Try Again
-            </Button>
+            <p className="text-xs text-muted-foreground">
+              Your notes are stored on this Mac — try again, or restart the app if this keeps happening.
+            </p>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => this.setState({ error: null })}
+              >
+                Try again
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => window.location.reload()}
+              >
+                Reload app
+              </Button>
+            </div>
           </div>
         </div>
       )

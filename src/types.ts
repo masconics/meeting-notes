@@ -58,6 +58,11 @@ export const WRITING_STYLES: Record<Exclude<WritingStyle, "custom">, { label: st
   crisp: { label: "Crisp", hint: "Short sentences, no filler, maximum signal" },
 }
 
+export interface MeetingAttendee {
+  name: string
+  email?: string
+}
+
 export interface Meeting {
   id: string
   title: string
@@ -65,15 +70,70 @@ export interface Meeting {
   duration: number
   transcript: string
   notes: string
+  /** User shorthand taken during the meeting (Granola-style notepad). */
+  manualNotes?: string
   templateId?: string
   structuredNotes?: MeetingSection[]
   enhancedNotes?: string
+  /**
+   * Short plain-text blurb for list cards (from Enhance AI).
+   * Not markdown — dashboard shows this instead of note body previews.
+   */
+  description?: string
   chatHistory?: ChatMessage[]
   speakerLabels?: SpeakerLabel[]
   transcriptSegments?: { speakerIndex: number; text: string }[]
   brief?: string
   memoryDigest?: string
   memoryIndexedAt?: string
+  folderIds?: string[]
+  calendarEventId?: string
+  attendees?: MeetingAttendee[]
+  personIds?: string[]
+  autoEnhancedAt?: string
+  /** Outputs from post-meeting recipes, keyed by recipe id. */
+  recipeOutputs?: Record<string, string>
+}
+
+/**
+ * Concept tag for meetings (product name: “tag”).
+ * Multi-label: a meeting may belong to many tags via `Meeting.folderIds`.
+ * Storage still uses folder* keys for backward compatibility.
+ */
+export interface Folder {
+  id: string
+  name: string
+  color?: string
+  meetingIds: string[]
+  createdAt: string
+}
+
+export interface Recipe {
+  id: string
+  name: string
+  prompt: string
+  runOnStop?: boolean
+  icon?: string
+  builtin?: boolean
+}
+
+export interface Person {
+  id: string
+  name: string
+  aliases: string[]
+  email?: string
+  notes?: string
+  meetingIds: string[]
+}
+
+export interface CalendarEvent {
+  id: string
+  title: string
+  start: string
+  end: string
+  attendees: MeetingAttendee[]
+  calendar: string
+  location?: string
 }
 
 export interface MemoryEntry {
@@ -137,7 +197,7 @@ export interface AISettings {
   enabled: boolean
 }
 
-export type TranscriptionModel = "parakeet-v3" | "qwen3-asr"
+export type TranscriptionModel = "parakeet-v3"
 
 export interface AppSettings {
   audioSource: "mic" | "system" | "both"
@@ -151,6 +211,18 @@ export interface AppSettings {
   customStylePrompt: string
   /** Show the AI action popup when text is selected in the editor. */
   aiSelectionPopup: boolean
+  /** Run AI enhance + knowledge extraction automatically when recording stops. */
+  autoEnhanceOnStop: boolean
+  /** After Enhance, AI suggests concept tags from notes (reuses existing tags when possible). */
+  autoTagOnEnhance: boolean
+  /** Show upcoming events from macOS Calendar (EventKit). */
+  calendarEnabled: boolean
+  /** Write an MCP snapshot on save so Cursor/Claude can query meetings. */
+  mcpEnabled: boolean
+  /** Default folder for one-click Markdown export. */
+  exportFolderPath: string
+  /** Slack Incoming Webhook URL for sharing notes (optional). */
+  slackWebhookUrl: string
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
@@ -169,7 +241,44 @@ export const DEFAULT_SETTINGS: AppSettings = {
   writingStyle: "default",
   customStylePrompt: "",
   aiSelectionPopup: true,
+  autoEnhanceOnStop: true,
+  autoTagOnEnhance: true,
+  calendarEnabled: true,
+  mcpEnabled: true,
+  exportFolderPath: "",
+  slackWebhookUrl: "",
 }
+
+export const BUILTIN_RECIPES: Recipe[] = [
+  {
+    id: "recipe-followup-email",
+    name: "Follow-up email",
+    icon: "mail",
+    builtin: true,
+    runOnStop: false,
+    prompt:
+      "Draft a concise follow-up email from my perspective based on this meeting. Include a short greeting, 3–6 bullet takeaways or decisions, clear next steps with owners when known, and a polite close. Output only the email body.",
+  },
+  {
+    id: "recipe-action-digest",
+    name: "Action digest",
+    icon: "checklist",
+    builtin: true,
+    runOnStop: true,
+    prompt:
+      "List every action item from this meeting as a Markdown checklist. Each line: `- [ ] Owner — task (due if mentioned)`. If owner is unknown, use Unassigned. Output only the checklist.",
+  },
+  {
+    id: "recipe-standup-blockers",
+    name: "Standup blockers",
+    icon: "alert",
+    builtin: true,
+    // Reachable by default after enhance — previously only via ⋯ → Recipes.
+    runOnStop: true,
+    prompt:
+      "Extract standup-style updates: Done, Doing, and Blockers. Use three Markdown sections with short bullets. Invent nothing — only what appears in the notes/transcript.",
+  },
+]
 
 export const AI_MODELS: Record<string, string> = {
   "deepseek-v4-flash": "DeepSeek V4 Flash — fast, great for chat",
@@ -238,27 +347,7 @@ export const TRANSCRIPTION_MODELS: Record<TranscriptionModel, {
       "Best default for meetings",
     ],
     limitations: [
-      "Less broad language identification than Qwen3",
-    ],
-  },
-  "qwen3-asr": {
-    name: "Qwen3 ASR 0.6B int8",
-    label: "Multilingual language ID",
-    description: "Native CoreML Qwen3 ASR model for broad multilingual recognition.",
-    size: "~900 MB",
-    source: "FluidInference/qwen3-asr-0.6b-coreml/int8",
-    runtime: "CoreML, macOS 15+",
-    bestFor: "Multilingual audio, language identification, Chinese dialect coverage",
-    capabilities: [
-      "30 languages",
-      "22 Chinese dialects",
-      "Automatic language detection",
-      "Batch and accumulated live transcription",
-    ],
-    limitations: [
-      "Requires macOS 15 or newer",
-      "Higher disk and memory use",
-      "Live updates are accumulated, not token-streamed",
+      "Language ID is weaker than dedicated multilingual models",
     ],
   },
 }

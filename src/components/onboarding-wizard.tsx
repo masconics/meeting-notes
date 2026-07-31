@@ -25,13 +25,13 @@ import {
   AiVoiceIcon,
   AiMagicIcon,
   CheckmarkBadge01Icon,
-  SparklesIcon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
   ShieldIcon,
   Cancel01Icon,
   RefreshIcon,
 } from "@hugeicons/core-free-icons"
+import { MynaAppIcon } from "@/components/myna-logo"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import {
@@ -308,7 +308,7 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
             ))}
           </div>
           <DialogTitle className="text-center text-lg">
-            {step === 0 && "Welcome to Meeting Notes"}
+            {step === 0 && "Welcome to Myna Notes"}
             {step === 1 && "Grant Microphone Access"}
             {step === 2 && "On-Device Transcription"}
             {step === 3 && "AI Enhancement"}
@@ -329,18 +329,16 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
             >
               {step === 0 && (
                 <div className="flex flex-col items-center text-center gap-4 py-2">
-                  <div className="bg-primary/10 inline-flex size-16 items-center justify-center rounded-[2rem]">
-                    <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} className="size-8 text-primary" />
-                  </div>
-                  <DialogDescription className="text-base">
-                    Capture, transcribe, and enhance meetings with AI
+                  <MynaAppIcon className="size-16 shadow-sm ring-1 ring-foreground/10" />
+                  <DialogDescription className="text-base text-pretty">
+                    Local meeting notes — live captions on this Mac, optional AI when you want polish.
                   </DialogDescription>
                   <div className="grid grid-cols-2 gap-3 w-full">
                     {[
-                      { label: "Record & Transcribe", icon: Mic01Icon },
-                      { label: "AI-Powered Notes", icon: AiMagicIcon },
-                      { label: "Speaker Labeling", icon: AiVoiceIcon },
-                      { label: "Templates", icon: CheckmarkBadge01Icon },
+                      { label: "Mic & system audio", icon: Mic01Icon },
+                      { label: "On-device ASR", icon: AiVoiceIcon },
+                      { label: "Enhance with AI", icon: AiMagicIcon },
+                      { label: "Tags & actions", icon: CheckmarkBadge01Icon },
                     ].map((f) => (
                       <div
                         key={f.label}
@@ -351,6 +349,9 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                       </div>
                     ))}
                   </div>
+                  <p className="text-[11px] text-pretty text-muted-foreground">
+                    Speech stays on-device. Cloud AI only runs if you add an API key later.
+                  </p>
                 </div>
               )}
 
@@ -364,7 +365,7 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                     }`} />
                   </div>
                   <DialogDescription>
-                    Meeting Notes needs microphone access to record and transcribe your meetings.
+                    Myna Notes needs microphone access to record and transcribe your meetings.
                     Audio is processed locally and never leaves your device.
                   </DialogDescription>
 
@@ -424,9 +425,9 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                       fluidStatus === "loaded" ? "text-green-500" : fluidStatus === "not-installed" ? "text-destructive" : "text-primary"
                     }`} />
                   </div>
-                  <DialogDescription>
-                    Fluid ASR runs on-device via the Apple Neural Engine for fast, private transcription.
-                    Nothing is sent to the cloud.
+                  <DialogDescription className="text-pretty">
+                    Fluid ASR runs on-device via the Apple Neural Engine. Capture your mic, system audio
+                    (the other side of a call on macOS 14.4+), or both — nothing leaves this Mac.
                   </DialogDescription>
 
                   <div className="w-full flex flex-col items-center gap-2">
@@ -523,9 +524,9 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                   <div className="bg-primary/10 inline-flex size-16 items-center justify-center rounded-[2rem]">
                     <HugeiconsIcon icon={AiMagicIcon} strokeWidth={2} className="size-8 text-primary" />
                   </div>
-                  <DialogDescription>
-                    Connect DeepSeek AI to enhance notes, generate summaries, and answer questions
-                    about your meetings.
+                  <DialogDescription className="text-pretty">
+                    Optional: connect DeepSeek to enhance notes, auto-tag by concept, and chat about
+                    meetings. Skip for now — recording and local transcription work without a key.
                   </DialogDescription>
 
                   <div className="w-full flex flex-col gap-3">
@@ -612,8 +613,8 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                   <div className="bg-green-500/10 inline-flex size-16 items-center justify-center rounded-[2rem]">
                     <HugeiconsIcon icon={CheckmarkBadge01Icon} strokeWidth={2} className="size-8 text-green-500" />
                   </div>
-                  <DialogDescription className="text-base">
-                    Here's a summary of what's configured:
+                  <DialogDescription className="text-base text-pretty">
+                    You&apos;re ready. Start a note, record, then Enhance when you want structured notes and tags.
                   </DialogDescription>
 
                   <div className="w-full flex flex-col gap-2 text-left">
@@ -629,7 +630,7 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                     <div className="flex items-center justify-between rounded-xl bg-muted/60 p-3 text-sm">
                       <div className="flex items-center gap-2">
                         <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-4 text-muted-foreground" />
-                        Transcription
+                        On-device ASR
                       </div>
                       <Badge variant={fluidStatus === "loaded" ? "secondary" : "outline"}>
                         {fluidStatus === "loaded" ? "Ready" : fluidStatus === "checking" ? "Checking..." : "Needs setup"}
@@ -646,8 +647,9 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                     </div>
                   </div>
 
-                  <p className="text-xs text-muted-foreground mt-2">
-                    You can always change these settings later.
+                  <p className="mt-1 text-xs text-pretty text-muted-foreground">
+                    Tip: use <span className="font-medium text-foreground">Tags</span> on the home screen
+                    to group notes by concept (Hiring, Product, 1:1s). AI can auto-tag after Enhance.
                   </p>
                 </div>
               )}
