@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreGraphics
 import CoreAudio
+import NaturalLanguage
 import FluidAudio
 
 /// Write a diagnostic line to stderr (the Rust side pipes this into the app log).
@@ -317,6 +318,31 @@ struct FluidAsr {
         if args.contains("--screen-request") {
             // Prompts when undetermined; returns the resulting grant state.
             emit(CGRequestScreenCaptureAccess() ? "GRANTED" : "DENIED")
+            return
+        }
+
+        // Embedding mode: read text lines from stdin, output Float vectors as
+        // JSON arrays. Uses Apple's built-in NLEmbedding (zero download, on-device).
+        if args.contains("--embed") {
+            guard let embedding = NLEmbedding.sentenceEmbedding(for: .english) else {
+                emit("FATAL\tNLEmbedding not available on this system")
+                exit(1)
+            }
+            sysLog("embed: ready, dimension=\(embedding.dimension)")
+            emit("READY")
+
+            while let text = readLine() {
+                guard let vec = embedding.vector(for: text), !vec.isEmpty else {
+                    emit("[]")
+                    continue
+                }
+                guard let data = try? JSONEncoder().encode(vec),
+                      let json = String(data: data, encoding: .utf8) else {
+                    emit("[]")
+                    continue
+                }
+                emit(json)
+            }
             return
         }
 

@@ -40,12 +40,17 @@ import {
   ArrowDown01Icon,
   AiBrain01Icon,
   Bookmark01Icon,
+  UserGroupIcon,
+  CheckListIcon,
+  CheckmarkCircle02Icon,
+  FileImportIcon,
 } from "@hugeicons/core-free-icons"
 import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback, useRef, useEffect } from "react"
 import { TemplateIcon } from "@/components/template-icon"
 import { getTemplateById } from "@/lib/templates"
-import { loadSavedSearches, saveSavedSearches, saveSortPreference } from "@/lib/storage"
+import { loadKnowledgeGraph, loadSavedSearches, saveSavedSearches, saveSortPreference } from "@/lib/storage"
+import { toast } from "@/components/ui/toaster"
 import { MarkdownView } from "@/components/markdown-view"
 import { GlobalChat } from "@/components/global-chat"
 
@@ -136,9 +141,8 @@ function highlightMatches(text: string | null | undefined, query: string): React
 
 interface MeetingDashboardProps {
   meetings: Meeting[]
-  pendingDelete?: Meeting | null
-  onUndoDelete?: () => void
   onNewMeeting: () => void
+  onImportMeeting: (meeting: Meeting) => void
   onDeleteMeeting: (id: string) => void
   onUpdateMeeting: (id: string, patch: Partial<Meeting>) => void
   onViewMeeting: (meeting: Meeting) => void
@@ -147,9 +151,8 @@ interface MeetingDashboardProps {
 
 export function MeetingDashboard({
   meetings,
-  pendingDelete,
-  onUndoDelete,
   onNewMeeting,
+  onImportMeeting,
   onDeleteMeeting,
   onUpdateMeeting,
   onViewMeeting,
@@ -158,6 +161,14 @@ export function MeetingDashboard({
   const [searchQuery, setSearchQuery] = useState("")
   const [debouncedQuery, setDebouncedQuery] = useState("")
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+
+  // ⌘F on the dashboard jumps straight to search (dispatched from App).
+  useEffect(() => {
+    const handler = () => { searchInputRef.current?.focus(); searchInputRef.current?.select() }
+    window.addEventListener("focus-dashboard-search", handler)
+    return () => window.removeEventListener("focus-dashboard-search", handler)
+  }, [])
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>(() => {
     const saved = localStorage.getItem("meeting-notes-sort-pref")
@@ -165,6 +176,28 @@ export function MeetingDashboard({
   })
   const [batchMode, setBatchMode] = useState(false)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [speakerFilter, setSpeakerFilter] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+
+  // Unique speaker names across all meetings, for the filter dropdown.
+  const allSpeakers = useMemo(() => {
+    const names = new Set<string>()
+    for (const m of meetings) for (const s of m.speakerLabels ?? []) names.add(s.name)
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [meetings])
+
+  // Open action-item counts per meeting, from the knowledge graph.
+  const openActionsByMeeting = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const item of loadKnowledgeGraph().items) {
+      if (item.kind === "action_item" && item.status === "open") {
+        map.set(item.meetingId, (map.get(item.meetingId) ?? 0) + 1)
+      }
+    }
+    return map
+    // meetings is the practical recompute trigger (delete/undo re-renders here)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetings])
   const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false)
   const [editingTitleId, setEditingTitleId] = useState<string | null>(null)
   const [editTitleText, setEditTitleText] = useState("")
@@ -177,10 +210,16 @@ export function MeetingDashboard({
   const sorted = useMemo(() => sortMeetings(meetings, sortKey), [meetings, sortKey])
 
   const filteredMeetings = useMemo(() => {
-    if (!debouncedQuery.trim()) return sorted
-    const q = debouncedQuery.toLowerCase()
-    return sorted.filter((m) => getSearchableText(m).toLowerCase().includes(q))
-  }, [sorted, debouncedQuery])
+    let result = sorted
+    if (debouncedQuery.trim()) {
+      const q = debouncedQuery.toLowerCase()
+      result = result.filter((m) => getSearchableText(m).toLowerCase().includes(q))
+    }
+    if (speakerFilter) {
+      result = result.filter((m) => m.speakerLabels?.some(s => s.name === speakerFilter))
+    }
+    return result
+  }, [sorted, debouncedQuery, speakerFilter])
 
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -208,6 +247,35 @@ export function MeetingDashboard({
     setSortKey(key)
     saveSortPreference(key)
   }, [])
+
+  // Import an existing audio file → transcribe → create a note and open it.
+  // Progress lives in a sticky toast the outcome toast replaces (same id).
+  const handleImportAudio = useCallback(async () => {
+    setImporting(true)
+    toast("Transcribing audio file…", { id: "import-audio", duration: 0 })
+    try {
+      const { pickAndTranscribeAudio } = await import("@/lib/import-audio")
+      const result = await pickAndTranscribeAudio()
+      if (!result) { toast.dismiss("import-audio"); return }
+      if (!result.text) { toast.error("No speech detected in that file", { id: "import-audio" }); return }
+      const { correctWithSavedDictionary } = await import("@/lib/dictionary")
+      const transcript = correctWithSavedDictionary(result.text)
+      const meeting: Meeting = {
+        id: crypto.randomUUID(),
+        title: result.fileName.replace(/\.[^.]+$/, ""),
+        date: new Date().toISOString(),
+        duration: 0,
+        transcript,
+        notes: transcript,
+      }
+      toast.success("Audio transcribed", { id: "import-audio", description: result.fileName })
+      onImportMeeting(meeting)
+    } catch (e) {
+      toast.error("Import failed", { id: "import-audio", description: e instanceof Error ? e.message : "Transcription failed" })
+    } finally {
+      setImporting(false)
+    }
+  }, [onImportMeeting])
 
   const handleSaveSearch = useCallback(() => {
     const trimmed = searchQuery.trim()
@@ -304,6 +372,14 @@ export function MeetingDashboard({
           <Button variant="ghost" size="icon-sm" onClick={onSettings} title="Settings" aria-label="Settings">
             <HugeiconsIcon icon={Settings02Icon} strokeWidth={2} />
           </Button>
+          <Button variant="outline" onClick={handleImportAudio} disabled={importing} title="Transcribe an existing audio file into a new note">
+            {importing ? (
+              <span className="size-4 rounded-full border-2 border-current border-t-transparent animate-spin" data-icon="inline-start" />
+            ) : (
+              <HugeiconsIcon icon={FileImportIcon} strokeWidth={2} data-icon="inline-start" />
+            )}
+            Import Audio
+          </Button>
           <Button onClick={onNewMeeting}>
             <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
             New Note
@@ -315,8 +391,9 @@ export function MeetingDashboard({
         <div className="flex items-center gap-2">
           <InputGroup className="h-8 flex-1 bg-transparent shadow-none ring-0">
             <InputGroupInput
+              ref={searchInputRef}
               type="search"
-              placeholder="Search notes..."
+              placeholder="Search notes... (⌘F)"
               aria-label="Search notes"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -345,6 +422,32 @@ export function MeetingDashboard({
           >
             <HugeiconsIcon icon={Bookmark01Icon} strokeWidth={2} />
           </Button>
+          {allSpeakers.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant={speakerFilter ? "outline" : "ghost"} size="sm" className="shrink-0">
+                  <HugeiconsIcon icon={UserGroupIcon} strokeWidth={2} data-icon="inline-start" />
+                  {speakerFilter ?? "Speaker"}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => setSpeakerFilter(null)}>
+                  All speakers
+                  {!speakerFilter && (
+                    <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-4 ml-auto" />
+                  )}
+                </DropdownMenuItem>
+                {allSpeakers.map((name) => (
+                  <DropdownMenuItem key={name} onClick={() => setSpeakerFilter(name)}>
+                    {name}
+                    {name === speakerFilter && (
+                      <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-4 ml-auto" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm" className="shrink-0">
@@ -387,21 +490,6 @@ export function MeetingDashboard({
           </div>
         )}
       </div>
-
-      {pendingDelete && onUndoDelete && (
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="app-alert border-destructive/30 text-destructive"
-        >
-          <p className="text-sm text-destructive">
-            <span className="font-medium">"{pendingDelete.title}"</span> deleted.
-          </p>
-          <Button variant="destructive" size="sm" onClick={onUndoDelete}>
-            Undo
-          </Button>
-        </motion.div>
-      )}
 
       {meetings.length > 0 && filteredMeetings.length > 0 && (
         <div className="flex items-center justify-between border-b border-border/60 pb-2">
@@ -468,6 +556,7 @@ export function MeetingDashboard({
                 : meeting.transcript?.replace(/\n/g, " ") || ""
             const isEditing = editingTitleId === meeting.id
             const isSelected = selected.has(meeting.id)
+            const openActions = openActionsByMeeting.get(meeting.id) ?? 0
             return (
             <motion.div
               key={meeting.id}
@@ -565,8 +654,14 @@ export function MeetingDashboard({
                           Enhanced
                         </Badge>
                       )}
+                      {openActions > 0 && (
+                        <Badge variant="outline" className="text-[10px] py-0 gap-1">
+                          <HugeiconsIcon icon={CheckListIcon} strokeWidth={1.5} className="size-3" />
+                          {openActions} open {openActions === 1 ? "action" : "actions"}
+                        </Badge>
+                      )}
                     </div>
-                    <CardDescription className="flex items-center gap-3">
+                    <CardDescription className="flex flex-wrap items-center gap-x-3 gap-y-1">
                       <span className="inline-flex items-center gap-1">
                         <HugeiconsIcon icon={Calendar01Icon} strokeWidth={1.5} className="size-3" />
                         {relativeDate(meeting.date)}
@@ -575,6 +670,19 @@ export function MeetingDashboard({
                         <HugeiconsIcon icon={Clock01Icon} strokeWidth={1.5} className="size-3" />
                         {formatTime(meeting.date)}
                       </span>
+                      {meeting.speakerLabels && meeting.speakerLabels.length > 0 && (
+                        <span className="inline-flex items-center gap-2">
+                          {meeting.speakerLabels.slice(0, 3).map(s => (
+                            <span key={s.name} className="inline-flex items-center gap-1">
+                              <span className="size-1.5 rounded-full" style={{ backgroundColor: s.color }} />
+                              {s.name}
+                            </span>
+                          ))}
+                          {meeting.speakerLabels.length > 3 && (
+                            <span className="text-muted-foreground/70">+{meeting.speakerLabels.length - 3}</span>
+                          )}
+                        </span>
+                      )}
                     </CardDescription>
                   </div>
                   <Badge variant="secondary">{formatDuration(meeting.duration)}</Badge>

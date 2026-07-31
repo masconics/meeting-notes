@@ -8,8 +8,11 @@ const SORT_PREF_KEY = "meeting-notes-sort-pref"
 const SAVED_SEARCHES_KEY = "meeting-notes-saved-searches"
 
 const MEMORY_KEY = "meeting-notes-memory"
+const KNOWLEDGE_KEY = "meeting-notes-knowledge"
+const DICTIONARY_KEY = "meeting-notes-dictionary"
+const SNIPPETS_KEY = "meeting-notes-snippets"
 
-const ALL_KEYS = [MEETINGS_KEY, SETTINGS_KEY, AI_SETTINGS_KEY, TEMPLATES_KEY, MEMORY_KEY]
+const ALL_KEYS = [MEETINGS_KEY, SETTINGS_KEY, AI_SETTINGS_KEY, TEMPLATES_KEY, MEMORY_KEY, KNOWLEDGE_KEY, DICTIONARY_KEY, SNIPPETS_KEY]
 
 export async function hydrateFromVault(): Promise<void> {
   await initDatabase()
@@ -43,7 +46,7 @@ async function persistRemove(key: string): Promise<void> {
   }
 }
 
-import type { Meeting, AppSettings, AISettings, MeetingTemplate, ChatMessage, MemoryEntry } from "@/types"
+import type { Meeting, AppSettings, AISettings, MeetingTemplate, ChatMessage, MemoryEntry, KnowledgeGraph, KnowledgeItem, KnowledgeEdge, DictionaryEntry, Snippet } from "@/types"
 import { DEFAULT_SETTINGS, DEFAULT_AI_SETTINGS } from "@/types"
 
 export function loadMeetings(): Meeting[] {
@@ -216,4 +219,98 @@ export function removeMemoryEntry(meetingId: string): MemoryEntry[] {
   const entries = loadMemory().filter((e) => e.meetingId !== meetingId)
   saveMemory(entries)
   return entries
+}
+
+const EMPTY_GRAPH: KnowledgeGraph = { items: [], edges: [], version: "1", lastUpdated: "" }
+
+export function loadKnowledgeGraph(): KnowledgeGraph {
+  try {
+    const raw = localStorage.getItem(KNOWLEDGE_KEY)
+    if (!raw) return { ...EMPTY_GRAPH }
+    const graph = JSON.parse(raw)
+    if (!graph.edges) graph.edges = []
+    return graph
+  } catch {
+    return { ...EMPTY_GRAPH }
+  }
+}
+
+function saveKnowledgeGraph(graph: KnowledgeGraph): void {
+  const raw = JSON.stringify(graph)
+  localStorage.setItem(KNOWLEDGE_KEY, raw)
+  persist(KNOWLEDGE_KEY, raw)
+}
+
+export function replaceKnowledgeForMeeting(meetingId: string, items: KnowledgeItem[]): KnowledgeGraph {
+  const graph = loadKnowledgeGraph()
+  const oldIds = new Set(graph.items.filter((i) => i.meetingId === meetingId).map((i) => i.id))
+  graph.items = graph.items.filter((i) => i.meetingId !== meetingId)
+  graph.items.push(...items)
+  graph.edges = graph.edges.filter((e) => !oldIds.has(e.fromId) && !oldIds.has(e.toId))
+  graph.lastUpdated = new Date().toISOString()
+  saveKnowledgeGraph(graph)
+  return graph
+}
+
+export function removeKnowledgeForMeeting(meetingId: string): KnowledgeGraph {
+  const graph = loadKnowledgeGraph()
+  const oldIds = new Set(graph.items.filter((i) => i.meetingId === meetingId).map((i) => i.id))
+  graph.items = graph.items.filter((i) => i.meetingId !== meetingId)
+  graph.edges = graph.edges.filter((e) => !oldIds.has(e.fromId) && !oldIds.has(e.toId))
+  graph.lastUpdated = new Date().toISOString()
+  saveKnowledgeGraph(graph)
+  return graph
+}
+
+export function addKnowledgeEdges(edges: KnowledgeEdge[]): KnowledgeGraph {
+  const graph = loadKnowledgeGraph()
+  graph.edges.push(...edges)
+  graph.lastUpdated = new Date().toISOString()
+  saveKnowledgeGraph(graph)
+  return graph
+}
+
+export function updateKnowledgeItem(id: string, patch: Partial<KnowledgeItem>): KnowledgeGraph {
+  const graph = loadKnowledgeGraph()
+  const idx = graph.items.findIndex((i) => i.id === id)
+  if (idx >= 0) {
+    graph.items[idx] = { ...graph.items[idx], ...patch }
+    graph.lastUpdated = new Date().toISOString()
+    saveKnowledgeGraph(graph)
+  }
+  return graph
+}
+
+export function loadDictionary(): DictionaryEntry[] {
+  try {
+    const raw = localStorage.getItem(DICTIONARY_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((e) => e && typeof e.term === "string" && e.term.trim())
+  } catch {
+    return []
+  }
+}
+
+export function saveDictionary(entries: DictionaryEntry[]): void {
+  const raw = JSON.stringify(entries)
+  localStorage.setItem(DICTIONARY_KEY, raw)
+  persist(DICTIONARY_KEY, raw)
+}
+
+export function loadSnippets(): Snippet[] {
+  try {
+    const raw = localStorage.getItem(SNIPPETS_KEY)
+    const parsed = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((s) => s && typeof s.trigger === "string" && s.trigger.trim() && typeof s.expansion === "string")
+  } catch {
+    return []
+  }
+}
+
+export function saveSnippets(snippets: Snippet[]): void {
+  const raw = JSON.stringify(snippets)
+  localStorage.setItem(SNIPPETS_KEY, raw)
+  persist(SNIPPETS_KEY, raw)
 }

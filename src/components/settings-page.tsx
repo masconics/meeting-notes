@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -22,7 +22,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
-import { HugeiconsIcon } from "@hugeicons/react"
+import { HugeiconsIcon, type IconSvgElement } from "@hugeicons/react"
 import {
   AccountSetting01Icon,
   Mic01Icon,
@@ -34,6 +34,7 @@ import {
   DeleteIcon,
   FolderOpenIcon,
   ArrowLeft01Icon,
+  ArrowRight01Icon,
   ShieldIcon,
   LockIcon,
   Settings02Icon,
@@ -42,6 +43,10 @@ import {
   CheckmarkBadge01Icon,
   RefreshIcon,
   Download01Icon,
+  Book02Icon,
+  PenToolIcon,
+  KeyboardIcon,
+  Add01Icon,
 } from "@hugeicons/core-free-icons"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { useMicrophonePermission } from "@/lib/use-permissions"
@@ -49,18 +54,23 @@ import {
   clearAllMeetings,
   loadAISettings,
   loadApiKey,
+  loadDictionary,
   loadMeetings,
   loadSettings,
+  loadSnippets,
   saveAISettings,
   saveApiKey,
+  saveDictionary,
   saveSettings,
+  saveSnippets,
 } from "@/lib/storage"
 import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { testConnection } from "@/lib/ai-service"
 import { exportAllMeetings, exportAllMeetingsMarkdown } from "@/lib/export"
-import type { AppSettings, AISettings } from "@/types"
-import { SPEECH_LANGS, AI_MODELS, TRANSCRIPTION_MODELS } from "@/types"
+import type { AppSettings, AISettings, DictionaryEntry, Snippet } from "@/types"
+import { SPEECH_LANGS, AI_MODELS, TRANSCRIPTION_MODELS, WRITING_STYLES } from "@/types"
+import { Textarea } from "@/components/ui/textarea"
 import { TemplateEditor } from "@/components/template-editor"
 import { Waveform } from "@/components/Waveform"
 import { cn } from "@/lib/utils"
@@ -89,6 +99,118 @@ type ModelSetupStatus = {
 type ModelSetupError = {
   model: AppSettings["transcriptionModel"]
   error: string
+}
+
+type SettingsSection =
+  | "audio"
+  | "transcription"
+  | "ai"
+  | "style"
+  | "dictionary"
+  | "snippets"
+  | "meeting"
+  | "templates"
+  | "appearance"
+  | "data"
+
+const SECTION_GROUPS: {
+  label: string
+  items: { id: SettingsSection; label: string; icon: IconSvgElement }[]
+}[] = [
+  {
+    label: "Capture",
+    items: [
+      { id: "audio", label: "Audio", icon: Mic01Icon },
+      { id: "transcription", label: "Transcription", icon: AiVoiceIcon },
+    ],
+  },
+  {
+    label: "Intelligence",
+    items: [
+      { id: "ai", label: "AI Enhancement", icon: AiMagicIcon },
+      { id: "style", label: "Writing Style", icon: PenToolIcon },
+      { id: "dictionary", label: "Dictionary", icon: Book02Icon },
+      { id: "snippets", label: "Shortcuts", icon: KeyboardIcon },
+    ],
+  },
+  {
+    label: "Notes",
+    items: [
+      { id: "meeting", label: "Meeting", icon: AccountSetting01Icon },
+      { id: "templates", label: "Templates", icon: CheckmarkBadge01Icon },
+    ],
+  },
+  {
+    label: "App",
+    items: [
+      { id: "appearance", label: "Appearance", icon: SunIcon },
+      { id: "data", label: "Data", icon: FolderOpenIcon },
+    ],
+  },
+]
+
+function SettingsSidebar({
+  active,
+  onSelect,
+  micDenied,
+}: {
+  active: SettingsSection
+  onSelect: (section: SettingsSection) => void
+  micDenied: boolean
+}) {
+  return (
+    <aside className="sticky top-5 w-11 shrink-0 self-start sm:w-44">
+      <nav className="flex flex-col gap-4" aria-label="Settings sections">
+        {SECTION_GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-0.5">
+            <p className="hidden px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 sm:block">
+              {group.label}
+            </p>
+            {group.items.map((item) => {
+              const isActive = active === item.id
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onSelect(item.id)}
+                  title={item.label}
+                  aria-current={isActive ? "page" : undefined}
+                  className={cn(
+                    "flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors sm:justify-start",
+                    isActive
+                      ? "bg-primary/10 font-medium text-primary"
+                      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                  )}
+                >
+                  <HugeiconsIcon icon={item.icon} strokeWidth={2} className="size-4 shrink-0" />
+                  <span className="hidden truncate sm:inline">{item.label}</span>
+                  {item.id === "audio" && micDenied && (
+                    <span className="ml-auto hidden size-1.5 shrink-0 rounded-full bg-amber-500 sm:inline" aria-label="Microphone permission needed" />
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        ))}
+      </nav>
+    </aside>
+  )
+}
+
+// Renders a snippet expansion preview with {{variables}} highlighted as inline code chips.
+function renderExpansionPreview(expansion: string) {
+  return expansion.split(/(\{\{[^}]+\}\})/g).map((part, i) =>
+    /^\{\{[^}]+\}\}$/.test(part) ? (
+      <code
+        key={i}
+        className="rounded-md bg-muted px-1 py-0.5 font-mono text-[11px] text-foreground ring-1 ring-border/60"
+      >
+        {part}
+      </code>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  )
 }
 
 export function SettingsPage({
@@ -122,6 +244,14 @@ export function SettingsPage({
   const [connectionStatus, setConnectionStatus] = useState<"success" | "failed" | null>(null)
   const [apiKeyError, setApiKeyError] = useState<string | null>(null)
   const [pendingTheme, setPendingTheme] = useState<AppSettings["theme"]>(theme)
+  const [dictionary, setDictionary] = useState<DictionaryEntry[]>(() => loadDictionary())
+  const [snippets, setSnippets] = useState<Snippet[]>(() => loadSnippets())
+  const [newTerm, setNewTerm] = useState("")
+  const [newAliases, setNewAliases] = useState("")
+  const [newTrigger, setNewTrigger] = useState("")
+  const [newExpansion, setNewExpansion] = useState("")
+  const [activeSection, setActiveSection] = useState<SettingsSection>("audio")
+  const expansionRef = useRef<HTMLTextAreaElement>(null)
   const [micTesting, setMicTesting] = useState(false)
   const [micTestLevel, setMicTestLevel] = useState(0)
   const micTestStreamRef = useRef<MediaStream | null>(null)
@@ -488,6 +618,86 @@ export function SettingsPage({
     []
   )
 
+  const addDictionaryEntry = useCallback(() => {
+    const term = newTerm.trim()
+    if (!term) return
+    const aliases = newAliases
+      .split(",")
+      .map((a) => a.trim())
+      .filter((a) => a && a.toLowerCase() !== term.toLowerCase())
+    setDictionary((prev) => {
+      // Re-adding an existing term updates its aliases instead of duplicating.
+      const next = [
+        ...prev.filter((e) => e.term.toLowerCase() !== term.toLowerCase()),
+        { id: crypto.randomUUID(), term, aliases },
+      ]
+      saveDictionary(next)
+      return next
+    })
+    setNewTerm("")
+    setNewAliases("")
+  }, [newTerm, newAliases])
+
+  const removeDictionaryEntry = useCallback((id: string) => {
+    setDictionary((prev) => {
+      const next = prev.filter((e) => e.id !== id)
+      saveDictionary(next)
+      return next
+    })
+  }, [])
+
+  const addSnippet = useCallback(() => {
+    const trigger = newTrigger.trim().replace(/^;+/, "")
+    const expansion = newExpansion.trim()
+    if (!trigger || !expansion || /\s/.test(trigger)) return
+    setSnippets((prev) => {
+      const next = [
+        ...prev.filter((s) => s.trigger.toLowerCase() !== trigger.toLowerCase()),
+        { id: crypto.randomUUID(), trigger, expansion },
+      ]
+      saveSnippets(next)
+      return next
+    })
+    setNewTrigger("")
+    setNewExpansion("")
+  }, [newTrigger, newExpansion])
+
+  const removeSnippet = useCallback((id: string) => {
+    setSnippets((prev) => {
+      const next = prev.filter((s) => s.id !== id)
+      saveSnippets(next)
+      return next
+    })
+  }, [])
+
+  // Insert a {{variable}} token at the textarea cursor, restoring focus and caret.
+  const insertVariable = useCallback((variable: string) => {
+    const token = `{{${variable}}}`
+    const ta = expansionRef.current
+    if (!ta) {
+      setNewExpansion((prev) => prev + token)
+      return
+    }
+    const start = ta.selectionStart ?? ta.value.length
+    const end = ta.selectionEnd ?? ta.value.length
+    setNewExpansion((prev) => prev.slice(0, start) + token + prev.slice(end))
+    requestAnimationFrame(() => {
+      ta.focus()
+      const pos = start + token.length
+      ta.setSelectionRange(pos, pos)
+    })
+  }, [])
+
+  const sortedDictionary = useMemo(
+    () => [...dictionary].sort((a, b) => a.term.localeCompare(b.term)),
+    [dictionary],
+  )
+  const sortedSnippets = useMemo(
+    () => [...snippets].sort((a, b) => a.trigger.localeCompare(b.trigger)),
+    [snippets],
+  )
+  const triggerHasSpace = /\s/.test(newTrigger)
+
   const handleTestConnection = useCallback(async () => {
     const err = validateApiKey(aiSettings.apiKey)
     if (err) {
@@ -522,7 +732,7 @@ export function SettingsPage({
   const activeOperationLabel = modelOperation === "load" ? "Loading" : "Downloading"
 
   return (
-    <div className="app-page app-page-narrow">
+    <div className="app-page">
       <div className="app-page-header">
         <div className="flex items-center gap-3">
         <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
@@ -535,8 +745,15 @@ export function SettingsPage({
         </div>
       </div>
 
+      <div className="flex items-start gap-6">
+        <SettingsSidebar
+          active={activeSection}
+          onSelect={setActiveSection}
+          micDenied={micPermission === "denied"}
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
       {micPermission === "denied" && (
-        <Card size="sm" className="border-destructive/30">
+        <Card size="sm" className={cn("border-destructive/30", activeSection !== "audio" && "hidden")}>
           <CardContent className="flex items-start gap-4 pt-4">
             <div className="bg-destructive/10 inline-flex size-10 shrink-0 items-center justify-center rounded-2xl">
               <HugeiconsIcon icon={LockIcon} strokeWidth={2} className="size-5 text-destructive" />
@@ -567,7 +784,7 @@ export function SettingsPage({
         </Card>
       )}
 
-      <Card size="sm">
+      <Card size="sm" className={cn(activeSection !== "audio" && "hidden")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AccountSetting01Icon} strokeWidth={2} className="size-5" />
@@ -674,7 +891,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card size="sm">
+      <Card size="sm" className={cn(activeSection !== "transcription" && "hidden")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={2} className="size-5" />
@@ -880,7 +1097,107 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card size="sm">
+      <Card size="sm" className={cn(activeSection !== "dictionary" && "hidden")}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={Book02Icon} strokeWidth={2} className="size-5" />
+            Dictionary
+            {dictionary.length > 0 && (
+              <Badge variant="secondary" className="ml-auto">{dictionary.length} term{dictionary.length !== 1 ? "s" : ""}</Badge>
+            )}
+          </CardTitle>
+          <CardDescription>
+            Names and jargon the transcriber should always get right — teach it once and it never misspells them again
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {sortedDictionary.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center">
+              <div className="inline-flex size-10 items-center justify-center rounded-2xl bg-muted">
+                <HugeiconsIcon icon={Book02Icon} strokeWidth={2} className="size-5 text-muted-foreground" />
+              </div>
+              <p className="text-sm font-medium">No terms yet</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                Add names of people, products, or jargon — e.g.{" "}
+                <span className="font-medium text-foreground">Siddharth</span> with mis-hearings{" "}
+                <span className="font-mono text-foreground">sidharth, siddart</span> — and every
+                transcript spells them right.
+              </p>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {sortedDictionary.map((e) => (
+                <div
+                  key={e.id}
+                  className="group flex items-center gap-3 rounded-xl border border-border/60 px-3 py-2.5 transition-colors hover:bg-muted/40"
+                >
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-sm font-medium">{e.term}</span>
+                    {e.aliases.length > 0 && (
+                      <>
+                        <HugeiconsIcon
+                          icon={ArrowLeft01Icon}
+                          strokeWidth={2}
+                          className="size-3.5 shrink-0 text-muted-foreground/60"
+                        />
+                        <span className="flex flex-wrap gap-1">
+                          {e.aliases.map((alias) => (
+                            <Badge key={alias} variant="secondary" className="font-mono text-[11px] font-normal">
+                              {alias}
+                            </Badge>
+                          ))}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                    onClick={() => removeDictionaryEntry(e.id)}
+                    aria-label={`Remove ${e.term}`}
+                  >
+                    <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2 rounded-2xl bg-muted/50 p-3 ring-1 ring-border/60">
+            <div className="flex flex-col gap-1.5 sm:flex-row">
+              <Input
+                value={newTerm}
+                onChange={(e) => setNewTerm(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addDictionaryEntry() }}
+                placeholder="Correct spelling (e.g. Siddharth)"
+                aria-label="Correct spelling"
+                className="flex-1 bg-background"
+              />
+              <Input
+                value={newAliases}
+                onChange={(e) => setNewAliases(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addDictionaryEntry() }}
+                placeholder="Mis-hearings, comma-separated (optional)"
+                aria-label="Mis-hearings"
+                className="flex-1 bg-background"
+              />
+              <Button size="sm" onClick={addDictionaryEntry} disabled={!newTerm.trim()} className="shrink-0 self-start sm:self-auto">
+                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" />
+                Add
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Re-adding an existing term updates its corrections.
+            </p>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Applied when a recording stops and included in AI prompts, so transcripts, titles, notes, and knowledge all use the right spellings.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card size="sm" className={cn(activeSection !== "ai" && "hidden")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AiMagicIcon} strokeWidth={2} className="size-5" />
@@ -964,6 +1281,27 @@ export function SettingsPage({
           </div>
 
           <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">Selection AI Popup</span>
+              <span className="text-xs text-muted-foreground">Show AI actions when you select text in the editor</span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.aiSelectionPopup}
+              onClick={() => update({ aiSelectionPopup: !settings.aiSelectionPopup })}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.aiSelectionPopup ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.aiSelectionPopup ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
             <Button
               variant="outline"
               size="sm"
@@ -989,7 +1327,177 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card size="sm">
+      <Card size="sm" className={cn(activeSection !== "style" && "hidden")}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={PenToolIcon} strokeWidth={2} className="size-5" />
+            Writing Style
+          </CardTitle>
+          <CardDescription>
+            Give your notes a persona — the same meeting can read formal, casual, or crisp. Templates can override this.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          <div className="grid gap-2 sm:grid-cols-2">
+            {Object.entries(WRITING_STYLES).map(([id, s]) => {
+              const selected = settings.writingStyle === id
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => update({ writingStyle: id as AppSettings["writingStyle"] })}
+                  className={cn(
+                    "flex flex-col gap-0.5 rounded-lg border p-3 text-left transition-colors",
+                    selected ? "border-primary bg-primary/5" : "border-border bg-background hover:bg-muted/50"
+                  )}
+                  aria-pressed={selected}
+                >
+                  <span className="text-sm font-medium">{s.label}</span>
+                  <span className="text-xs text-muted-foreground">{s.hint}</span>
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              onClick={() => update({ writingStyle: "custom" })}
+              className={cn(
+                "flex flex-col gap-0.5 rounded-lg border p-3 text-left transition-colors sm:col-span-2",
+                settings.writingStyle === "custom" ? "border-primary bg-primary/5" : "border-border bg-background hover:bg-muted/50"
+              )}
+              aria-pressed={settings.writingStyle === "custom"}
+            >
+              <span className="text-sm font-medium">Custom</span>
+              <span className="text-xs text-muted-foreground">Describe your own persona in a sentence or two</span>
+            </button>
+          </div>
+          {settings.writingStyle === "custom" && (
+            <Textarea
+              value={settings.customStylePrompt}
+              onChange={(e) => update({ customStylePrompt: e.target.value })}
+              placeholder={'e.g. "Write like a staff engineer\'s status update — direct, dry, no fluff"'}
+              rows={3}
+              className="resize-none text-sm"
+            />
+          )}
+          <p className="text-xs text-muted-foreground">
+            Applied when AI generates or enhances notes. Set a per-template override in the template editor below.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card size="sm" className={cn(activeSection !== "snippets" && "hidden")}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <HugeiconsIcon icon={KeyboardIcon} strokeWidth={2} className="size-5" />
+            Shortcuts
+            {snippets.length > 0 && (
+              <Badge variant="secondary" className="ml-auto">{snippets.length} snippet{snippets.length !== 1 ? "s" : ""}</Badge>
+            )}
+          </CardTitle>
+          <CardDescription>
+            Quick text expansion — type <span className="font-mono text-foreground">;trigger</span> then a space in the editor, and the whole formatted thing appears
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {sortedSnippets.length === 0 ? (
+            <div className="flex flex-col items-center gap-2 rounded-2xl border border-dashed border-border/70 px-4 py-8 text-center">
+              <div className="inline-flex size-10 items-center justify-center rounded-2xl bg-muted">
+                <HugeiconsIcon icon={KeyboardIcon} strokeWidth={2} className="size-5 text-muted-foreground" />
+              </div>
+              <p className="text-sm font-medium">No shortcuts yet</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                Type <span className="font-mono text-foreground">;sig</span> then a space in any note and
+                it expands into your full signature — markdown and{" "}
+                <span className="font-mono text-foreground">{"{{date}}"}</span> variables included.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2.5 rounded-xl bg-muted/50 px-3 py-2 text-xs ring-1 ring-border/60">
+                <Badge variant="outline" className="shrink-0 font-mono">;sig</Badge>
+                <span className="shrink-0 text-muted-foreground">+ space</span>
+                <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} className="size-3.5 shrink-0 text-muted-foreground/60" />
+                <span className="truncate text-muted-foreground">
+                  Best, Criston — <span className="font-mono text-[11px]">{"{{date}}"}</span>
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                {sortedSnippets.map((s) => (
+                  <div
+                    key={s.id}
+                    className="group flex items-start gap-3 rounded-xl border border-border/60 px-3 py-2.5 transition-colors hover:bg-muted/40"
+                  >
+                    <Badge variant="outline" className="mt-0.5 shrink-0 font-mono">;{s.trigger}</Badge>
+                    <p className="min-w-0 flex-1 whitespace-pre-line text-xs leading-relaxed text-muted-foreground line-clamp-2">
+                      {renderExpansionPreview(s.expansion)}
+                    </p>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="-mt-0.5 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:text-destructive focus-visible:opacity-100"
+                      onClick={() => removeSnippet(s.id)}
+                      aria-label={`Remove ;${s.trigger}`}
+                    >
+                      <HugeiconsIcon icon={DeleteIcon} strokeWidth={2} />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div className="flex flex-col gap-2 rounded-2xl bg-muted/50 p-3 ring-1 ring-border/60">
+            <div className="flex items-center rounded-2xl border border-transparent bg-background transition-[color,box-shadow] duration-200 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30 has-[aria-invalid=true]:border-destructive has-[aria-invalid=true]:ring-3 has-[aria-invalid=true]:ring-destructive/20">
+              <span className="pr-1 pl-2.5 font-mono text-sm text-muted-foreground select-none">;</span>
+              <Input
+                value={newTrigger}
+                onChange={(e) => setNewTrigger(e.target.value.replace(/^;+/, ""))}
+                placeholder="trigger (no spaces, e.g. sig)"
+                aria-label="Snippet trigger"
+                aria-invalid={triggerHasSpace}
+                className="min-w-0 flex-1 rounded-none border-0 bg-transparent px-1 focus-visible:border-transparent focus-visible:ring-0 aria-invalid:border-transparent aria-invalid:ring-0"
+              />
+            </div>
+            {triggerHasSpace && (
+              <p className="text-[11px] text-destructive">Triggers can&apos;t contain spaces.</p>
+            )}
+            <Textarea
+              ref={expansionRef}
+              value={newExpansion}
+              onChange={(e) => setNewExpansion(e.target.value)}
+              placeholder={"What it expands to — markdown works.\n\ne.g. Best,\nCriston\n{{date}}"}
+              rows={3}
+              aria-label="Snippet expansion"
+              className="resize-none bg-background text-sm"
+              onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) addSnippet() }}
+            />
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted-foreground">Insert:</span>
+              {["date", "time", "datetime"].map((variable) => (
+                <button
+                  key={variable}
+                  type="button"
+                  onClick={() => insertVariable(variable)}
+                  className="rounded-md bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:text-foreground hover:ring-border"
+                >
+                  {`{{${variable}}}`}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[11px] text-muted-foreground">
+                ⌘↵ to add · re-adding a trigger updates it
+              </p>
+              <Button size="sm" onClick={addSnippet} disabled={!newTrigger.trim() || !newExpansion.trim() || triggerHasSpace} className="shrink-0">
+                <HugeiconsIcon icon={Add01Icon} strokeWidth={2} data-icon="inline-start" />
+                Add shortcut
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card size="sm" className={cn(activeSection !== "meeting" && "hidden")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={AccountSetting01Icon} strokeWidth={2} className="size-5" />
@@ -1016,7 +1524,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card size="sm">
+      <Card size="sm" className={cn(activeSection !== "templates" && "hidden")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={CheckmarkBadge01Icon} strokeWidth={2} className="size-5" />
@@ -1031,7 +1539,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card size="sm">
+      <Card size="sm" className={cn(activeSection !== "appearance" && "hidden")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={SunIcon} strokeWidth={2} className="size-5" />
@@ -1109,7 +1617,7 @@ export function SettingsPage({
         </CardContent>
       </Card>
 
-      <Card size="sm" className="border-destructive/30">
+      <Card size="sm" className={cn("border-destructive/30", activeSection !== "data" && "hidden")}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={2} className="size-5" />
@@ -1165,6 +1673,8 @@ export function SettingsPage({
           </AlertDialog>
         </CardContent>
       </Card>
+        </div>
+      </div>
     </div>
   )
 }

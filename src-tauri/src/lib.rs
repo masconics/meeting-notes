@@ -1,10 +1,11 @@
 mod capture;
+mod embed;
 mod fluid;
 
 use log;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Listener, Manager};
+use tauri::{Emitter, Listener, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -35,6 +36,21 @@ pub fn run() {
             .build(),
         )
         .plugin(tauri_plugin_opener::init())
+        // Quick capture from anywhere: ⌘⇧N shows the window and tells the
+        // frontend to open a fresh note.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                        let _ = app.emit("quick-capture", ());
+                    }
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
@@ -71,6 +87,9 @@ pub fn run() {
                         if let Ok(mut guard) = crate::fluid::slot().try_lock() {
                             *guard = None;
                         }
+                        if let Ok(mut guard) = crate::embed::slot().try_lock() {
+                            *guard = None;
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(200));
                         app.exit(0);
                     }
@@ -95,10 +114,23 @@ pub fn run() {
                 }
             });
 
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+                if let Err(e) = app.global_shortcut().register(Shortcut::new(
+                    Some(Modifiers::SUPER | Modifiers::SHIFT),
+                    Code::KeyN,
+                )) {
+                    // A collision with another app shouldn't take down startup.
+                    log::warn!("global shortcut registration failed: {e}");
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             fluid::transcribe_audio_fluid,
+            fluid::transcribe_audio_file_fluid,
             fluid::check_fluid_ready,
             fluid::setup_fluid,
             fluid::setup_fluid_model,
@@ -113,6 +145,9 @@ pub fn run() {
             fluid::request_screen_permission,
             capture::start_continuous,
             capture::stop_continuous,
+            embed::embed_text,
+            embed::embed_batch,
+            embed::unload_embed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

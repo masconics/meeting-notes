@@ -21,11 +21,41 @@ export interface MeetingTemplate {
   icon: string
   sections: string[]
   quickActions: QuickAction[]
+  /** Optional per-template persona; overrides the global writing style when set. */
+  style?: WritingStyle
 }
 
 export interface SpeakerLabel {
   name: string
   color: string
+}
+
+// Custom vocabulary: names and jargon the transcriber/AI should always spell
+// correctly. `aliases` are the common mis-hearings that get rewritten to the
+// canonical `term` (e.g. "siddhart" → "Siddharth").
+export interface DictionaryEntry {
+  id: string
+  term: string
+  aliases: string[]
+}
+
+// Editor text expansion: typing `;trigger` followed by a space replaces the
+// trigger with `expansion` (markdown-supported, with {{date}}/{{time}} vars).
+export interface Snippet {
+  id: string
+  trigger: string
+  expansion: string
+}
+
+// Persona applied to AI-generated notes. "default" applies no styling;
+// per-template override wins over the global setting.
+export type WritingStyle = "default" | "formal" | "casual" | "crisp" | "custom"
+
+export const WRITING_STYLES: Record<Exclude<WritingStyle, "custom">, { label: string; hint: string }> = {
+  default: { label: "Default", hint: "No specific style — professional meeting notes" },
+  formal: { label: "Formal", hint: "Polished and precise, no contractions or slang" },
+  casual: { label: "Casual", hint: "Warm and conversational, contractions welcome" },
+  crisp: { label: "Crisp", hint: "Short sentences, no filler, maximum signal" },
 }
 
 export interface Meeting {
@@ -59,6 +89,48 @@ export interface RelatedMeeting {
   score: number
 }
 
+export type KnowledgeKind =
+  | "decision"
+  | "action_item"
+  | "key_point"
+  | "question"
+  | "commitment"
+  | "risk"
+
+export type KnowledgeStatus = "open" | "resolved" | "superseded" | "unknown"
+
+export interface KnowledgeItem {
+  id: string
+  kind: KnowledgeKind
+  text: string
+  meetingId: string
+  speaker?: string
+  assignee?: string
+  status: KnowledgeStatus
+  topics: string[]
+  sourceExcerpt?: string
+  embedding?: number[]
+  extractedAt: string
+}
+
+export type KnowledgeEdgeKind = "follows_up_on" | "supersedes" | "contradicts"
+
+export interface KnowledgeEdge {
+  id: string
+  fromId: string
+  toId: string
+  kind: KnowledgeEdgeKind
+  reason?: string
+  createdAt: string
+}
+
+export interface KnowledgeGraph {
+  items: KnowledgeItem[]
+  edges: KnowledgeEdge[]
+  version: string
+  lastUpdated: string
+}
+
 export interface AISettings {
   apiKey: string
   model: string
@@ -74,6 +146,11 @@ export interface AppSettings {
   transcriptionModel: TranscriptionModel
   titlePrefix: string
   theme: "light" | "dark" | "system"
+  writingStyle: WritingStyle
+  /** Freeform persona text, used only when writingStyle === "custom". */
+  customStylePrompt: string
+  /** Show the AI action popup when text is selected in the editor. */
+  aiSelectionPopup: boolean
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
@@ -89,6 +166,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   transcriptionModel: "parakeet-v3",
   titlePrefix: "",
   theme: "system",
+  writingStyle: "default",
+  customStylePrompt: "",
+  aiSelectionPopup: true,
 }
 
 export const AI_MODELS: Record<string, string> = {

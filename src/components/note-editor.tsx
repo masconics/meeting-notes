@@ -19,11 +19,13 @@ import {
   AiChat02Icon, ArrowRight01Icon, ArrowLeft01Icon,
   MicIcon, ComputerIcon,
   Calendar01Icon, Clock01Icon,
-  Copy01Icon, FileAddIcon, CodeIcon,
+  Copy01Icon, FileAddIcon, CodeIcon, FileExportIcon, FileImportIcon,
   StopIcon, AlertCircleIcon, RefreshIcon,
   UserAdd02Icon, Add01Icon,
   MoreHorizontalIcon, SaveIcon,
 } from "@hugeicons/core-free-icons"
+import { toast } from "@/components/ui/toaster"
+import { copyRichText, exportMeetingMarkdown } from "@/lib/export"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
 import { TemplateIcon } from "@/components/template-icon"
@@ -38,6 +40,8 @@ import { formatDate, formatTime, formatTimer, stripMarkdown, stripMarkdownFence 
 import { SPEAKER_TAILWIND_COLORS } from "@/lib/constants"
 import type { Meeting, AppSettings, MeetingTemplate, ChatMessage, SpeakerLabel } from "@/types"
 import { findRelatedMeetings } from "@/lib/context-memory"
+import { correctWithSavedDictionary } from "@/lib/dictionary"
+import { replaceKnowledgeForMeeting, loadKnowledgeGraph, addKnowledgeEdges } from "@/lib/storage"
 
 interface NoteEditorProps {
   note?: Meeting
@@ -72,7 +76,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [title, setTitle] = useState(note?.title ?? settings.titlePrefix)
   const [notes, setNotes] = useState(note?.notes || note?.transcript || "")
   const [recorderState, setRecorderState] = useState<RecorderState>("idle")
-  const [error, setError] = useState<string | null>(null)
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<MeetingTemplate | undefined>(undefined)
   const [showTemplatePicker, setShowTemplatePicker] = useState(false)
@@ -80,9 +83,14 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [isEnhancing, setIsEnhancing] = useState(false)
   const [isTitling, setIsTitling] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
-  const [copied, setCopied] = useState(false)
   const [isStreaming, setIsStreaming] = useState(false)
   const [viewMode, setViewMode] = useState<"wysiwyg" | "source">("wysiwyg")
+  // Distraction-free writing (⌘⇧F): chrome (capture bar, chat, chips)
+  // recedes so only title + text remain. An active recording stays
+  // reachable — hiding its Stop control would trap the user.
+  const [focusMode, setFocusMode] = useState(false)
+  const focusModeRef = useRef(focusMode)
+  useEffect(() => { focusModeRef.current = focusMode }, [focusMode])
   const [isPaused, setIsPaused] = useState(false)
   const [rawTranscript, setRawTranscript] = useState(note?.transcript || "")
   const [showRawTranscript, setShowRawTranscript] = useState(false)
@@ -132,7 +140,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const titleRef = useRef(title)
   useEffect(() => { titleRef.current = title }, [title])
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   // Note body from before the last AI enhance/transcription, so the user can
   // back out. State (not a ref) because it controls the Undo button's render.
   const [previousNotes, setPreviousNotes] = useState("")
@@ -171,7 +178,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     transcriptionModel: settings.transcriptionModel,
     setText: setNotes,
     getText: () => notesRef.current,
-    onError: setError,
+    onError: toast.error,
     silenceLimitSecs: 120,
     onSilenceLimit,
   })
@@ -228,7 +235,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   } = useChat(chatMeeting, chatOnUpdate, meetings)
 
   const startRecording = useCallback(async () => {
-    setError(null)
     setIsPaused(false)
     try {
       await startCapture()
@@ -285,8 +291,16 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       // note text. Enhancement stays opt-in via the Enhance button.
       const content = notesRef.current.trim()
       if (content) {
-        setRawTranscript(content)
+        // Custom dictionary: fix mis-heard names/jargon before the transcript
+        // is stored, so everything downstream (title, speakers, knowledge) is
+        // spelled right. previousNotes keeps the uncorrected text for Undo.
         setPreviousNotes(notesRef.current)
+        const corrected = correctWithSavedDictionary(content)
+        if (corrected !== content) {
+          setNotes(corrected)
+          notesRef.current = corrected
+        }
+        setRawTranscript(corrected)
 
         const { isAIConfigured } = await import("@/lib/ai-service")
         if (isAIConfigured()) {
@@ -294,37 +308,99 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             const defaultTitle = titleRef.current.trim() === "" || titleRef.current === settings.titlePrefix
             if (defaultTitle) {
               const { generateTitle } = await import("@/lib/ai-service")
-              const autoTitle = await generateTitle(content, content)
+              const autoTitle = await generateTitle(corrected, corrected)
               if (autoTitle) setTitle(autoTitle)
             }
           } catch { /* ignore title generation failure */ }
         }
-        autoDetectSpeakers(content)
+        autoDetectSpeakers(corrected)
       }
     } finally {
       setIsTranscribing(false)
     }
   }, [stopCapture, settings.titlePrefix, autoDetectSpeakers])
 
+  // Import an existing audio file and append its transcript to this note,
+  // mirroring the live-recording stop flow (dictionary corrections, undo via
+  // previousNotes, speaker detection). Progress lives in a sticky toast that
+  // the outcome toast replaces (same id).
+  const handleImportAudio = useCallback(async () => {
+    toast("Transcribing audio file…", { id: "import-audio", duration: 0 })
+    try {
+      const { pickAndTranscribeAudio } = await import("@/lib/import-audio")
+      const result = await pickAndTranscribeAudio()
+      if (!result) { toast.dismiss("import-audio"); return }
+      if (!result.text) { toast.error("No speech detected in that file", { id: "import-audio" }); return }
+      setPreviousNotes(notesRef.current)
+      const corrected = correctWithSavedDictionary(result.text)
+      const base = notesRef.current.trim()
+      const next = base ? `${base}\n\n${corrected}` : corrected
+      setNotes(next)
+      notesRef.current = next
+      setRawTranscript((prev) => (prev ? `${prev}\n\n${corrected}` : corrected))
+      toast.success("Audio transcribed", { id: "import-audio", description: result.fileName })
+      autoDetectSpeakers(corrected)
+    } catch (e) {
+      toast.error("Import failed", { id: "import-audio", description: e instanceof Error ? e.message : "Transcription failed" })
+    }
+  }, [autoDetectSpeakers])
+
   const handleEnhance = useCallback(async () => {
     const content = notes.trim()
     if (!content) return
     setPreviousNotes(notesRef.current)
-    setIsEnhancing(true); setError(null)
+    setIsEnhancing(true)
     try {
       const { streamGenerateNotes, isAIConfigured } = await import("@/lib/ai-service")
-      if (!isAIConfigured()) { setError("AI is not configured. Set your API key in Settings."); return }
+      if (!isAIConfigured()) { toast.error("AI is not configured", { description: "Set your API key in Settings.", action: { label: "Open Settings", onClick: onSettings } }); return }
       const sections = selectedTemplate?.sections
       setIsStreaming(true)
       let streamed = ""
-      const gen = streamGenerateNotes(content, content, sections)
+      const gen = streamGenerateNotes(content, content, sections, selectedTemplate?.id)
+      // WYSIWYG: stream through the editor's milkdown streaming plugin (via
+      // the window bridge) so notes write in live with the AI glow. Source
+      // mode has no editor mounted — fall back to per-chunk setNotes there.
+      const viaEditor = viewMode === "wysiwyg"
+      // Models sometimes wrap the whole answer in a ```markdown fence. If one
+      // reached the editor mid-stream it would swallow the note into a code
+      // block, so the first line is held back until the fence decision is
+      // made, and the last few chars are held back so a closing fence never
+      // gets pushed. stripMarkdownFence still normalizes the stored result.
+      let pending = ""
+      let headDecided = false
+      let fenced = false
+      const TAIL_HOLD = 10
+      const flush = (final = false) => {
+        if (!viaEditor) return
+        if (!headDecided) {
+          const nl = pending.indexOf("\n")
+          if (!final && nl === -1 && pending.length < 40) return
+          const firstLine = (nl === -1 ? pending : pending.slice(0, nl)).trim()
+          fenced = /^```(?:markdown|md)?$/i.test(firstLine)
+          headDecided = true
+          if (fenced) pending = nl === -1 ? "" : pending.slice(nl + 1)
+        }
+        const pushLen = final ? pending.length : Math.max(0, pending.length - TAIL_HOLD)
+        if (pushLen > 0) {
+          window.dispatchEvent(new CustomEvent("editor-stream-chunk", { detail: pending.slice(0, pushLen) }))
+          pending = pending.slice(pushLen)
+        }
+      }
+      if (viaEditor) window.dispatchEvent(new CustomEvent("editor-stream-start"))
       for await (const chunk of gen) {
         streamed += chunk
-        setNotes(streamed)
+        if (viaEditor) {
+          pending += chunk
+          flush()
+        } else {
+          setNotes(streamed)
+        }
       }
-      // Models sometimes wrap the whole answer in a ```markdown fence; the
-      // read views strip it at render time but the editor shows it literally,
-      // so normalize the stored note once the stream is complete.
+      if (viaEditor) {
+        if (fenced) pending = pending.replace(/\n?```\s*$/i, "")
+        flush(true)
+        window.dispatchEvent(new CustomEvent("editor-stream-end"))
+      }
       const cleaned = stripMarkdownFence(streamed)
       setNotes(cleaned)
       setIsStreaming(false)
@@ -335,12 +411,47 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         .then(({ suggestQuestions }) => suggestQuestions(rawTranscript || content, cleaned))
         .then(setSuggestedQuestions)
         .catch(() => { /* suggestions are optional */ })
+      if (note) {
+        import("@/lib/knowledge-extract")
+          .then(({ extractKnowledgeItems }) =>
+            extractKnowledgeItems(
+              { ...note, title: titleRef.current, notes: cleaned },
+              cleaned,
+            )
+          )
+          .then(async (items) => {
+            if (items.length === 0) return
+            try {
+              const { embedBatch } = await import("@/lib/embedding")
+              const vectors = await embedBatch(items.map((i) => i.text))
+              items.forEach((item, i) => {
+                if (vectors[i]) item.embedding = vectors[i]
+              })
+            } catch { /* embeddings are optional */ }
+            replaceKnowledgeForMeeting(note.id, items)
+            try {
+              const { findLinkCandidates, linkKnowledgeItems } = await import("@/lib/knowledge-link")
+              const existing = loadKnowledgeGraph().items.filter((i) => i.meetingId !== note.id)
+              if (existing.length > 0) {
+                const candidates = findLinkCandidates(items, existing)
+                if (candidates.size > 0) {
+                  const edges = await linkKnowledgeItems(items, candidates, meetings)
+                  if (edges.length > 0) addKnowledgeEdges(edges)
+                }
+              }
+            } catch { /* cross-meeting linking is optional */ }
+          })
+          .catch(() => { /* knowledge extraction is optional */ })
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "AI enhancement failed")
+      // Keep whatever partial stream reached the editor (abort, don't roll
+      // back) — same net result as the old per-chunk setNotes behavior.
+      window.dispatchEvent(new CustomEvent("editor-stream-abort"))
+      toast.error(e instanceof Error ? e.message : "AI enhancement failed")
     } finally { setIsEnhancing(false); setIsStreaming(false) }
 
     autoDetectSpeakers(content)
-  }, [notes, rawTranscript, selectedTemplate, autoDetectSpeakers])
+  }, [notes, rawTranscript, selectedTemplate, autoDetectSpeakers, note, meetings, onSettings, viewMode])
 
   const handleUndoEnhance = useCallback(() => {
     if (!previousNotes) return
@@ -352,16 +463,16 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const handleEnhanceTitle = useCallback(async () => {
     const content = notes.trim()
     if (!content) return
-    setIsTitling(true); setError(null)
+    setIsTitling(true)
     try {
       const { generateTitle, isAIConfigured } = await import("@/lib/ai-service")
-      if (!isAIConfigured()) { setError("AI is not configured. Set your API key in Settings."); return }
+      if (!isAIConfigured()) { toast.error("AI is not configured", { description: "Set your API key in Settings.", action: { label: "Open Settings", onClick: onSettings } }); return }
       const autoTitle = await generateTitle(content, content)
       if (autoTitle) setTitle(autoTitle)
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Title generation failed")
+      toast.error(e instanceof Error ? e.message : "Title generation failed")
     } finally { setIsTitling(false) }
-  }, [notes])
+  }, [notes, onSettings])
 
   const handleAddSpeaker = useCallback(() => {
     if (!newSpeakerName.trim()) return
@@ -380,8 +491,19 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     if (title.trim()) md += `# ${title.trim()}\n\n`
     md += notes.trim()
     await navigator.clipboard.writeText(md)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    toast.success("Markdown copied")
+  }, [title, notes])
+
+  const handleCopyRichText = useCallback(async () => {
+    let md = ""
+    if (title.trim()) md += `# ${title.trim()}\n\n`
+    md += notes.trim()
+    const ok = await copyRichText(md)
+    if (ok) {
+      toast.success("Rich text copied", { description: "Paste into Slack, Docs, or Mail with formatting." })
+    } else {
+      toast.error("Copy failed", { description: "Clipboard access was blocked." })
+    }
   }, [title, notes])
 
   const handleSaveAsTemplate = useCallback(async () => {
@@ -407,9 +529,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     }
     persistTemplate(template)
     setSelectedTemplate(template)
-    setError("Template saved! You can reuse it from the Template picker.")
-    if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
-    errorTimerRef.current = setTimeout(() => setError(null), 3000)
+    toast.success("Template saved", { description: "Reuse it from the Template picker." })
   }, [title, notes])
 
   // Build the Meeting payload from the current editor state for a given id.
@@ -429,6 +549,16 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     transcriptSegments: note?.transcriptSegments,
     brief: note?.brief,
   }), [title, note, duration, rawTranscript, notes, selectedTemplate, speakerLabels])
+
+  const handleExportMarkdown = useCallback(async () => {
+    try {
+      const exported = await exportMeetingMarkdown(buildMeeting(note?.id ?? "draft"))
+      if (exported) toast.success("Note exported")
+      // false = save dialog cancelled, nothing to report
+    } catch (e) {
+      toast.error("Export failed", { description: e instanceof Error ? e.message : undefined })
+    }
+  }, [buildMeeting, note])
 
   const handleSave = useCallback(() => {
     const meeting = buildMeeting(note?.id ?? crypto.randomUUID())
@@ -455,7 +585,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     resetChat()
     setRecorderState("idle")
     setIsPaused(false)
-    setError(null)
     // Fresh form is a clean slate, not dirty against the note we just saved.
     setSavedSnapshot({ title: settings.titlePrefix, notes: "" })
     setJustSaved(true)
@@ -482,10 +611,32 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     return () => window.removeEventListener("keydown", onKey)
   }, [handleSave])
 
+  // ⌘⇧F toggles focus mode; Esc exits it. We can't rely on e.defaultPrevented
+  // here: ProseMirror's base keymap handles Escape (selectParentNode) and
+  // preventDefaults even when nothing visible consumed it. Instead skip the
+  // exit only when a nearer control demonstrably owns this Escape — a focused
+  // input (find bar, link/AI fields, palette), an open slash menu (listbox),
+  // or the floating AI popup.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault()
+        setFocusMode((v) => !v)
+        return
+      }
+      if (e.key !== "Escape" || !focusModeRef.current) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return
+      if (document.querySelector('[role="listbox"], .fixed.z-50')) return
+      setFocusMode(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
   useEffect(() => () => {
     abortCapture()
     if (savedTimerRef.current) clearTimeout(savedTimerRef.current)
-    if (errorTimerRef.current) clearTimeout(errorTimerRef.current)
   }, [abortCapture])
 
   useEffect(() => {
@@ -540,8 +691,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground" aria-live="polite">
               {isEnhancing ? (
                 <><span className="size-1.5 rounded-full bg-primary animate-pulse" />Enhancing note</>
-              ) : copied ? (
-                <>Markdown copied</>
               ) : justSaved ? (
                 <>All changes saved</>
               ) : isDirty ? (
@@ -553,16 +702,20 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button variant="ghost" onClick={handleSaveAndNew}>Save & New</Button>
-          <Button onClick={handleSave} title="Save (⌘S)">
-            <HugeiconsIcon icon={SaveIcon} strokeWidth={1.8} data-icon="inline-start" />
-            Save
-          </Button>
+          {!focusMode && (
+            <>
+              <Button variant="ghost" onClick={handleSaveAndNew}>Save & New</Button>
+              <Button onClick={handleSave} title="Save (⌘S)">
+                <HugeiconsIcon icon={SaveIcon} strokeWidth={1.8} data-icon="inline-start" />
+                Save
+              </Button>
+            </>
+          )}
         </div>
       </header>
 
-      <div className="relative flex min-h-0 flex-1 gap-3 overflow-hidden p-3">
-        <section className="mx-auto flex min-w-0 max-w-5xl flex-1 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm">
+      <div className="relative flex min-h-0 flex-1 overflow-hidden">
+        <section className="mx-auto flex min-w-0 max-w-5xl flex-1 flex-col overflow-hidden bg-card">
           <div className="app-scrollbar-hidden min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col px-8 pb-16 pt-10 sm:px-12">
               <div className="flex items-start gap-3">
@@ -611,6 +764,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 )}
               </div>
 
+              {!focusMode && (
               <div className="mt-5 flex flex-wrap items-center gap-2">
                 {speakerLabels.map((label, i) => (
                   <span key={i} className={cn("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium", label.color)}>
@@ -634,8 +788,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   </Button>
                 )}
               </div>
+              )}
 
-              {relatedMeetings.length > 0 && (
+              {!focusMode && relatedMeetings.length > 0 && (
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <span className="text-xs font-medium text-muted-foreground">Related</span>
                   {relatedMeetings.map(m => (
@@ -652,13 +807,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       {m.title}
                     </button>
                   ))}
-                </div>
-              )}
-
-              {error && (
-                <div className="mt-5 flex shrink-0 items-start justify-between gap-2 rounded-xl border border-destructive/15 bg-destructive/5 px-3 py-2" role="alert">
-                  <div className="text-sm text-destructive">{error}</div>
-                  <Button variant="ghost" size="icon-sm" onClick={() => setError(null)} aria-label="Dismiss error"><HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} /></Button>
                 </div>
               )}
 
@@ -679,24 +827,32 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       editable
                       onChange={setNotes}
                       viewMode={viewMode}
-                      toolbar={viewMode === "wysiwyg"}
+                      aiPopup={settings.aiSelectionPopup}
                       className="min-h-[24rem]"
                     />
                   )}
                 </div>
 
-                {isEmpty && recorderState === "idle" && viewMode !== "source" && (
-                  <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed border-border bg-muted/35 px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium">Start with a recording or a template</p>
-                      <p className="mt-0.5 text-xs text-muted-foreground">You can also click above and begin typing.</p>
+                {isEmpty && recorderState === "idle" && viewMode !== "source" && !focusMode && !isStreaming && (
+                  <div className="mt-6 rounded-xl border border-dashed border-border bg-muted/35 px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-medium">Start with a recording or a template</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">You can also click above and begin typing.</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={startRecording}>
+                          <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />Start recording
+                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => setShowTemplatePicker(true)}>Choose template</Button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Button variant="outline" size="sm" onClick={startRecording}>
-                        <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />Start recording
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => setShowTemplatePicker(true)}>Choose template</Button>
-                    </div>
+                    <p className="mt-3 border-t border-border/50 pt-2.5 text-[11px] leading-relaxed text-muted-foreground/70">
+                      Power features: type <kbd className="rounded border border-border/60 bg-muted px-1 font-sans">/</kbd> for blocks · select text to format or ask AI · <kbd className="rounded border border-border/60 bg-muted px-1 font-sans">⌘⇧F</kbd> for focus mode · type <kbd className="rounded border border-border/60 bg-muted px-1 font-sans">;trigger</kbd> + space to expand a snippet ·{" "}
+                      <button type="button" onClick={onSettings} className="underline underline-offset-2 transition-colors hover:text-foreground">
+                        dictionary, styles &amp; snippets live in Settings
+                      </button>
+                    </p>
                   </div>
                 )}
               </div>
@@ -704,14 +860,14 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           </div>
         </section>
           <AnimatePresence initial={false}>
-            {showAIPanel && (
+            {showAIPanel && !focusMode && (
               <motion.div
                 ref={chatPanelRef}
                 initial={{ width: 0 }}
                 animate={{ width: chatWidth }}
                 exit={{ width: 0 }}
                 transition={{ duration: 0.2, ease: "easeOut" }}
-                className="relative flex shrink-0 flex-col overflow-hidden rounded-2xl border border-border/70 bg-card shadow-sm max-md:absolute max-md:bottom-3 max-md:right-3 max-md:top-3 max-md:z-20 max-md:shadow-2xl"
+                className="relative flex shrink-0 flex-col overflow-hidden border-l border-border/70 bg-card max-md:absolute max-md:inset-3 max-md:z-20 max-md:rounded-lg max-md:border max-md:shadow-xl"
               >
                 <div
                   className="absolute bottom-0 left-0 top-0 z-10 -ml-1 w-2 cursor-col-resize hover:bg-primary/20 active:bg-primary/30"
@@ -740,7 +896,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                           {suggestedQuestions.map((q) => (
                             <button
                               key={q}
-                              className="text-sm text-left px-3 py-2 rounded-2xl border border-dashed hover:bg-muted/50 hover:border-border transition-colors disabled:opacity-50"
+                              className="text-sm text-left px-3 py-2 rounded-lg border border-dashed hover:bg-muted/50 hover:border-border transition-colors disabled:opacity-50"
                               onClick={() => sendMessage(q)}
                               disabled={chatStreaming}
                             >
@@ -762,11 +918,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                           className={`group flex flex-col gap-1 ${msg.role === "user" ? "items-end" : "items-start"}`}
                         >
                           {msg.role === "user" ? (
-                            <div className="max-w-[85%] rounded-2xl rounded-br-md px-3 py-2 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground">
+                            <div className="max-w-[85%] rounded-lg rounded-br-md px-3 py-2 text-sm whitespace-pre-wrap break-words bg-primary text-primary-foreground">
                               {msg.content}
                             </div>
                           ) : (
-                            <div className="max-w-[85%] rounded-2xl rounded-bl-md px-3 py-2 bg-muted">
+                            <div className="max-w-[85%] rounded-lg rounded-bl-md px-3 py-2 bg-muted">
                               <MarkdownView markdown={msg.content} />
                               {isLast && lastIsStreaming && (
                                 <span className="inline-block w-1.5 h-4 bg-current ml-0.5 animate-pulse align-middle" />
@@ -835,6 +991,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           </AnimatePresence>
       </div>
 
+      {/* Focus mode hides the capture bar entirely — unless a recording is
+          live or processing, in which case its controls must stay reachable. */}
+      {(!focusMode || recorderState === "recording" || isTranscribing) && (
       <footer className="flex min-h-16 shrink-0 flex-wrap items-center gap-3 border-t border-border/70 bg-background/95 px-4 py-2.5 shadow-[0_-8px_24px_-20px_rgba(0,0,0,0.45)] backdrop-blur">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           {recorderState === "recording" ? (
@@ -920,6 +1079,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
         <div data-tauri-drag-region className="min-w-4 flex-1 self-stretch" />
 
+        {!focusMode && (
         <div className="flex items-center gap-2">
           {previousNotes && (
             <Button variant="ghost" size="sm" onClick={handleUndoEnhance} className="text-amber-500 hover:text-amber-600">
@@ -958,6 +1118,18 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
                   Copy Markdown
                 </DropdownMenuItem>
+                <DropdownMenuItem disabled={!notes.trim()} onSelect={handleCopyRichText}>
+                  <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
+                  Copy Rich Text
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={!notes.trim()} onSelect={handleExportMarkdown}>
+                  <HugeiconsIcon icon={FileExportIcon} strokeWidth={1.5} />
+                  Export as Markdown File
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleImportAudio}>
+                  <HugeiconsIcon icon={FileImportIcon} strokeWidth={1.5} />
+                  Import Audio File…
+                </DropdownMenuItem>
                 <DropdownMenuItem disabled={!notes.trim() || isEmpty} onSelect={handleSaveAsTemplate}>
                   <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
                   Save as template
@@ -970,7 +1142,20 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
             <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} />
           </Button>
         </div>
+        )}
       </footer>
+      )}
+
+      {/* Focus-mode exit affordance — always discoverable, never in the way. */}
+      {focusMode && (
+        <button
+          type="button"
+          onClick={() => setFocusMode(false)}
+          className="fixed bottom-5 right-5 z-30 rounded-full border border-border/70 bg-card/90 px-3 py-1.5 text-xs text-muted-foreground shadow-lg backdrop-blur transition-colors hover:text-foreground"
+        >
+          Focus mode · ⌘⇧F to exit
+        </button>
+      )}
 
       <MeetingTemplateSelector selectedId={selectedTemplate?.id} onSelect={tpl => setSelectedTemplate(tpl)} open={showTemplatePicker} onOpenChange={setShowTemplatePicker} />
     </main>

@@ -1,6 +1,6 @@
-import type { MeetingSection, ChatMessage, QuickAction, Meeting } from "@/types"
-import { loadAISettings } from "@/lib/storage"
-import { loadTemplates } from "@/lib/storage"
+import type { MeetingSection, ChatMessage, QuickAction, Meeting, WritingStyle } from "@/types"
+import { loadAISettings, loadSettings, loadTemplates } from "@/lib/storage"
+import { withVocabulary } from "@/lib/dictionary"
 import { findRelatedMeetings, buildMemoryContextBlock } from "@/lib/context-memory"
 import { buildMeetingContent } from "@/lib/meeting-content"
 import { parseSSEStream } from "@/lib/sse-parser"
@@ -9,6 +9,32 @@ import { callDeepSeek, fetchDeepSeekStream } from "@/lib/deepseek-client"
 export function isAIConfigured(): boolean {
   const s = loadAISettings()
   return s.enabled
+}
+
+// Persona directive for generation calls ("styles" — formal in one context,
+// casual in another). A template's own style wins over the global setting;
+// returns "" when no styling applies, so prompts stay untouched.
+function styleDirective(templateId?: string): string {
+  const settings = loadSettings()
+  let style: WritingStyle = settings.writingStyle
+  if (templateId) {
+    const tpl = loadTemplates().find((t) => t.id === templateId)
+    if (tpl?.style && tpl.style !== "default") style = tpl.style
+  }
+  switch (style) {
+    case "formal":
+      return "WRITING STYLE: Formal and professional register — polished, precise, no contractions or slang."
+    case "casual":
+      return "WRITING STYLE: Casual and conversational — warm, plain-spoken, contractions welcome."
+    case "crisp":
+      return "WRITING STYLE: Crisp and terse — short sentences, no filler, maximum signal per word."
+    case "custom": {
+      const custom = settings.customStylePrompt.trim()
+      return custom ? `WRITING STYLE: ${custom}` : ""
+    }
+    default:
+      return ""
+  }
 }
 
 function cleanJsonResponse(text: string): string {
@@ -30,7 +56,7 @@ CONTENT:
 ${content.slice(0, 3000)}`
 
   const response = await callDeepSeek([
-    { role: "system", content: "You generate short meeting titles. Respond with only the title text." },
+    { role: "system", content: withVocabulary("You generate short meeting titles. Respond with only the title text.") },
     { role: "user", content: prompt },
   ])
 
@@ -73,16 +99,46 @@ export async function* streamGenerateNotes(
   rawNotes: string,
   transcript: string,
   templateSections?: string[],
+  templateId?: string,
 ): AsyncGenerator<string> {
   const prompt = buildNotesPrompt(rawNotes, transcript, templateSections)
+  const style = styleDirective(templateId)
 
   const { reader } = await fetchDeepSeekStream([
-    { role: "system", content: "You are a professional meeting notes organizer. Output clean, well-structured markdown with headings, bullet points, tables, and bold for emphasis." },
+    { role: "system", content: withVocabulary(`You are a professional meeting notes organizer. Output clean, well-structured markdown with headings, bullet points, tables, and bold for emphasis.${style ? `\n\n${style}` : ""}`) },
     { role: "user", content: prompt },
   ], { temperature: 0.3 })
 
   try {
     yield* parseSSEStream(reader)
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+async function* streamSelectionEdit(
+  instruction: string,
+  selectedText: string,
+  context: string,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const prompt = `${instruction}
+
+Return only the replacement text. Use markdown when it improves readability. Do not wrap the answer in code fences.
+
+SELECTED TEXT:
+${selectedText}
+
+FULL NOTE CONTEXT:
+${context.slice(0, 12000)}`
+
+  const { reader } = await fetchDeepSeekStream([
+    { role: "system", content: withVocabulary("You are an expert meeting-notes editor. Replace selected text directly and concisely.") },
+    { role: "user", content: prompt },
+  ], { temperature: 0.35, maxTokens: 1024, signal })
+
+  try {
+    yield* parseSSEStream(reader, signal)
   } finally {
     reader.releaseLock()
   }
@@ -100,27 +156,20 @@ export async function* streamRewriteSelection(
     expand: "Expand the selected text with helpful detail while staying faithful to the surrounding notes.",
     shorten: "Make the selected text shorter and sharper while preserving the important meaning.",
   }
+  yield* streamSelectionEdit(instruction[action], selectedText, context, signal)
+}
 
-  const prompt = `${instruction[action]}
-
-Return only the replacement text. Use markdown when it improves readability. Do not wrap the answer in code fences.
-
-SELECTED TEXT:
-${selectedText}
-
-FULL NOTE CONTEXT:
-${context.slice(0, 12000)}`
-
-  const { reader } = await fetchDeepSeekStream([
-    { role: "system", content: "You are an expert meeting-notes editor. Replace selected text directly and concisely." },
-    { role: "user", content: prompt },
-  ], { temperature: 0.35, maxTokens: 1024, signal })
-
-  try {
-    yield* parseSSEStream(reader, signal)
-  } finally {
-    reader.releaseLock()
-  }
+/** Freeform "ask on selection" — the user's own instruction applied to the
+ *  selected text (e.g. "make it sound apologetic", "say it simply"). */
+export async function* streamCustomEdit(
+  selectedText: string,
+  instruction: string,
+  context: string,
+  signal?: AbortSignal,
+): AsyncGenerator<string> {
+  const trimmed = instruction.trim()
+  const directive = `Apply this instruction to the selected text: "${trimmed}". Preserve facts and meaning not affected by the instruction.`
+  yield* streamSelectionEdit(directive, selectedText, context, signal)
 }
 
 export async function enhanceNotes(
@@ -150,8 +199,9 @@ Rules:
 - If a section has no relevant info from the notes/transcript, write "No information captured"
 - Do NOT invent or hallucinate information not present in the notes or transcript`
 
+  const style = styleDirective()
   const response = await callDeepSeek([
-    { role: "system", content: "You are a meeting notes organizer. You only respond with valid JSON arrays." },
+    { role: "system", content: withVocabulary(`You are a meeting notes organizer. You only respond with valid JSON arrays.${style ? ` ${style}` : ""}`) },
     { role: "user", content: prompt },
   ], { thinking: true })
 
@@ -205,7 +255,7 @@ Generate a pre-meeting brief with these sections. Use markdown formatting — he
 Be concise and actionable. If there's limited past data, note that helpfully.`
 
   return await callDeepSeek([
-    { role: "system", content: "You are a professional meeting preparation assistant. Generate crisp, actionable pre-meeting briefs." },
+    { role: "system", content: withVocabulary("You are a professional meeting preparation assistant. Generate crisp, actionable pre-meeting briefs.") },
     { role: "user", content: prompt },
   ], { thinking: true })
 }
@@ -228,7 +278,7 @@ export async function executeQuickAction(
     memoryContext = buildMemoryContextBlock(related, allMeetings, 1500)
   }
 
-  const system = "You are a professional meeting assistant. Answer concisely with actionable, specific information based only on the meeting data provided. Use markdown formatting in your response — headings, bullet points, tables, and bold for emphasis where appropriate."
+  const system = withVocabulary("You are a professional meeting assistant. Answer concisely with actionable, specific information based only on the meeting data provided. Use markdown formatting in your response — headings, bullet points, tables, and bold for emphasis where appropriate.")
 
   const user = `${action.prompt}
 
@@ -263,18 +313,34 @@ export async function* streamChatResponse(
     : ""
 
   let memoryContext = ""
+  let knowledgeContext = ""
   if (allMeetings && allMeetings.length > 0) {
-    const related = findRelatedMeetings(meeting, allMeetings, 5)
-    memoryContext = buildMemoryContextBlock(related, allMeetings, 2000)
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user")?.content || ""
+    if (lastUserMsg) {
+      try {
+        const { searchKnowledge, buildKnowledgeContextBlock } = await import("@/lib/knowledge-search")
+        const results = await searchKnowledge(lastUserMsg, allMeetings, {
+          excludeMeetingId: meeting.id,
+          limit: 15,
+        })
+        knowledgeContext = buildKnowledgeContextBlock(results, 2000)
+      } catch { /* knowledge search is optional */ }
+    }
+    if (!knowledgeContext) {
+      const related = findRelatedMeetings(meeting, allMeetings, 5)
+      memoryContext = buildMemoryContextBlock(related, allMeetings, 2000)
+    }
   }
 
-  const systemMsg = `You are a helpful AI meeting assistant. You have access to the full meeting transcript, notes, structured notes, and context from related past meetings. Answer questions based on this context. Be concise and specific. Use markdown formatting in your responses — headings, bullet points, tables, and bold for emphasis where appropriate.
+  const crossMeetingContext = knowledgeContext || memoryContext
+
+  const systemMsg = withVocabulary(`You are a helpful AI meeting assistant. You have access to the full meeting transcript, notes, structured notes, and context from related past meetings. Answer questions based on this context. Be concise and specific. Use markdown formatting in your responses — headings, bullet points, tables, and bold for emphasis where appropriate.
 
 CURRENT MEETING CONTEXT:
 Transcript: ${transcript || "(none)"}
 Notes: ${notes || "(none)"}
 ${sectionsContext ? `Structured Notes:\n${sectionsContext}` : ""}
-${memoryContext ? `\nRELATED PAST MEETINGS:\n${memoryContext}` : ""}`
+${crossMeetingContext ? `\n${knowledgeContext ? "KNOWLEDGE FROM PAST MEETINGS" : "RELATED PAST MEETINGS"}:\n${crossMeetingContext}` : ""}`)
 
   const apiMessages = [
     { role: "system", content: systemMsg },
@@ -327,7 +393,7 @@ ${transcript.slice(0, 4000)}`
 
   try {
     const response = await callDeepSeek([
-      { role: "system", content: "Extract speaker names from transcripts. Respond only with a JSON array of strings." },
+      { role: "system", content: withVocabulary("Extract speaker names from transcripts. Respond only with a JSON array of strings.") },
       { role: "user", content: prompt },
     ])
 
@@ -372,26 +438,44 @@ export async function* streamGlobalChat(
   allMeetings: Meeting[],
   signal?: AbortSignal,
 ): AsyncGenerator<string> {
-  const { findRelatedMeetings, buildMemoryContextBlock } = await import("@/lib/context-memory")
+  let knowledgeContext = ""
+  let meetingContext = ""
 
-  const queryMeeting: Meeting = {
-    id: "__global__",
-    title: query.slice(0, 100),
-    date: new Date().toISOString(),
-    duration: 0,
-    transcript: query,
-    notes: query,
+  try {
+    const { searchKnowledge, buildKnowledgeContextBlock } = await import("@/lib/knowledge-search")
+    const results = await searchKnowledge(query, allMeetings, { limit: 25 })
+    knowledgeContext = buildKnowledgeContextBlock(results, 4000)
+  } catch { /* knowledge search optional */ }
+
+  if (!knowledgeContext) {
+    const { findRelatedMeetings, buildMemoryContextBlock } = await import("@/lib/context-memory")
+    const queryMeeting: Meeting = {
+      id: "__global__",
+      title: query.slice(0, 100),
+      date: new Date().toISOString(),
+      duration: 0,
+      transcript: query,
+      notes: query,
+    }
+    const related = findRelatedMeetings(queryMeeting, allMeetings, 10)
+    meetingContext = buildMemoryContextBlock(related, allMeetings, 6000)
   }
 
-  const related = findRelatedMeetings(queryMeeting, allMeetings, 10)
-  const context = buildMemoryContextBlock(related, allMeetings, 6000)
+  const context = knowledgeContext || meetingContext
 
-  const systemMsg = `You are a helpful assistant with access to context from the user's past meetings. Answer questions based on this context. If the answer cannot be found in the meeting context, say so honestly. Be concise and specific. Use markdown formatting — headings, bullet points, tables, and bold for emphasis where appropriate.
+  const systemMsg = withVocabulary(`You are a helpful assistant with access to context from the user's past meetings. Answer questions based on this context. If the answer cannot be found in the meeting context, say so honestly. Be concise and specific. Use markdown formatting — headings, bullet points, tables, and bold for emphasis where appropriate.
 
-AVAILABLE MEETING CONTEXT (${allMeetings.length} total, showing most relevant):
 ${context || "(no relevant meetings found)"}
 
-The user's question: ${query}`
+ACTIONS: When the user asks you to *change* something (not just answer), propose actions. Emit each action as its own fenced code block with the language tag "action", containing one JSON object:
+
+Available actions:
+- {"type":"update_knowledge_status","itemId":"<id>","status":"resolved"} — mark an action item or open question. itemId is the (id: …) shown next to items in the knowledge context; status is one of "open", "resolved", "superseded".
+- {"type":"add_dictionary_entry","term":"<Correct Spelling>","aliases":["<common mis-hearing>"]} — teach the app a name or term so transcription always spells it right.
+
+Rules: only propose an action when the user clearly asked for the change; never propose actions unprompted. Briefly describe each proposed action in prose right before its block. Use exact itemId values from the context — never invent ids. If the requested item isn't in the context, say you can't find it instead of guessing.
+
+The user's question: ${query}`)
 
   const apiMessages = [
     { role: "system", content: systemMsg },

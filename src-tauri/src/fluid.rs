@@ -849,6 +849,63 @@ pub async fn transcribe_audio_fluid(
     result
 }
 
+/// Transcribe an existing audio file (mp3/m4a/wav/…) selected by the user —
+/// used by the "Import audio" flow. Unlike `transcribe_audio_fluid` this takes
+/// a path instead of bytes: large recordings never cross the IPC boundary, and
+/// the sidecar's AVAudioConverter-based loader handles format detection and
+/// resampling to 16kHz itself.
+#[tauri::command]
+pub async fn transcribe_audio_file_fluid(
+    app: AppHandle,
+    path: String,
+    language: Option<String>,
+    model: Option<String>,
+) -> Result<String, String> {
+    if !binary_present(&app) {
+        return Err("ASR sidecar not installed.".into());
+    }
+    let requested_model = AsrModel::parse(model.as_deref());
+
+    if !std::path::PathBuf::from(&path).exists() {
+        return Err(format!("audio file not found: {path}"));
+    }
+
+    let lang = language.as_deref().unwrap_or("");
+    log::debug!(
+        "transcribe_audio_file_fluid: path={}, lang={}",
+        path,
+        if lang.is_empty() { "auto" } else { lang }
+    );
+
+    let mut guard = slot().lock().await;
+    let needs_spawn = guard
+        .as_ref()
+        .map(|sc| sc.model != requested_model)
+        .unwrap_or(true);
+    if needs_spawn {
+        *guard = Some(spawn_sidecar(&app, requested_model).await?);
+    }
+    match request(
+        guard.as_mut().expect("guard is Some after spawn/check"),
+        &path,
+        lang,
+    )
+    .await
+    {
+        Ok(t) => Ok(t),
+        Err(e) => {
+            log::error!("sidecar request failed: {e}, respawning...");
+            *guard = Some(spawn_sidecar(&app, requested_model).await?);
+            request(
+                guard.as_mut().expect("guard is Some after respawn"),
+                &path,
+                lang,
+            )
+            .await
+        }
+    }
+}
+
 // FluidAudio caches its CoreML models (Parakeet encoder/decoder, Silero VAD)
 // under ~/Library/Application Support/FluidAudio/Models. They download on first
 // use and are not part of the app bundle, so this is the on-disk footprint a

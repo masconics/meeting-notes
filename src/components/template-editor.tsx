@@ -49,7 +49,16 @@ import {
   Copy01Icon,
 } from "@hugeicons/core-free-icons"
 import type { IconSvgElement } from "@hugeicons/react"
-import type { MeetingTemplate, QuickAction } from "@/types"
+import type { MeetingTemplate, QuickAction, WritingStyle } from "@/types"
+import { WRITING_STYLES } from "@/types"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   getTemplates,
   saveTemplate,
@@ -447,6 +456,30 @@ export function TemplateEditor() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium">Writing Style</label>
+              <Select
+                value={form.style ?? "default"}
+                onValueChange={(v) => updateForm({ style: v as WritingStyle })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {Object.entries(WRITING_STYLES).map(([id, s]) => (
+                      <SelectItem key={id} value={id}>
+                        {s.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Persona for notes generated with this template. "Default" follows the global writing style.
+              </p>
             </div>
 
             <div className="flex flex-col gap-2">

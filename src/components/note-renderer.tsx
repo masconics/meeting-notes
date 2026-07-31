@@ -7,10 +7,17 @@ interface NoteRendererProps {
   onChange?: (content: string) => void
   viewMode?: "wysiwyg" | "source"
   placeholder?: string
-  toolbar?: boolean
+  /** Show AI actions in the selection menu (the formatting rows always show). Defaults to true. */
+  aiPopup?: boolean
 }
 
-export function NoteRenderer({ content, className = "", editable = false, onChange, viewMode = "wysiwyg", placeholder = "Start writing your notes…", toolbar = false }: NoteRendererProps) {
+export function NoteRenderer({ content, className = "", editable = false, onChange, viewMode = "wysiwyg", placeholder = "Start writing your notes…", aiPopup = true }: NoteRendererProps) {
+  // The live editor advertises its power gestures right in the canvas; the
+  // plain copy stays for the source textarea and read-only empty state.
+  const editorPlaceholder =
+    placeholder === "Start writing your notes…"
+      ? "Start writing — type “/” for blocks, select text to format"
+      : placeholder
   if (editable) {
     if (viewMode === "source") {
       return (
@@ -32,8 +39,8 @@ export function NoteRenderer({ content, className = "", editable = false, onChan
         editable
         onChange={onChange}
         editorLabel="Edit note body"
-        placeholder={placeholder}
-        toolbar={toolbar}
+        placeholder={editorPlaceholder}
+        aiPopup={aiPopup}
         className={className}
       />
     )

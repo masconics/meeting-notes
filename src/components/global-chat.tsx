@@ -10,11 +10,14 @@ import {
   RefreshIcon,
   Settings02Icon,
   AlertCircleIcon,
+  FlashIcon,
+  CheckmarkCircle02Icon,
 } from "@hugeicons/core-free-icons"
 import { motion, AnimatePresence } from "framer-motion"
 import { streamGlobalChat } from "@/lib/ai-service"
 import { isAIConfigured } from "@/lib/ai-service"
 import { GLOBAL_SUGGESTED_QUESTIONS } from "@/lib/constants"
+import { applyChatAction, describeChatAction, parseChatActions, stripChatActions } from "@/lib/chat-actions"
 import { MarkdownView } from "@/components/markdown-view"
 import type { Meeting, ChatMessage } from "@/types"
 
@@ -34,6 +37,21 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const configured = isAIConfigured()
+  // Outcome of each proposed action card, keyed `${messageIndex}:${actionIndex}`.
+  // Actions apply only on explicit user confirmation — never automatically.
+  const [actionStates, setActionStates] = useState<Record<string, { status: "applied" | "dismissed" | "failed"; message?: string }>>({})
+
+  const handleApplyAction = useCallback((key: string, action: ReturnType<typeof parseChatActions>[number]) => {
+    const result = applyChatAction(action)
+    setActionStates((prev) => ({
+      ...prev,
+      [key]: { status: result.ok ? "applied" : "failed", message: result.message },
+    }))
+  }, [])
+
+  const handleDismissAction = useCallback((key: string) => {
+    setActionStates((prev) => ({ ...prev, [key]: { status: "dismissed" } }))
+  }, [])
 
   useEffect(() => {
     if (open && configured) {
@@ -103,6 +121,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
   const retryLast = useCallback(() => {
     const lastUser = [...messages].reverse().find((m) => m.role === "user")
     if (!lastUser) return
+    setActionStates({})
     setMessages(messages.filter((m) => m !== lastUser))
     sendMessage(lastUser.content)
   }, [messages, sendMessage])
@@ -184,43 +203,81 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                {messages.map((msg, i) => (
-                  <motion.div
-                    // Timestamps can collide (user msg + assistant placeholder
-                    // are created in the same tick), so key by position.
-                    key={i}
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.15 }}
-                    className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
-                    <div
-                      className={`max-w-[90%] rounded-xl px-3 py-2 ${
-                        msg.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted"
-                      }`}
+                {messages.map((msg, i) => {
+                  const actions = msg.role === "assistant" ? parseChatActions(msg.content) : []
+                  return (
+                    <motion.div
+                      // Timestamps can collide (user msg + assistant placeholder
+                      // are created in the same tick), so key by position.
+                      key={i}
+                      initial={{ opacity: 0, y: 6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.15 }}
+                      className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                     >
-                      {msg.role === "user" ? (
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                      ) : (
-                        <div>
-                          {msg.content ? (
-                            <MarkdownView markdown={msg.content} />
-                          ) : streaming && i === messages.length - 1 ? (
-                            <span className="inline-flex items-center gap-1 text-muted-foreground">
-                              <span className="inline-flex gap-0.5">
-                                <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:0ms]" />
-                                <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:150ms]" />
-                                <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:300ms]" />
-                              </span>
-                            </span>
-                          ) : null}
+                      <div className="flex max-w-[90%] flex-col gap-1.5">
+                        <div
+                          className={`rounded-xl px-3 py-2 ${
+                            msg.role === "user"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted"
+                          }`}
+                        >
+                          {msg.role === "user" ? (
+                            <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                          ) : (
+                            <div>
+                              {msg.content ? (
+                                <MarkdownView markdown={stripChatActions(msg.content)} />
+                              ) : streaming && i === messages.length - 1 ? (
+                                <span className="inline-flex items-center gap-1 text-muted-foreground">
+                                  <span className="inline-flex gap-0.5">
+                                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:0ms]" />
+                                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:150ms]" />
+                                    <span className="size-1 rounded-full bg-current animate-bounce [animation-delay:300ms]" />
+                                  </span>
+                                </span>
+                              ) : null}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  </motion.div>
-                ))}
+                        {actions.length > 0 && (
+                          <div className="flex flex-col gap-1.5">
+                            {actions.map((action, ai) => {
+                              const key = `${i}:${ai}`
+                              const state = actionStates[key]
+                              return (
+                                <div key={key} className="rounded-lg border border-border/70 bg-card px-2.5 py-2 text-xs shadow-sm">
+                                  <div className="flex items-center gap-1.5 text-foreground">
+                                    <HugeiconsIcon icon={FlashIcon} strokeWidth={2} className="size-3.5 shrink-0 text-primary" />
+                                    <span className="font-medium">{describeChatAction(action)}</span>
+                                  </div>
+                                  {state ? (
+                                    <p className={`mt-1 flex items-center gap-1 ${state.status === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                                      {state.status === "applied" && (
+                                        <HugeiconsIcon icon={CheckmarkCircle02Icon} strokeWidth={2} className="size-3.5 text-emerald-500" />
+                                      )}
+                                      {state.message ?? (state.status === "dismissed" ? "Dismissed" : "")}
+                                    </p>
+                                  ) : (
+                                    <div className="mt-1.5 flex items-center gap-1.5">
+                                      <Button size="xs" onClick={() => handleApplyAction(key, action)}>
+                                        Apply
+                                      </Button>
+                                      <Button size="xs" variant="ghost" onClick={() => handleDismissAction(key)}>
+                                        Dismiss
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )
+                })}
 
                 {streaming && !lastIsStreaming && (
                   <div className="flex justify-start">
@@ -290,7 +347,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings }: GlobalCh
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setMessages([])}
+                  onClick={() => { setMessages([]); setActionStates({}) }}
                   disabled={streaming}
                   className="text-xs h-7"
                 >

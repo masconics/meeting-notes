@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react"
+import { listen } from "@tauri-apps/api/event"
 import { motion, AnimatePresence } from "framer-motion"
 import { MeetingDashboard } from "@/components/meeting-dashboard"
 import { NoteEditor } from "@/components/note-editor"
@@ -6,6 +7,9 @@ import { SettingsPage } from "@/components/settings-page"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import { OnboardingWizard } from "@/components/onboarding-wizard"
 import { ErrorBoundary } from "@/components/error-boundary"
+import { CommandPalette } from "@/components/command-palette"
+import { ShortcutsDialog } from "@/components/shortcuts-dialog"
+import { Toaster, toast } from "@/components/ui/toaster"
 import { isOnboardingComplete } from "@/lib/onboarding"
 import {
   loadMeetings,
@@ -56,8 +60,9 @@ export function App() {
     }
     return undefined
   })
-  const [pendingDelete, setPendingDelete] = useState<Meeting | null>(null)
   const [onboardingComplete, setOnboardingComplete] = useState(() => isOnboardingComplete())
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [confirmDialog, setConfirmDialog] = useState<{
     title: string
     message: string
@@ -67,9 +72,13 @@ export function App() {
 
   const viewRef = useRef(view)
   const meetingsRef = useRef(meetings)
+  const editorNoteRef = useRef(editorNote)
+  // Where to return when leaving Settings. Recorded every time Settings is
+  // opened so Back/Escape restore the view the user came from (e.g. the note
+  // they were editing) instead of always landing on the dashboard.
+  const settingsReturnRef = useRef<{ view: View; meetingId?: string }>({ view: "dashboard" })
   const isNavigatingRef = useRef(false)
   const recorderDirtyRef = useRef(false)
-  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const pendingNavigateRef = useRef<{ view: View; meetingId?: string } | null>(null)
 
   useTheme(settings.theme)
@@ -88,6 +97,10 @@ export function App() {
   useEffect(() => {
     meetingsRef.current = meetings
   }, [meetings])
+
+  useEffect(() => {
+    editorNoteRef.current = editorNote
+  }, [editorNote])
 
   const navigate = useCallback((nextView: View, meetingId?: string) => {
     if (viewRef.current === "editor" && nextView !== "editor" && recorderDirtyRef.current) {
@@ -116,6 +129,36 @@ export function App() {
 
   const goBack = useCallback(() => navigate("dashboard"), [navigate])
 
+  const openSettings = useCallback(() => {
+    settingsReturnRef.current = viewRef.current === "editor"
+      ? { view: "editor", meetingId: editorNoteRef.current?.id }
+      : { view: "dashboard" }
+    navigate("settings")
+  }, [navigate])
+
+  // Back from Settings returns to the recorded origin: the note being edited
+  // (it autosaved/flushed on the way out), a fresh editor for a never-saved
+  // new note, or the dashboard. If the note no longer exists (data cleared),
+  // the dashboard is the only sensible destination.
+  const goBackFromSettings = useCallback(() => {
+    // SettingsPage persists independently, so re-sync App's settings state on
+    // the way out — otherwise the rest of the app runs on stale values
+    // (title prefix, audio source, AI popup toggle…) until the next launch.
+    setSettings(loadSettings())
+    const ret = settingsReturnRef.current
+    if (ret.view === "editor") {
+      if (ret.meetingId) {
+        const m = meetingsRef.current.find(m => m.id === ret.meetingId)
+        if (m) { setEditorNote(m); navigate("editor", m.id); return }
+      } else {
+        setEditorNote(undefined)
+        navigate("editor")
+        return
+      }
+    }
+    navigate("dashboard")
+  }, [navigate])
+
   useEffect(() => {
     const handler = () => {
       if (isNavigatingRef.current) return
@@ -138,16 +181,29 @@ export function App() {
       const mod = e.metaKey || e.ctrlKey
       const target = e.target as HTMLElement
       const isInput = ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable
+      // Palette, settings, and find work from anywhere — including while
+      // typing in an input, matching macOS/browser muscle memory.
+      if (mod && e.key === "k") { e.preventDefault(); setPaletteOpen(o => !o); return }
+      if (mod && e.key === ",") { e.preventDefault(); if (viewRef.current !== "settings") openSettings(); return }
+      if (mod && e.key === "/") { e.preventDefault(); setShortcutsOpen(o => !o); return }
+      // ⌘F only — ⌘⇧F is focus mode (handled by the note editor); without the
+      // shift guard both fire and the find input steals focus mid-toggle.
+      if (mod && !e.shiftKey && e.key === "f") {
+        if (viewRef.current === "dashboard") { e.preventDefault(); window.dispatchEvent(new CustomEvent("focus-dashboard-search")); return }
+        if (viewRef.current === "editor") { e.preventDefault(); window.dispatchEvent(new CustomEvent("open-note-find")); return }
+      }
       if (mod && e.key === "n" && !isInput) { e.preventDefault(); navigate("editor"); return }
       if (mod && e.shiftKey && e.key === "R" && viewRef.current === "editor") { e.preventDefault(); window.dispatchEvent(new CustomEvent("toggle-recording")); return }
       if (e.key === "Escape" && viewRef.current !== "dashboard" && !isInput) {
         if (viewRef.current === "editor" && recorderDirtyRef.current) { if (!window.confirm("You have unsaved changes. Leave anyway?")) return; recorderDirtyRef.current = false }
-        e.preventDefault(); navigate("dashboard"); return
+        e.preventDefault()
+        if (viewRef.current === "settings") { goBackFromSettings(); return }
+        navigate("dashboard"); return
       }
     }
     window.addEventListener("keydown", handler)
     return () => window.removeEventListener("keydown", handler)
-  }, [navigate])
+  }, [navigate, goBackFromSettings, openSettings])
 
   useEffect(() => {
     const handler = (e: Event) => { const detail = (e as CustomEvent).detail; if (detail.dirty !== undefined) recorderDirtyRef.current = detail.dirty }
@@ -183,21 +239,22 @@ export function App() {
   const handleDelete = useCallback((id: string) => {
     const meeting = meetingsRef.current.find(m => m.id === id); if (!meeting) return
     const updated = meetingsRef.current.filter(m => m.id !== id)
-    saveMeetings(updated); setMeetings(updated); setPendingDelete(meeting)
-    if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current)
-    deleteTimerRef.current = setTimeout(() => setPendingDelete(null), 5000)
+    saveMeetings(updated); setMeetings(updated)
+    toast(`"${meeting.title}" deleted`, {
+      id: "delete-meeting",
+      action: {
+        label: "Undo",
+        onClick: () => {
+          const restored = [meeting, ...meetingsRef.current]
+          saveMeetings(restored); setMeetings(restored)
+        },
+      },
+    })
 
     import("@/lib/context-memory").then(({ unindexMeeting }) => {
       unindexMeeting(id)
     })
   }, [])
-
-  const handleUndoDelete = useCallback(() => {
-    if (!pendingDelete) return
-    const restored = [pendingDelete, ...meetingsRef.current]
-    saveMeetings(restored); setMeetings(restored); setPendingDelete(null)
-    if (deleteTimerRef.current) { clearTimeout(deleteTimerRef.current); deleteTimerRef.current = null }
-  }, [pendingDelete])
 
   const handleUpdateMeeting = useCallback((id: string, patch: Partial<Meeting>) => {
     const updated = updateMeeting(id, patch); setMeetings(updated)
@@ -205,6 +262,17 @@ export function App() {
 
   const handleOpenNote = useCallback((note: Meeting) => {
     setEditorNote(note); navigate("editor", note.id)
+  }, [navigate])
+
+  // Dashboard "Import Audio": a fully-formed meeting arrives (transcript +
+  // notes already set); persist it and drop the user into the editor.
+  const handleImportMeeting = useCallback((meeting: Meeting) => {
+    const updated = [meeting, ...meetingsRef.current]
+    saveMeetings(updated); setMeetings(updated)
+    setEditorNote(meeting); navigate("editor", meeting.id)
+    import("@/lib/ai-service").then(({ indexMeetingInMemory }) => {
+      indexMeetingInMemory(meeting).catch(() => {})
+    })
   }, [navigate])
 
   const handleClearData = useCallback(() => setMeetings([]), [])
@@ -224,6 +292,21 @@ export function App() {
     return () => window.removeEventListener("navigate-meeting", handler)
   }, [navigate])
 
+  // Global quick-capture hotkey (⌘⇧N, registered in Rust): the window is
+  // already focused by the backend; we just open a fresh note. Never clobber
+  // an unsaved recording in progress.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let cancelled = false
+    listen("quick-capture", () => {
+      if (viewRef.current === "editor" && recorderDirtyRef.current) return
+      setEditorNote(undefined)
+      navigate("editor")
+    }).then((u) => { if (cancelled) u(); else unlisten = u })
+     .catch(() => { /* not running inside Tauri (plain vite dev) */ })
+    return () => { cancelled = true; unlisten?.() }
+  }, [navigate])
+
   return (
     <div className="h-screen overflow-hidden bg-muted/30">
       <ErrorBoundary>
@@ -233,13 +316,12 @@ export function App() {
             <main className="h-screen overflow-y-auto">
               <MeetingDashboard
                 meetings={meetings}
-                pendingDelete={pendingDelete}
-                onUndoDelete={handleUndoDelete}
                 onNewMeeting={() => { setEditorNote(undefined); navigate("editor") }}
+                onImportMeeting={handleImportMeeting}
                 onDeleteMeeting={handleDelete}
                 onUpdateMeeting={handleUpdateMeeting}
                 onViewMeeting={handleOpenNote}
-                onSettings={() => navigate("settings")}
+                onSettings={openSettings}
               />
             </main>
           </motion.div>
@@ -251,7 +333,7 @@ export function App() {
               meetings={meetings}
               onSave={handleSave}
               onCancel={goBack}
-              onSettings={() => navigate("settings")}
+              onSettings={openSettings}
               settings={settings}
             />
           </motion.div>
@@ -260,7 +342,7 @@ export function App() {
           <motion.div key="settings" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
             <main className="h-screen overflow-y-auto">
               <SettingsPage
-                onBack={goBack}
+                onBack={goBackFromSettings}
                 onClearData={handleClearData}
                 theme={settings.theme}
                 onThemeChange={handleThemeChange}
@@ -287,6 +369,16 @@ export function App() {
           onComplete={handleOnboardingComplete}
         />
       )}
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        meetings={meetings}
+        onOpenMeeting={handleOpenNote}
+        onNewNote={() => { setEditorNote(undefined); navigate("editor") }}
+        onOpenSettings={openSettings}
+      />
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+      <Toaster />
       </ErrorBoundary>
     </div>
   )

@@ -137,7 +137,7 @@ function cvc(word: string): boolean {
     !/[aeiouwxy]/.test(last)
 }
 
-function tokenize(text: string): string[] {
+export function tokenize(text: string): string[] {
   return text
     .toLowerCase()
     .replace(/'s\b/g, "")

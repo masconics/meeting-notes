@@ -1,10 +1,10 @@
 export const GLOBAL_SUGGESTED_QUESTIONS: string[] = [
   "What were the key decisions across all meetings?",
   "List all action items that are still open",
-  "What budget or pricing topics came up?",
+  "Mark the Q3 budget action item as resolved",
+  "Add the names from my last meeting to the dictionary",
   "Summarize all meetings from the last week",
   "What objections or risks were raised across meetings?",
-  "Who are the key people I've met with?",
 ]
 
 export const SPEAKER_TAILWIND_COLORS: string[] = [

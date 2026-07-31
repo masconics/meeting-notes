@@ -41,6 +41,16 @@
     --sidebar-ring: oklch(0.708 0 0);
     --highlight: oklch(0.852 0.199 91.936);
     --brand: oklch(0.623 0.214 259.815);
+    /* Syntax highlighting tokens (highlight.js) */
+    --code-keyword: oklch(0.52 0.2 15);
+    --code-string: oklch(0.44 0.1 255);
+    --code-number: oklch(0.47 0.12 250);
+    --code-title: oklch(0.53 0.19 300);
+    --code-class: oklch(0.52 0.13 55);
+    --code-attr: oklch(0.47 0.12 250);
+    --code-name: oklch(0.52 0.15 160);
+    --code-meta: oklch(0.52 0.2 15);
+    --code-comment: var(--muted-foreground);
 }
 
 .dark {
@@ -77,6 +87,16 @@
     --sidebar-ring: oklch(0.556 0 0);
     --highlight: oklch(0.852 0.199 91.936);
     --brand: oklch(0.707 0.165 254.624);
+    /* Syntax highlighting tokens (highlight.js) */
+    --code-keyword: oklch(0.72 0.18 15);
+    --code-string: oklch(0.8 0.1 235);
+    --code-number: oklch(0.78 0.12 235);
+    --code-title: oklch(0.78 0.13 305);
+    --code-class: oklch(0.8 0.12 60);
+    --code-attr: oklch(0.78 0.12 235);
+    --code-name: oklch(0.8 0.13 160);
+    --code-meta: oklch(0.72 0.18 15);
+    --code-comment: var(--muted-foreground);
 }
 
 @theme inline {
@@ -230,8 +250,16 @@
    reading experiences can never drift apart. Editor-only interaction
    styles (caret, placeholder, AI streaming, task checkboxes, table
    chrome) live in the "ProseMirror editor" block further down. */
-:is(.mdx-content, .pm-editor .ProseMirror) {
-  color: var(--foreground);
+/* In-note find (⌘F) match highlights — amber reads in both light and dark. */
+.pm-editor .ProseMirror .pm-find-match {
+  background: rgba(245, 197, 66, 0.32);
+  border-radius: 2px;
+}
+.pm-editor .ProseMirror .pm-find-match-active {
+  background: rgba(245, 160, 20, 0.55);
+}
+
+:is(.mdx-content, .pm-editor .ProseMirror) {  color: var(--foreground);
   font-size: 0.9375rem;
   line-height: 1.72;
   overflow-wrap: anywhere;
@@ -409,7 +437,7 @@
   margin: 1rem 0;
   padding: 0.8rem 1rem;
   border-left: 0.25rem solid var(--primary);
-  border-radius: 0 var(--radius-xl) var(--radius-xl) 0;
+  border-radius: 0 4px 4px 0;
   background: color-mix(in oklch, var(--primary) 8%, var(--background));
   color: var(--muted-foreground);
 }
@@ -430,7 +458,7 @@
 }
 
 :is(.mdx-content, .pm-editor .ProseMirror) code {
-  border-radius: 0.4rem;
+  border-radius: 0.25rem;
   background: var(--muted);
   padding: 0.12rem 0.38rem;
   color: var(--foreground);
@@ -443,7 +471,7 @@
   margin: 1rem 0;
   overflow-x: auto;
   border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-md);
   background:
     linear-gradient(180deg, color-mix(in oklch, var(--card) 92%, var(--muted)), var(--card));
   padding: 1rem;
@@ -478,11 +506,78 @@
   white-space: pre;
 }
 
+/* ── Syntax highlighting (highlight.js) ─────────────────────────────────
+   Token colors come from --code-* vars defined per theme above; applies to
+   both the marked read views and the editor's decoration plugin. */
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-comment,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-quote {
+  color: var(--code-comment);
+  font-style: italic;
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-keyword,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-selector-tag,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-template-tag,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-doctag {
+  color: var(--code-keyword);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-string,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-regexp {
+  color: var(--code-string);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-number,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-literal {
+  color: var(--code-number);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-title,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-title.function_,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-section {
+  color: var(--code-title);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-title.class_,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-type,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-built_in,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-builtin-name {
+  color: var(--code-class);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-attr,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-attribute,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-variable,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-template-variable,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-selector-attr {
+  color: var(--code-attr);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-name,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-tag,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-selector-id,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-selector-class {
+  color: var(--code-name);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-meta,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-symbol,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-bullet,
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-link {
+  color: var(--code-meta);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-addition {
+  color: var(--code-name);
+  background: color-mix(in oklch, var(--code-name) 10%, transparent);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-deletion {
+  color: var(--destructive);
+  background: color-mix(in oklch, var(--destructive) 10%, transparent);
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-emphasis {
+  font-style: italic;
+}
+:is(.mdx-content, .pm-editor .ProseMirror) .hljs-strong {
+  font-weight: 700;
+}
+
 .mdx-table-wrapper {
   margin: 1rem 0;
   overflow-x: auto;
   border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
 }
 
 :is(.mdx-content, .pm-editor .ProseMirror) table {
@@ -495,11 +590,21 @@
 
 :is(.mdx-content, .pm-editor .ProseMirror) th,
 :is(.mdx-content, .pm-editor .ProseMirror) td {
-  min-width: 8rem;
+  /* Slim cells: no forced 8rem columns — just enough minimum to keep empty
+     editor cells clickable, and compact padding for dense rows. */
+  min-width: 3rem;
   border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  padding: 0.625rem 0.75rem;
+  border-right: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  padding: 0.375rem 0.625rem;
   text-align: left;
   vertical-align: top;
+}
+
+/* The outer border lives on the wrapper/table chrome, so the last column
+   drops its right border to avoid a doubled edge. */
+:is(.mdx-content, .pm-editor .ProseMirror) th:last-child,
+:is(.mdx-content, .pm-editor .ProseMirror) td:last-child {
+  border-right: 0;
 }
 
 /* Header styling lives on th (not thead) because the editor's table
@@ -533,7 +638,7 @@
   height: auto;
   margin: 1.1rem auto;
   border: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
-  border-radius: var(--radius-2xl);
+  border-radius: var(--radius-md);
   object-fit: contain;
   box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 8%, transparent);
 }
@@ -586,7 +691,7 @@
 .mdx-brief ul,
 .mdx-brief ol { display: flex; flex-direction: column; gap: 0.15em; margin: 0.2em 0 0.5em; padding-left: 1.2em; }
 .mdx-brief li { margin: 0; }
-.mdx-brief blockquote { margin: 0.4em 0; padding: 0.3em 0.6em; border-left: 0.15em solid var(--primary); border-radius: 0 var(--radius-md) var(--radius-md) 0; background: color-mix(in oklch, var(--primary) 6%, var(--background)); }
+.mdx-brief blockquote { margin: 0.4em 0; padding: 0.3em 0.6em; border-left: 0.15em solid var(--primary); border-radius: 0 4px 4px 0; background: color-mix(in oklch, var(--primary) 6%, var(--background)); }
 .mdx-brief code { border-radius: 0.25em; background: var(--muted); padding: 0.05em 0.3em; font-size: 0.88em; }
 .mdx-brief hr { height: 1px; margin: 0.6em 0; border: 0; background: var(--border); }
 .mdx-brief a { color: var(--primary); text-decoration: underline; }
@@ -631,26 +736,26 @@
   height: 0;
   float: left;
 }
-.pm-editor .ProseMirror.pm-ai-writing {
-  caret-color: var(--primary);
+/* AI streaming ("Enhance" / selection edits) — the Notion-AI / Raycast
+   treatment. The freshly written range (.pm-ai-writing, an inline decoration)
+   shimmers with a gradient sheen clipped to the text itself; a comet caret
+   (.pm-ai-caret widget) rides the stream head; the native caret hides via the
+   .pm-ai-active root class so the comet is the only insertion point. When the
+   stream completes, the range flashes once (.pm-ai-settled) and fades instead
+   of snapping off. All decorations — no layout cost, document untouched. */
+.pm-editor .ProseMirror.pm-ai-active {
+  caret-color: transparent;
 }
-.pm-editor .ProseMirror.pm-ai-writing::after {
-  content: "";
-  display: inline-block;
-  width: 0.45rem;
-  height: 1em;
-  margin-left: 0.15rem;
-  border-radius: 999px;
-  background: var(--primary);
-  vertical-align: -0.15em;
-  animation: pm-ai-caret 0.85s ease-in-out infinite;
-}
-.pm-editor .ProseMirror .pm-ai-writing-block {
+.pm-editor .ProseMirror .pm-ai-writing {
+  /* The sweep needs real contrast to be visible: --primary is a neutral
+     gray in this theme, so a primary-based gradient shimmers imperceptibly.
+     --brand is the chromatic accent; the dimmed-foreground base makes the
+     accent band read as it passes. */
   background: linear-gradient(
     90deg,
-    color-mix(in oklch, var(--foreground) 70%, transparent),
-    var(--primary),
-    color-mix(in oklch, var(--foreground) 70%, transparent)
+    color-mix(in oklch, var(--foreground) 55%, transparent),
+    var(--brand),
+    color-mix(in oklch, var(--foreground) 55%, transparent)
   );
   background-size: 220% 100%;
   background-clip: text;
@@ -658,8 +763,58 @@
   color: transparent !important;
   animation: pm-ai-writing-sheen 1.4s ease-in-out infinite;
 }
-.pm-editor .ProseMirror .pm-ai-writing-block * {
+/* Nested marks (code, links, hljs tokens) must inherit the sheen, not fight
+   it with their own colors. */
+.pm-editor .ProseMirror .pm-ai-writing * {
   color: inherit !important;
+}
+/* A selection over the streaming range must not flatten the sheen: the global
+   ::selection sets an opaque foreground color (and a yellow highlight), which
+   would overpaint the transparent gradient glyphs. Keep the glyphs transparent
+   so the sheen keeps painting, and tint the highlight with the brand accent so
+   the range still reads as selected. */
+.pm-editor .ProseMirror .pm-ai-writing::selection,
+.pm-editor .ProseMirror .pm-ai-writing *::selection {
+  color: transparent;
+  background-color: color-mix(in oklch, var(--brand) 28%, transparent);
+}
+/* Same-block selections hide the native tint — .pm-ai-selected paints a
+   rounded, padded wash instead (::selection can do neither radius nor
+   padding). Cross-block selections keep the native tint above: pads on every
+   fragment there merge into a single slab and look broken. Equal specificity
+   to the rule above, so source order decides — this must stay after it. */
+.pm-editor .ProseMirror .pm-ai-selected::selection,
+.pm-editor .ProseMirror .pm-ai-selected *::selection {
+  background-color: transparent;
+}
+/* The rounded, padded selection wash over the sheen. A box-shadow spread fakes
+   the padding (zero layout shift — real padding would make the text jump when
+   the class toggles), border-radius rounds it, and box-decoration-break gives
+   each wrapped line its own rounded pad. */
+.pm-editor .ProseMirror .pm-ai-selected {
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--brand) 32%, transparent);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.pm-editor .ProseMirror .pm-ai-caret {
+  display: inline-block;
+  width: 0.45rem;
+  height: 1em;
+  margin-left: 0.15rem;
+  border-radius: 999px;
+  background: linear-gradient(
+    to bottom,
+    var(--brand),
+    color-mix(in oklch, var(--brand) 30%, transparent)
+  );
+  box-shadow: 0 0 8px color-mix(in oklch, var(--brand) 60%, transparent);
+  vertical-align: -0.15em;
+  animation: pm-ai-caret 0.85s ease-in-out infinite;
+}
+.pm-editor .ProseMirror .pm-ai-settled {
+  border-radius: 3px;
+  animation: pm-ai-settle 0.8s ease-out forwards;
 }
 @keyframes pm-ai-writing-sheen {
   from { background-position: 140% 0; }
@@ -668,6 +823,23 @@
 @keyframes pm-ai-caret {
   0%, 100% { opacity: 0.25; transform: scaleY(0.75); }
   50% { opacity: 1; transform: scaleY(1); }
+}
+@keyframes pm-ai-settle {
+  from { background-color: color-mix(in oklch, var(--brand) 16%, transparent); }
+  to { background-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pm-editor .ProseMirror .pm-ai-writing,
+  .pm-editor .ProseMirror .pm-ai-caret,
+  .pm-editor .ProseMirror .pm-ai-settled {
+    animation: none;
+  }
+  /* Without motion the sheen would freeze mid-gradient and could leave text
+     semi-transparent — fall back to plain readable text + a static caret. */
+  .pm-editor .ProseMirror .pm-ai-writing {
+    background: none;
+    color: inherit;
+  }
 }
 /* All content typography (headings, lists, tables, code, quotes…) comes
    from the shared "Note typography" block above — do not restyle those
@@ -710,7 +882,7 @@
 .pm-editor .ProseMirror table {
   margin: 1rem 0;
   border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
