@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react"
 import { listen } from "@tauri-apps/api/event"
-import { motion, AnimatePresence } from "framer-motion"
+import { motion, AnimatePresence, MotionConfig } from "framer-motion"
 import { MeetingDashboard } from "@/components/meeting-dashboard"
 import { NoteEditor } from "@/components/note-editor"
 import { SettingsPage } from "@/components/settings-page"
@@ -20,6 +20,7 @@ import {
   hydrateFromVault,
 } from "@/lib/storage"
 import { useTheme } from "@/lib/use-theme"
+import { pageTransition, pageVariants } from "@/lib/motion"
 import type { Meeting, AppSettings } from "@/types"
 
 type View = "dashboard" | "editor" | "settings"
@@ -39,12 +40,6 @@ function buildHash(view: View, meetingId?: string): string {
   if (view === "editor") return "editor"
   if (view === "settings") return "settings"
   return "dashboard"
-}
-
-const pageVariants = {
-  initial: { opacity: 0, y: 8, scale: 0.995 },
-  animate: { opacity: 1, y: 0, scale: 1 },
-  exit: { opacity: 0, y: -8, scale: 0.995 },
 }
 
 export function App() {
@@ -322,87 +317,104 @@ export function App() {
   }, [navigate])
 
   return (
-    <div className="h-screen overflow-hidden bg-muted/30">
-      <ErrorBoundary>
-      <AnimatePresence mode="wait">
-        {view === "dashboard" && (
-          <motion.div
-            key="dashboard"
-            variants={pageVariants}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-            transition={{ duration: 0.2, ease: "easeOut" }}
-            className="h-screen"
-          >
-            <main className="h-full min-h-0">
-              <MeetingDashboard
+    <MotionConfig reducedMotion="user">
+      <div className="h-screen overflow-hidden bg-muted/30">
+        <ErrorBoundary>
+        <AnimatePresence mode="wait">
+          {view === "dashboard" && (
+            <motion.div
+              key="dashboard"
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={pageTransition}
+              className="h-screen"
+            >
+              <main className="h-full min-h-0">
+                <MeetingDashboard
+                  meetings={meetings}
+                  onNewMeeting={() => { setEditorNote(undefined); navigate("editor") }}
+                  onImportMeeting={handleImportMeeting}
+                  onDeleteMeeting={handleDelete}
+                  onUpdateMeeting={handleUpdateMeeting}
+                  onViewMeeting={handleOpenNote}
+                  onSettings={openSettings}
+                />
+              </main>
+            </motion.div>
+          )}
+          {view === "editor" && (
+            <motion.div
+              key={editorNote?.id || "new"}
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={pageTransition}
+              className="h-full"
+            >
+              <NoteEditor
+                note={editorNote}
                 meetings={meetings}
-                onNewMeeting={() => { setEditorNote(undefined); navigate("editor") }}
-                onImportMeeting={handleImportMeeting}
-                onDeleteMeeting={handleDelete}
-                onUpdateMeeting={handleUpdateMeeting}
-                onViewMeeting={handleOpenNote}
+                onSave={handleSave}
+                onCancel={goBack}
                 onSettings={openSettings}
+                settings={settings}
               />
-            </main>
-          </motion.div>
+            </motion.div>
+          )}
+          {view === "settings" && (
+            <motion.div
+              key="settings"
+              variants={pageVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={pageTransition}
+            >
+              <main className="scroll-fade h-screen overflow-y-auto">
+                <SettingsPage
+                  onBack={goBackFromSettings}
+                  onClearData={handleClearData}
+                  theme={settings.theme}
+                  onThemeChange={handleThemeChange}
+                />
+              </main>
+            </motion.div>
+          )}
+        </AnimatePresence>
+        {confirmDialog && (
+          <ConfirmDialog
+            open={true}
+            onOpenChange={() => setConfirmDialog(null)}
+            onConfirm={confirmDialog.onConfirm}
+            title={confirmDialog.title}
+            message={confirmDialog.message}
+            confirmLabel="Leave"
+            cancelLabel="Stay"
+            variant={confirmDialog.variant ?? "destructive"}
+          />
         )}
-        {view === "editor" && (
-          <motion.div key={editorNote?.id || "new"} variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }} className="h-full">
-            <NoteEditor
-              note={editorNote}
-              meetings={meetings}
-              onSave={handleSave}
-              onCancel={goBack}
-              onSettings={openSettings}
-              settings={settings}
-            />
-          </motion.div>
+        {!onboardingComplete && (
+          <OnboardingWizard
+            open={true}
+            onComplete={handleOnboardingComplete}
+          />
         )}
-        {view === "settings" && (
-          <motion.div key="settings" variants={pageVariants} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.2, ease: "easeOut" }}>
-            <main className="scroll-fade h-screen overflow-y-auto">
-              <SettingsPage
-                onBack={goBackFromSettings}
-                onClearData={handleClearData}
-                theme={settings.theme}
-                onThemeChange={handleThemeChange}
-              />
-            </main>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      {confirmDialog && (
-        <ConfirmDialog
-          open={true}
-          onOpenChange={() => setConfirmDialog(null)}
-          onConfirm={confirmDialog.onConfirm}
-          title={confirmDialog.title}
-          message={confirmDialog.message}
-          confirmLabel="Leave"
-          cancelLabel="Stay"
-          variant={confirmDialog.variant ?? "destructive"}
+        <CommandPalette
+          open={paletteOpen}
+          onOpenChange={setPaletteOpen}
+          meetings={meetings}
+          onOpenMeeting={handleOpenNote}
+          onNewNote={() => { setEditorNote(undefined); navigate("editor") }}
+          onOpenSettings={openSettings}
         />
-      )}
-      {!onboardingComplete && (
-        <OnboardingWizard
-          open={true}
-          onComplete={handleOnboardingComplete}
-        />
-      )}
-      <CommandPalette
-        open={paletteOpen}
-        onOpenChange={setPaletteOpen}
-        meetings={meetings}
-        onOpenMeeting={handleOpenNote}
-        onNewNote={() => { setEditorNote(undefined); navigate("editor") }}
-        onOpenSettings={openSettings}
-      />
-      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
-      <Toaster />
-      </ErrorBoundary>
-    </div>
+        <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
+        <Toaster />
+        </ErrorBoundary>
+      </div>
+    </MotionConfig>
   )
 }
 

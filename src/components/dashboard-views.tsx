@@ -62,6 +62,7 @@ import {
 } from "@/lib/storage"
 import { relativeDate } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { CalendarEvent, Folder, KnowledgeItem, Meeting, Person } from "@/types"
 
 /** Theme-aligned accents (work in light + dark). */
@@ -893,30 +894,23 @@ export function ActionsInbox({
                 : `${openCount} open across your notes`}
           </p>
         </div>
-        <div className="app-control-strip shrink-0" role="tablist" aria-label="Action status">
-          <button
-            type="button"
-            role="tab"
-            className="app-control-item gap-1.5"
-            data-active={!showDone}
-            aria-selected={!showDone}
-            onClick={() => setShowDone(false)}
-          >
-            Open
-            <span className="tabular-nums text-[10px] opacity-70">{openCount}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            className="app-control-item gap-1.5"
-            data-active={showDone}
-            aria-selected={showDone}
-            onClick={() => setShowDone(true)}
-          >
-            Done
-            <span className="tabular-nums text-[10px] opacity-70">{doneCount}</span>
-          </button>
-        </div>
+        <Tabs
+          value={showDone ? "done" : "open"}
+          onValueChange={(v) => setShowDone(v === "done")}
+          variant="segment"
+          className="shrink-0"
+        >
+          <TabsList aria-label="Action status">
+            <TabsTrigger value="open">
+              Open
+              <span className="tabular-nums text-[10px] opacity-70">{openCount}</span>
+            </TabsTrigger>
+            <TabsTrigger value="done">
+              Done
+              <span className="tabular-nums text-[10px] opacity-70">{doneCount}</span>
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
       </header>
 
       {/* Toolbar — search + assignee chips */}
@@ -1047,7 +1041,7 @@ export function ActionsInbox({
                       <li
                         key={item.id}
                         className={cn(
-                          "actions-row group/row flex items-start gap-2.5 px-3 py-2.5 transition-colors hover:bg-muted/40",
+                          "actions-row group/row flex items-start gap-2.5 px-3 py-2.5 transition-[background-color,color] duration-150 ease-out hover:bg-muted/40",
                           idx > 0 && "border-t border-border/40",
                         )}
                       >
@@ -1303,7 +1297,7 @@ export function PeopleMemory({
                     aria-selected={active}
                     onClick={() => selectPerson(p.id)}
                     className={cn(
-                      "flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30",
+                      "flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-[color,background-color,transform] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:scale-[0.98]",
                       active ? "bg-muted text-foreground" : "hover:bg-muted/50",
                     )}
                   >

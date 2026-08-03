@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { AnimatePresence, motion } from "framer-motion"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { AlertCircleIcon, Cancel01Icon, CheckmarkCircle02Icon } from "@hugeicons/core-free-icons"
+import { toastVariants, transitions } from "@/lib/motion"
 
 export interface ToastOptions {
   /** Stable id replaces any existing toast with the same id (good for "one at a time" flows). */
@@ -84,15 +85,16 @@ export function Toaster() {
       aria-live="polite"
       className="pointer-events-none fixed bottom-4 left-1/2 z-[100] flex w-full max-w-sm -translate-x-1/2 flex-col items-center gap-2 px-4"
     >
-      <AnimatePresence>
+      <AnimatePresence initial={false}>
         {items.map(t => (
           <motion.div
             key={t.id}
             layout
-            initial={{ opacity: 0, y: 12, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 8, scale: 0.97 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
+            variants={toastVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={transitions.toast}
             role={t.variant === "error" ? "alert" : "status"}
             onMouseDown={(e) => e.preventDefault() /* keep editor selection when clicking actions */}
             className={`pointer-events-auto flex max-w-full items-center gap-2.5 rounded-xl border bg-card/95 px-3.5 py-2.5 shadow-xl backdrop-blur ${variantStyles[t.variant]}`}

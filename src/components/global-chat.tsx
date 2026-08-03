@@ -14,6 +14,12 @@ import {
   CheckmarkCircle02Icon,
 } from "@hugeicons/core-free-icons"
 import { motion, AnimatePresence } from "framer-motion"
+import {
+  drawerRightVariants,
+  messageVariants,
+  overlayVariants,
+  transitions,
+} from "@/lib/motion"
 import { streamGlobalChat } from "@/lib/ai-service"
 import { isAIConfigured } from "@/lib/ai-service"
 import { GLOBAL_SUGGESTED_QUESTIONS } from "@/lib/constants"
@@ -143,19 +149,21 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }
         <div>
           <motion.div
             key="global-chat-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
+            variants={overlayVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={transitions.overlay}
             className="fixed inset-0 z-40 bg-black/20 lg:hidden"
             onClick={onClose}
           />
           <motion.div
             key="global-chat-panel"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
+            variants={drawerRightVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={transitions.panel}
             className="fixed top-0 right-0 z-50 h-full w-[420px] max-w-[90vw] border-l bg-background flex flex-col shadow-xl"
         >
           <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
@@ -200,7 +208,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }
                     <button
                       key={q}
                       type="button"
-                      className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/30 hover:text-foreground transition-colors text-left"
+                      className="inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-1 text-left text-xs text-muted-foreground transition-[color,border-color,transform] duration-150 ease-out hover:border-primary/30 hover:text-foreground active:scale-[0.96]"
                       onClick={() => sendMessage(q)}
                     >
                       {q}
@@ -217,9 +225,10 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }
                       // Timestamps can collide (user msg + assistant placeholder
                       // are created in the same tick), so key by position.
                       key={i}
-                      initial={{ opacity: 0, y: 6 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.15 }}
+                      variants={messageVariants}
+                      initial="initial"
+                      animate="animate"
+                      transition={transitions.item}
                       className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
                     >
                       <div className="flex max-w-[90%] flex-col gap-1.5">

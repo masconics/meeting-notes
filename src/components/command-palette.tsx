@@ -4,6 +4,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { Calendar01Icon, FileAddIcon, Search01Icon, Settings02Icon } from "@hugeicons/core-free-icons"
 import type { Meeting } from "@/types"
 import { formatDuration } from "@/lib/format"
+import { overlayVariants, popoverVariants, transitions } from "@/lib/motion"
 
 interface PaletteItem {
   id: string
@@ -118,18 +119,20 @@ function PalettePanel({ meetings, onOpenMeeting, onNewNote, onOpenSettings, onCl
   return (
     <div className="fixed inset-0 z-[90]" role="dialog" aria-modal="true" aria-label="Command palette">
       <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        transition={{ duration: 0.12 }}
+        variants={overlayVariants}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        transition={transitions.overlay}
         className="absolute inset-0 bg-black/30 backdrop-blur-sm"
         onClick={onClose}
       />
       <motion.div
-        initial={{ opacity: 0, y: -8, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: -6, scale: 0.98 }}
-        transition={{ duration: 0.14, ease: "easeOut" }}
+        variants={popoverVariants}
+        initial="initial"
+        animate="animate"
+        exit="exit"
+        transition={transitions.pop}
         className="absolute left-1/2 top-[16vh] w-full max-w-lg -translate-x-1/2 px-4"
       >
         <div className="overflow-hidden rounded-2xl border border-border/70 bg-background shadow-2xl">
@@ -158,7 +161,7 @@ function PalettePanel({ meetings, onOpenMeeting, onNewNote, onOpenSettings, onCl
                   data-index={i}
                   onMouseEnter={() => setActiveIndex(i)}
                   onClick={() => { onClose(); item.run() }}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
+                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors duration-150 ease-out active:scale-[0.98] ${
                     i === activeIndex ? "bg-primary/10 text-foreground" : "text-foreground/80"
                   }`}
                 >

@@ -397,11 +397,12 @@
   }
 
   .app-control-item {
-    @apply inline-flex h-8 select-none items-center gap-1 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground;
+    /* Active fill is the sliding motion indicator (TabsTrigger layoutId). */
+    @apply inline-flex h-8 select-none items-center justify-center gap-1.5 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-[color,transform] duration-150 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:scale-[0.96];
   }
 
   .app-control-item[data-active="true"] {
-    @apply bg-background text-foreground shadow-sm;
+    @apply text-foreground;
   }
 
   /* ── Dashboard (Granola-inspired home) ───────────────────────────── */
@@ -423,11 +424,12 @@
   }
 
   .dashboard-nav-item {
-    @apply inline-flex h-8 select-none items-center rounded-full px-3.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground;
+    /* Active fill is the sliding motion indicator (TabsTrigger layoutId). */
+    @apply inline-flex h-8 select-none items-center justify-center gap-1.5 rounded-full px-3.5 text-sm font-medium text-muted-foreground transition-[color,transform] duration-150 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:scale-[0.96];
   }
 
   .dashboard-nav-item[data-active="true"] {
-    @apply bg-background text-foreground shadow-sm;
+    @apply text-foreground;
   }
 
   .dashboard-body {
@@ -468,11 +470,16 @@
   }
 
   .dashboard-note-row {
-    @apply flex cursor-pointer items-start gap-3 rounded-2xl border border-border/70 bg-card/40 px-3 py-3.5 outline-none transition-colors hover:border-border hover:bg-muted/45 focus-visible:ring-2 focus-visible:ring-ring;
+    @apply flex cursor-pointer items-start gap-3 rounded-2xl border border-border/70 bg-card/40 px-3 py-3.5 outline-none transition-[color,background-color,border-color,box-shadow,transform] duration-150 ease-out hover:border-border hover:bg-muted/45 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.995];
   }
 
   .dashboard-day-label + ul {
     @apply flex flex-col gap-2;
+  }
+
+  /* Soft press feedback for primary interactive rows */
+  .app-pressable {
+    @apply transition-transform duration-150 ease-out active:scale-[0.96];
   }
 
   .dashboard-empty {
@@ -1875,10 +1882,20 @@
   font-weight: 600;
 }
 
+/* Shared interactive motion tokens (pair with src/lib/motion.ts) */
+@theme inline {
+  --ease-out-motion: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in-motion: cubic-bezier(0.4, 0, 1, 1);
+  --duration-motion-micro: 120ms;
+  --duration-motion-fast: 150ms;
+  --duration-motion-base: 200ms;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

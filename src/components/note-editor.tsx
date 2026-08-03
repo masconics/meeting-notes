@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react"
 import { motion, AnimatePresence } from "framer-motion"
+import { messageVariants, transitions } from "@/lib/motion"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -36,6 +37,7 @@ import {
   ArrowDown01Icon,
 } from "@hugeicons/core-free-icons"
 import { toast } from "@/components/ui/toaster"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { copyRichText, exportMeetingMarkdown } from "@/lib/export"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
@@ -1245,8 +1247,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 initial={{ width: 0, opacity: 0 }}
                 animate={{ width: infoWidth, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}
-                transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
-                className="editor-col-info"
+                transition={transitions.width}
+                className="editor-col-info overflow-hidden"
                 aria-label="Meeting details"
               >
                 <EditorInfoSidebar
@@ -1358,27 +1360,20 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   {recorderState === "recording" && (
                     <>
                       <span className="editor-meta-sep" aria-hidden>·</span>
-                      <div className="app-control-strip" role="tablist" aria-label="Recording layout">
-                        {(
-                          [
-                            ["notes", "Notes"],
-                            ["split", "Split"],
-                            ["transcript", "Live"],
-                          ] as const
-                        ).map(([key, label]) => (
-                          <button
-                            key={key}
-                            type="button"
-                            role="tab"
-                            className="app-control-item h-7 px-2.5 text-xs"
-                            data-active={dualFocus === key}
-                            aria-selected={dualFocus === key}
-                            onClick={() => setDualFocus(key)}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
+                      <Tabs
+                        value={dualFocus}
+                        onValueChange={(v) =>
+                          setDualFocus(v as "notes" | "transcript" | "split")
+                        }
+                        variant="segment"
+                        size="sm"
+                      >
+                        <TabsList aria-label="Recording layout">
+                          <TabsTrigger value="notes">Notes</TabsTrigger>
+                          <TabsTrigger value="split">Split</TabsTrigger>
+                          <TabsTrigger value="transcript">Live</TabsTrigger>
+                        </TabsList>
+                      </Tabs>
                     </>
                   )}
                   {recorderState === "recording" && silenceSeconds > 30 && (
@@ -1554,8 +1549,8 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 initial={{ width: 0, opacity: 0.5 }}
                 animate={{ width: chatWidth, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}
-                transition={{ duration: 0.2, ease: [0.2, 0, 0, 1] }}
-                className="editor-col-chat"
+                transition={transitions.width}
+                className="editor-col-chat overflow-hidden"
                 aria-label="AI chat"
               >
                 <div
@@ -1615,8 +1610,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     {messages.map((msg, i) => {
                       const isLast = i === messages.length - 1
                       return (
-                        <div
+                        <motion.div
                           key={i}
+                          variants={messageVariants}
+                          initial="initial"
+                          animate="animate"
+                          transition={transitions.item}
                           className={cn(
                             "group flex flex-col gap-1",
                             msg.role === "user" ? "items-end" : "items-start",
@@ -1638,7 +1637,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                             <button
                               type="button"
                               onClick={() => copyMessage(msg.content, i)}
-                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 transition-colors hover:text-foreground"
+                              className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50 transition-colors duration-150 hover:text-foreground"
                             >
                               {copiedIdx === i ? (
                                 <span className="text-emerald-500">Copied</span>
@@ -1650,7 +1649,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                               )}
                             </button>
                           )}
-                        </div>
+                        </motion.div>
                       )
                     })}
                     {chatError && (

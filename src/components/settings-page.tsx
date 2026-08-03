@@ -190,7 +190,7 @@ function SettingsSidebar({
                   title={item.label}
                   aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-colors sm:justify-start",
+                    "flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-[color,background-color,transform] duration-150 ease-out active:scale-[0.96] sm:justify-start",
                     isActive
                       ? "bg-primary/10 font-medium text-primary"
                       : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",

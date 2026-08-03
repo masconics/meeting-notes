@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
+import { stepSlideVariants, transitions } from "@/lib/motion"
 import {
   Dialog,
   DialogContent,
@@ -46,12 +47,6 @@ import type { AISettings } from "@/types"
 import { AI_MODELS } from "@/types"
 
 const TOTAL_STEPS = 5
-
-const stepSlideVariants = {
-  enter: (dir: number) => ({ opacity: 0, x: dir > 0 ? 40 : -40, scale: 0.98 }),
-  center: { opacity: 1, x: 0, scale: 1 },
-  exit: (dir: number) => ({ opacity: 0, x: dir > 0 ? -40 : 40, scale: 0.98 }),
-}
 
 interface OnboardingWizardProps {
   open: boolean
@@ -289,9 +284,9 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
             {stepConfig.map((s) => (
               <button
                 key={s.dot}
-                className={`size-2.5 rounded-full transition-all duration-300 ${
+                className={`size-2.5 rounded-full transition-[background-color,transform] duration-200 ease-out ${
                   s.dot === step
-                    ? "bg-primary scale-125"
+                    ? "scale-125 bg-primary"
                     : s.dot < step
                       ? "bg-primary/30"
                       : "bg-muted-foreground/20"
@@ -325,7 +320,7 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
               initial="enter"
               animate="center"
               exit="exit"
-              transition={{ duration: 0.25, ease: "easeInOut" }}
+              transition={transitions.step}
             >
               {step === 0 && (
                 <div className="flex flex-col items-center text-center gap-4 py-2">

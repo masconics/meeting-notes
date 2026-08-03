@@ -40,11 +40,19 @@ import {
 } from "@hugeicons/core-free-icons"
 import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback, useRef, useEffect } from "react"
+import { AnimatePresence, motion } from "framer-motion"
 import { getTemplateById } from "@/lib/templates"
 import { loadKnowledgeGraph, loadSavedSearches, saveSavedSearches, saveSortPreference } from "@/lib/storage"
 import { toast } from "@/components/ui/toaster"
 import { GlobalChat } from "@/components/global-chat"
 import { MynaLogo } from "@/components/myna-logo"
+import {
+  listContainerVariants,
+  listItemVariants,
+  paneVariants,
+  transitions,
+} from "@/lib/motion"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   ActionsInbox,
   FolderChips,
@@ -400,27 +408,17 @@ export function MeetingDashboard({
             <MynaLogo className="size-6 text-foreground" title="Myna Notes" />
           </div>
 
-          <div className="dashboard-nav" role="tablist" aria-label="Dashboard views">
-            {(
-              [
-                { id: "notes" as const, label: "Notes" },
-                { id: "actions" as const, label: "Actions" },
-                { id: "people" as const, label: "People" },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                role="tab"
-                className="dashboard-nav-item"
-                data-active={pane === tab.id}
-                aria-selected={pane === tab.id}
-                onClick={() => setPane(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            value={pane}
+            onValueChange={(v) => setPane(v as DashboardPane)}
+            variant="pill"
+          >
+            <TabsList aria-label="Dashboard views">
+              <TabsTrigger value="notes">Notes</TabsTrigger>
+              <TabsTrigger value="actions">Actions</TabsTrigger>
+              <TabsTrigger value="people">People</TabsTrigger>
+            </TabsList>
+          </Tabs>
 
           <div className="flex items-center justify-end gap-1 sm:gap-1.5">
             <Button
@@ -467,20 +465,46 @@ export function MeetingDashboard({
       </header>
 
       <div className="dashboard-body">
-        {pane === "notes" && (
-          <UpcomingEvents
-            onStartFromEvent={(meeting) => {
-              onImportMeeting(meeting)
-            }}
-          />
-        )}
-
+        <AnimatePresence mode="wait" initial={false}>
         {pane === "actions" ? (
-          <ActionsInbox meetings={meetings} onOpenMeeting={onViewMeeting} />
+          <motion.div
+            key="actions"
+            variants={paneVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={transitions.enter}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <ActionsInbox meetings={meetings} onOpenMeeting={onViewMeeting} />
+          </motion.div>
         ) : pane === "people" ? (
-          <PeopleMemory meetings={meetings} onOpenMeeting={onViewMeeting} />
+          <motion.div
+            key="people"
+            variants={paneVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={transitions.enter}
+            className="flex min-h-0 flex-1 flex-col"
+          >
+            <PeopleMemory meetings={meetings} onOpenMeeting={onViewMeeting} />
+          </motion.div>
         ) : (
-          <>
+          <motion.div
+            key="notes"
+            variants={paneVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            transition={transitions.enter}
+            className="flex min-h-0 flex-1 flex-col gap-5"
+          >
+            <UpcomingEvents
+              onStartFromEvent={(meeting) => {
+                onImportMeeting(meeting)
+              }}
+            />
             {/* Search + filters — Linear-style: tags live in the toolbar, not a pill rail */}
             <div className="dashboard-filters">
               <div className="flex items-center gap-1.5">
@@ -699,11 +723,19 @@ export function MeetingDashboard({
                 </div>
               </div>
             ) : (
-              <div className="flex flex-col gap-6">
+              <div
+                className="flex flex-col gap-6"
+                key={`list-${folderFilter ?? "all"}`}
+              >
                 {meetingGroups.map((group) => (
                   <section key={group.label} className="flex flex-col gap-2">
                     <h2 className="dashboard-day-label">{group.label}</h2>
-                    <ul className="flex flex-col gap-2">
+                    <motion.ul
+                      className="flex flex-col gap-2"
+                      variants={listContainerVariants}
+                      initial="initial"
+                      animate="animate"
+                    >
                       {group.items.map((meeting) => {
                         const template = meeting.templateId
                           ? getTemplateById(meeting.templateId)
@@ -719,7 +751,12 @@ export function MeetingDashboard({
                           Boolean(meeting.description)
 
                         return (
-                          <li key={meeting.id}>
+                          <motion.li
+                            key={meeting.id}
+                            variants={listItemVariants}
+                            transition={transitions.item}
+                            layout={false}
+                          >
                             <div
                               role="button"
                               tabIndex={0}
@@ -901,7 +938,7 @@ export function MeetingDashboard({
                                   <Button
                                     variant="ghost"
                                     size="icon-xs"
-                                    className="opacity-0 transition-opacity group-hover:opacity-100"
+                                    className="opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100"
                                     title="Delete note"
                                     aria-label="Delete note"
                                     onClick={(e) => {
@@ -914,16 +951,17 @@ export function MeetingDashboard({
                                 )}
                               </div>
                             </div>
-                          </li>
+                          </motion.li>
                         )
                       })}
-                    </ul>
+                    </motion.ul>
                   </section>
                 ))}
               </div>
             )}
-          </>
+          </motion.div>
         )}
+        </AnimatePresence>
       </div>
 
       <Dialog open={!!deleteConfirm} onOpenChange={() => setDeleteConfirm(null)}>
