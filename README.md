@@ -4,6 +4,8 @@ Local meeting notes for macOS. Live transcription runs **on this Mac** (Apple Ne
 
 **Version:** 0.1.0
 
+![Myna Notes — meeting note with enhanced notes, action digest, and record controls](docs/images/myna-notes-note.webp)
+
 ## Why Myna Notes
 
 1. **Live captions** — mic, system audio (other side of a call), or both  
