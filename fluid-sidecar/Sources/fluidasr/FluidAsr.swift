@@ -473,6 +473,10 @@ struct FluidAsr {
         let noVad = args.contains("--no-vad")
         let stream = args.contains("--stream")
         let downloadOnly = args.contains("--download-only")
+        // Offline speaker diarization (pyannote Community-1 / VBx via FluidAudio).
+        // Optional --with-asr re-transcribes each segment for labeled captions.
+        let diarize = args.contains("--diarize")
+        let diarizeWithAsr = args.contains("--with-asr")
 
         let progressHandler: ProgressHandler = { progress in
             emitProgress(progress)
@@ -481,11 +485,21 @@ struct FluidAsr {
         if downloadOnly {
             do {
                 _ = try await AsrModels.download(version: useV2 ? .v2 : .v3, encoderPrecision: .int4, progressHandler: progressHandler)
+                // Also warm diarization models so first post-stop pass is fast.
+                if args.contains("--with-diarizer") {
+                    let mgr = OfflineDiarizerManager(config: .default)
+                    try await mgr.prepareModels()
+                }
                 emit("READY")
             } catch {
                 emit("FATAL\t\(error.localizedDescription)")
                 exit(1)
             }
+            return
+        }
+
+        if diarize {
+            await runDiarize(withAsr: diarizeWithAsr, useV2: useV2, noVad: noVad)
             return
         }
 
@@ -612,7 +626,171 @@ struct FluidAsr {
         return try AudioConverter().resampleAudioFile(url)
     }
 
+    // MARK: - Offline diarization
+
+    /// Wire format for OK\t JSON (no embeddings — too large for the pipe).
+    private struct DiarizeSegmentJSON: Encodable {
+        let speakerId: String
+        let start: Float
+        let end: Float
+        let quality: Float
+        let text: String?
+    }
+
+    private struct DiarizeResultJSON: Encodable {
+        let segments: [DiarizeSegmentJSON]
+        let speakers: [String]
+        /// Labeled transcript when --with-asr was requested.
+        let transcript: String?
+        let durationSeconds: Float
+    }
+
+    /// Batch offline diarization. stdin: one audio path per line (optional `lang\tpath`).
+    /// stdout: READY, then OK\t{json} / ERR\t… per path.
+    static func runDiarize(withAsr: Bool, useV2: Bool, noVad: Bool) async {
+        do {
+            let diarizer = OfflineDiarizerManager(config: .default)
+            try await diarizer.prepareModels()
+            sysLog("diarize: offline models ready")
+
+            var asr: AsrManager?
+            if withAsr {
+                let models = try await (useV2
+                    ? AsrModels.downloadAndLoad(version: .v2)
+                    : AsrModels.downloadAndLoad(version: .v3, encoderPrecision: .int4))
+                let mgr = AsrManager(config: .default)
+                try await mgr.loadModels(models)
+                asr = mgr
+                sysLog("diarize: ASR loaded for segment transcription")
+            }
+
+            let vad: VadManager? = (withAsr && !noVad) ? (try? await VadManager(config: .default)) : nil
+            emit("READY")
+
+            while let line = readLine(strippingNewline: true) {
+                let trimmed = line.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+                if trimmed.isEmpty { continue }
+                let parts = trimmed.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+                let (langCode, path): (String?, String) = parts.count == 2
+                    ? (String(parts[0]), String(parts[1]))
+                    : (nil, trimmed)
+                if path.isEmpty { continue }
+                let language = langCode.flatMap { Language(rawValue: $0) }
+
+                do {
+                    let url = URL(fileURLWithPath: path)
+                    guard FileManager.default.fileExists(atPath: path) else {
+                        emit("ERR\taudio file not found: \(path)")
+                        continue
+                    }
+
+                    // Duration from full resample (also used for segment ASR slices).
+                    let samples = try AudioConverter().resampleAudioFile(url)
+                    let duration = Float(samples.count) / 16_000.0
+                    emit("INFO\tduration=\(String(format: "%.1f", duration))")
+
+                    let result = try await diarizer.process(url)
+                    // Map speaker IDs to stable SPEAKER_00… order by first appearance.
+                    var speakerOrder: [String] = []
+                    var speakerIndex: [String: Int] = [:]
+                    for seg in result.segments {
+                        if speakerIndex[seg.speakerId] == nil {
+                            speakerIndex[seg.speakerId] = speakerOrder.count
+                            speakerOrder.append(seg.speakerId)
+                        }
+                    }
+
+                    var outSegs: [DiarizeSegmentJSON] = []
+                    var lines: [String] = []
+                    let minAsrSamples = Int(0.3 * 16_000)
+
+                    for seg in result.segments {
+                        let idx = speakerIndex[seg.speakerId] ?? 0
+                        let label = "Speaker \(idx + 1)"
+                        var text: String?
+                        if let asr {
+                            let start = max(0, Int(Double(seg.startTimeSeconds) * 16_000.0))
+                            let end = min(samples.count, Int(Double(seg.endTimeSeconds) * 16_000.0))
+                            if end - start >= minAsrSamples {
+                                var slice = Array(samples[start..<end])
+                                // Optional VAD trim on the slice.
+                                if let vad {
+                                    if let regions = try? await vad.segmentSpeechAudio(slice) {
+                                        let speech = regions.flatMap { $0 }
+                                        if speech.count >= minAsrSamples { slice = speech }
+                                    }
+                                }
+                                var decoderState = try TdtDecoderState()
+                                let tr = try await asr.transcribe(
+                                    slice, decoderState: &decoderState, language: language)
+                                let cleaned = tr.text
+                                    .replacingOccurrences(of: "\t", with: " ")
+                                    .replacingOccurrences(of: "\n", with: " ")
+                                    .trimmingCharacters(in: CharacterSet.whitespaces)
+                                if !cleaned.isEmpty {
+                                    text = cleaned
+                                    lines.append("\(label): \(cleaned)")
+                                }
+                            }
+                        }
+                        outSegs.append(DiarizeSegmentJSON(
+                            speakerId: label,
+                            start: seg.startTimeSeconds,
+                            end: seg.endTimeSeconds,
+                            quality: seg.qualityScore,
+                            text: text
+                        ))
+                    }
+
+                    let payload = DiarizeResultJSON(
+                        segments: outSegs,
+                        speakers: speakerOrder.enumerated().map { "Speaker \($0.offset + 1)" },
+                        transcript: withAsr ? lines.joined(separator: "\n") : nil,
+                        durationSeconds: duration
+                    )
+                    let data = try JSONEncoder().encode(payload)
+                    let json = String(data: data, encoding: .utf8) ?? "{}"
+                    emit("OK\t\(json)")
+                } catch {
+                    emit("ERR\t\(error.localizedDescription)")
+                }
+            }
+        } catch {
+            emit("FATAL\t\(error.localizedDescription)")
+            exit(1)
+        }
+    }
+
     // MARK: - Streaming mode
+
+    /// Thread-safe accumulator for 16 kHz mono samples (session dump for offline diarization).
+    private final class SessionAudioBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var samples: [Float] = []
+        private let maxSamples: Int
+        init(maxMinutes: Double = 180) {
+            // Cap memory: 16kHz * 60 * minutes floats (~3.8 MB/min).
+            self.maxSamples = Int(16_000 * 60 * maxMinutes)
+            samples.reserveCapacity(min(maxSamples, 16_000 * 60 * 10))
+        }
+        func append(_ chunk: [Float]) {
+            guard !chunk.isEmpty else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            if samples.count >= maxSamples { return }
+            let room = maxSamples - samples.count
+            if chunk.count <= room {
+                samples.append(contentsOf: chunk)
+            } else {
+                samples.append(contentsOf: chunk.prefix(room))
+            }
+        }
+        func snapshot() -> [Float] {
+            lock.lock()
+            defer { lock.unlock() }
+            return samples
+        }
+    }
 
     private struct StreamUpdate: Encodable {
         let source: String
@@ -758,6 +936,12 @@ struct FluidAsr {
             if let m = micMgr { updateTasks.append(relayUpdates(m, source: "mic")) }
             if let m = sysMgr { updateTasks.append(relayUpdates(m, source: "system")) }
 
+            // Session audio for post-stop offline diarization.
+            // Prefer system (remote speakers in a call); fall back to mic for rooms.
+            // In "both" mode we only buffer system so dual-channel Me/Them isn't mixed.
+            let sessionBuf = SessionAudioBuffer()
+            let bufferSource: String = systemActive ? "system" : "mic"
+
             // System audio capture (Core Audio process tap) feeds the system stream.
             // A single consumer keeps buffers in order. `stopSystem` tears it down.
             var stopSystem: (() -> Void)?
@@ -772,6 +956,7 @@ struct FluidAsr {
                         let gate = SpeechGate(vad: streamVad, sensitive: false)
                         let feed = Task {
                             for await samples in cap.samples {
+                                if bufferSource == "system" { sessionBuf.append(samples) }
                                 for chunk in await gate.push(samples) {
                                     if let buf = makeBuffer16k(chunk) { await m.streamAudio(buf) }
                                 }
@@ -802,6 +987,7 @@ struct FluidAsr {
                     let gate = SpeechGate(vad: streamVad, sensitive: true)
                     let feed = Task {
                         for await samples in cap.samples {
+                            if bufferSource == "mic" { sessionBuf.append(samples) }
                             for chunk in await gate.push(samples) {
                                 if let buf = makeBuffer16k(chunk) { await m.streamAudio(buf) }
                             }
@@ -845,6 +1031,23 @@ struct FluidAsr {
             }
             if let m = sysMgr {
                 emitState(source: "system", confirmed: await finalState(m), vol: "")
+            }
+
+            // Persist session audio for offline diarization (min ~2s of audio).
+            let dump = sessionBuf.snapshot()
+            if dump.count >= 16_000 * 2 {
+                do {
+                    let wav = try AudioWAV.data(from: dump, sampleRate: 16_000, normalize: false)
+                    let path = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("myna-session-\(UUID().uuidString).wav")
+                    try wav.write(to: path)
+                    emit("SESSION_WAV\t\(path.path)")
+                    sysLog("stream: wrote session wav \(dump.count) samples → \(path.path)")
+                } catch {
+                    sysLog("stream: session wav failed: \(error.localizedDescription)")
+                }
+            } else {
+                sysLog("stream: session audio too short for diarization (\(dump.count) samples)")
             }
             emit("DONE")
         } catch {

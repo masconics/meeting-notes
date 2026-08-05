@@ -43,6 +43,7 @@ import {
   CheckmarkBadge01Icon,
   RefreshIcon,
   Download01Icon,
+  FileImportIcon,
   Book02Icon,
   PenToolIcon,
   KeyboardIcon,
@@ -61,6 +62,7 @@ import {
   saveAISettings,
   saveApiKey,
   saveDictionary,
+  saveMeetings,
   saveSettings,
   saveSnippets,
   loadRecipes,
@@ -74,14 +76,31 @@ import { invoke } from "@tauri-apps/api/core"
 import { listen } from "@tauri-apps/api/event"
 import { testConnection } from "@/lib/ai-service"
 import { exportAllMeetings, exportAllMeetingsMarkdown } from "@/lib/export"
+import { pickAndImportMeetings, mergeImportedMeetings } from "@/lib/import-meetings"
 import type { AppSettings, AISettings, DictionaryEntry, Snippet, Recipe } from "@/types"
-import { SPEECH_LANGS, AI_MODELS, TRANSCRIPTION_MODELS, WRITING_STYLES, BUILTIN_RECIPES } from "@/types"
+import { SPEECH_LANGS, TRANSCRIPTION_MODELS, WRITING_STYLES, BUILTIN_RECIPES } from "@/types"
+import type { AIProviderId } from "@/types"
+import {
+  AI_PROVIDER_ORDER,
+  AI_PROVIDERS,
+  getProvider,
+  validateProviderApiKey,
+} from "@/lib/ai-providers"
+import {
+  clearTokenUsage,
+  formatTokenCount,
+  listTokenUsage,
+  providerLabel,
+  subscribeTokenUsage,
+  type ModelTokenUsage,
+} from "@/lib/token-usage"
 import { Textarea } from "@/components/ui/textarea"
 import { TemplateEditor } from "@/components/template-editor"
 import { Waveform } from "@/components/Waveform"
 import { cn } from "@/lib/utils"
 import { APP_NAME, APP_VERSION, APP_TAGLINE, APP_PRIVACY } from "@/lib/app-meta"
 import { MynaAppIcon } from "@/components/myna-logo"
+import { toast } from "@/components/ui/toaster"
 
 interface SettingsPageProps {
   onBack: () => void
@@ -173,11 +192,11 @@ function SettingsSidebar({
   micDenied: boolean
 }) {
   return (
-    <aside className="sticky top-5 w-11 shrink-0 self-start sm:w-44">
-      <nav className="flex flex-col gap-4" aria-label="Settings sections">
+    <aside className="mac-prefs-sidebar" aria-label="Settings sections">
+      <nav className="flex flex-col gap-4">
         {SECTION_GROUPS.map((group) => (
           <div key={group.label} className="flex flex-col gap-0.5">
-            <p className="hidden px-2.5 pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70 sm:block">
+            <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/70">
               {group.label}
             </p>
             {group.items.map((item) => {
@@ -190,16 +209,16 @@ function SettingsSidebar({
                   title={item.label}
                   aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-sm transition-[color,background-color,transform] duration-150 ease-out active:scale-[0.96] sm:justify-start",
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] transition-[color,background-color,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] will-change-transform hover:brightness-[1.02] active:scale-[0.96]",
                     isActive
-                      ? "bg-primary/10 font-medium text-primary"
-                      : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+                      ? "bg-primary font-medium text-primary-foreground"
+                      : "text-foreground/85 hover:bg-black/5 dark:hover:bg-white/8",
                   )}
                 >
-                  <HugeiconsIcon icon={item.icon} strokeWidth={2} className="size-4 shrink-0" />
-                  <span className="hidden truncate sm:inline">{item.label}</span>
+                  <HugeiconsIcon icon={item.icon} strokeWidth={2} className="size-3.5 shrink-0 opacity-90" />
+                  <span className="truncate">{item.label}</span>
                   {item.id === "audio" && micDenied && (
-                    <span className="ml-auto hidden size-1.5 shrink-0 rounded-full bg-amber-500 sm:inline" aria-label="Microphone permission needed" />
+                    <span className="ml-auto size-1.5 shrink-0 rounded-full bg-amber-500" aria-label="Microphone permission needed" />
                   )}
                 </button>
               )
@@ -598,12 +617,31 @@ export function SettingsPage({
     setMicTestLevel(0)
   }, [])
 
-  const validateApiKey = useCallback((key: string): string | null => {
-    if (!key) return null
-    if (!key.startsWith("sk-")) return "API key must start with 'sk-'"
-    if (key.length < 20) return "API key must be at least 20 characters"
-    return null
+  const validateApiKey = useCallback(
+    (key: string): string | null => validateProviderApiKey(aiSettings.provider, key),
+    [aiSettings.provider],
+  )
+
+  const activeProvider = getProvider(aiSettings.provider)
+  const [tokenUsage, setTokenUsage] = useState<ModelTokenUsage[]>(() => listTokenUsage())
+  useEffect(() => {
+    const refresh = () => setTokenUsage(listTokenUsage())
+    refresh()
+    return subscribeTokenUsage(refresh)
   }, [])
+  const usageTotals = useMemo(() => {
+    let prompt = 0
+    let completion = 0
+    let total = 0
+    let requests = 0
+    for (const row of tokenUsage) {
+      prompt += row.promptTokens
+      completion += row.completionTokens
+      total += row.totalTokens
+      requests += row.requestCount
+    }
+    return { prompt, completion, total, requests }
+  }, [tokenUsage])
 
   const update = useCallback(
     (patch: Partial<AppSettings>) => {
@@ -821,26 +859,34 @@ export function SettingsPage({
   const activeOperationLabel = modelOperation === "load" ? "Loading" : "Downloading"
 
   return (
-    <div className="app-page">
-      <div className="app-page-header flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon-sm" onClick={onBack} title="Back" aria-label="Back">
-          <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
-        </Button>
-        <div>
-          <h1 className="app-page-title">Settings</h1>
-          <p className="app-page-description">Configure audio, AI, templates, and appearance</p>
+    <div className="app-shell h-full">
+      <header data-tauri-drag-region className="app-topbar shrink-0">
+        <div className="app-topbar-inner">
+          <div className="mac-toolbar-start" data-no-drag>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={onBack}
+              title="Back"
+              aria-label="Back"
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+            >
+              <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
+            </Button>
+            <h1 className="app-page-title">Settings</h1>
+          </div>
+          <div className="mac-toolbar-center" />
+          <div className="mac-toolbar-end" data-no-drag />
         </div>
-        </div>
-      </div>
+      </header>
 
-      <div className="flex items-start gap-6">
+      <div className="mac-prefs-body">
         <SettingsSidebar
           active={activeSection}
           onSelect={setActiveSection}
           micDenied={micPermission === "denied"}
         />
-        <div className="flex min-w-0 flex-1 flex-col gap-3">
+        <div className="mac-prefs-detail flex flex-col gap-3">
       {micPermission === "denied" && (
         <Card size="sm" className={cn("border-destructive/30", activeSection !== "audio" && "hidden")}>
           <CardContent className="flex items-start gap-4 pt-4">
@@ -1356,59 +1402,128 @@ export function SettingsPage({
             AI Enhancement
           </CardTitle>
           <CardDescription>
-            Configure DeepSeek AI for note enhancement, quick actions, and meeting chat
+            Pick a provider for note enhancement, quick actions, and meeting chat.
+            Speech transcription stays on-device regardless of this setting.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium">Provider</label>
+            <Select
+              value={aiSettings.provider || "deepseek"}
+              onValueChange={(v) => {
+                const id = v as AIProviderId
+                const next = AI_PROVIDERS[id]
+                updateAI({
+                  provider: id,
+                  model: next.defaultModel,
+                  // Clear custom base when leaving custom; keep when entering ollama/custom defaults
+                  baseUrl:
+                    id === "custom"
+                      ? aiSettings.baseUrl || ""
+                      : id === "ollama"
+                        ? aiSettings.baseUrl || next.baseUrl
+                        : "",
+                })
+                setApiKeyError(null)
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select provider…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {AI_PROVIDER_ORDER.map((id) => (
+                    <SelectItem key={id} value={id}>
+                      {AI_PROVIDERS[id].label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{activeProvider.description}</p>
+          </div>
+
+          {(aiSettings.provider === "custom" ||
+            aiSettings.provider === "ollama" ||
+            Boolean(aiSettings.baseUrl)) && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium">
+                Base URL
+                {aiSettings.provider !== "custom" && aiSettings.provider !== "ollama"
+                  ? " (override)"
+                  : ""}
+              </label>
+              <Input
+                value={aiSettings.baseUrl || ""}
+                onChange={(e) => updateAI({ baseUrl: e.target.value })}
+                placeholder={
+                  activeProvider.baseUrl || "https://api.example.com/v1"
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                OpenAI-compatible root (…/v1) or full Anthropic host. Leave blank for provider default.
+              </p>
+            </div>
+          )}
+
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium">API Key</label>
             <Input
               type="password"
               value={aiSettings.apiKey}
               onChange={(e) => {
-                updateAI({ apiKey: e.target.value });
-                setApiKeyError(null);
+                updateAI({ apiKey: e.target.value })
+                setApiKeyError(null)
               }}
               onBlur={() => {
-                if (aiSettings.apiKey) setApiKeyError(validateApiKey(aiSettings.apiKey));
+                if (aiSettings.apiKey) setApiKeyError(validateApiKey(aiSettings.apiKey))
               }}
-              placeholder="sk-..."
+              placeholder={activeProvider.keyPlaceholder}
             />
             {apiKeyError && (
               <p className="text-xs text-destructive">{apiKeyError}</p>
             )}
             <p className="text-xs text-muted-foreground">
-              Get your key at{" "}
-              <a
-                href="https://platform.deepseek.com/api_keys"
-                target="_blank"
-                rel="noreferrer"
-                className="text-primary underline underline-offset-3"
-              >
-                platform.deepseek.com
-              </a>
+              {activeProvider.keyOptional
+                ? "Optional for this provider (local servers often need no key)."
+                : "Stored in the secure app vault on this Mac."}
+              {activeProvider.keyUrl ? (
+                <>
+                  {" "}
+                  Get a key at{" "}
+                  <a
+                    href={activeProvider.keyUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline underline-offset-3"
+                  >
+                    {activeProvider.keyUrl.replace(/^https?:\/\//, "").split("/")[0]}
+                  </a>
+                </>
+              ) : null}
             </p>
           </div>
 
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium">Model</label>
-            <Select
+            <Input
               value={aiSettings.model}
-              onValueChange={(v) => updateAI({ model: v })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select model..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {Object.entries(AI_MODELS).map(([code, name]) => (
-                    <SelectItem key={code} value={code}>
-                      {name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              onChange={(e) => updateAI({ model: e.target.value.trimStart() })}
+              onBlur={() => {
+                const m = aiSettings.model.trim()
+                if (m !== aiSettings.model) updateAI({ model: m })
+              }}
+              placeholder={activeProvider.defaultModel || "model-id"}
+              spellCheck={false}
+              autoComplete="off"
+              autoCapitalize="off"
+            />
+            <p className="text-xs text-muted-foreground">
+              Exact model id from your provider (e.g.{" "}
+              <code className="text-[10px]">{activeProvider.defaultModel}</code>
+              ). Paste whatever their docs list — no need to update the app for new models.
+            </p>
           </div>
 
           <div className="flex items-center justify-between">
@@ -1430,6 +1545,92 @@ export function SettingsPage({
                 }`}
               />
             </button>
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-muted/20 p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-sm font-medium">Token usage by model</p>
+                <p className="text-xs text-muted-foreground">
+                  Tracked locally from API responses (or estimated when the provider omits usage).
+                </p>
+              </div>
+              {tokenUsage.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 shrink-0 text-xs text-muted-foreground"
+                  onClick={() => {
+                    if (window.confirm("Clear all recorded token usage?")) {
+                      clearTokenUsage()
+                      setTokenUsage([])
+                    }
+                  }}
+                >
+                  Reset
+                </Button>
+              )}
+            </div>
+            {tokenUsage.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No usage yet. Run Enhance, chat, or Test Connection to start tracking.
+              </p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                  <span>
+                    Total <strong className="text-foreground">{formatTokenCount(usageTotals.total)}</strong>
+                  </span>
+                  <span>
+                    In {formatTokenCount(usageTotals.prompt)} · Out{" "}
+                    {formatTokenCount(usageTotals.completion)}
+                  </span>
+                  <span>
+                    {usageTotals.requests} request{usageTotals.requests === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="max-h-48 overflow-y-auto rounded-lg border border-border/50">
+                  <table className="w-full text-left text-xs">
+                    <thead className="sticky top-0 bg-muted/80 text-[10px] uppercase tracking-wide text-muted-foreground backdrop-blur">
+                      <tr>
+                        <th className="px-2 py-1.5 font-medium">Model</th>
+                        <th className="px-2 py-1.5 font-medium tabular-nums">In</th>
+                        <th className="px-2 py-1.5 font-medium tabular-nums">Out</th>
+                        <th className="px-2 py-1.5 font-medium tabular-nums">Total</th>
+                        <th className="px-2 py-1.5 font-medium tabular-nums">Reqs</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tokenUsage.map((row) => (
+                        <tr key={row.key} className="border-t border-border/40">
+                          <td className="max-w-[10rem] px-2 py-1.5">
+                            <div className="truncate font-medium" title={row.model}>
+                              {row.model}
+                            </div>
+                            <div className="truncate text-[10px] text-muted-foreground">
+                              {providerLabel(row.provider)}
+                              {row.estimated ? " · est." : ""}
+                            </div>
+                          </td>
+                          <td className="px-2 py-1.5 tabular-nums text-muted-foreground">
+                            {formatTokenCount(row.promptTokens)}
+                          </td>
+                          <td className="px-2 py-1.5 tabular-nums text-muted-foreground">
+                            {formatTokenCount(row.completionTokens)}
+                          </td>
+                          <td className="px-2 py-1.5 tabular-nums font-medium">
+                            {formatTokenCount(row.totalTokens)}
+                          </td>
+                          <td className="px-2 py-1.5 tabular-nums text-muted-foreground">
+                            {row.requestCount}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
 
           <div className="flex items-center justify-between">
@@ -1476,6 +1677,54 @@ export function SettingsPage({
 
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-0.5">
+              <span className="text-sm">Polish transcript on stop</span>
+              <span className="text-xs text-muted-foreground">
+                AI fixes names/jargon using your dictionary and attendees (your API key)
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.polishTranscriptOnStop !== false}
+              onClick={() =>
+                update({ polishTranscriptOnStop: !(settings.polishTranscriptOnStop !== false) })
+              }
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.polishTranscriptOnStop !== false ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.polishTranscriptOnStop !== false ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">Speaker diarization on stop</span>
+              <span className="text-xs text-muted-foreground">
+                FluidAudio offline diarization (local) — labels Speaker 1, 2… after recording or import
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.diarizeOnStop !== false}
+              onClick={() => update({ diarizeOnStop: !(settings.diarizeOnStop !== false) })}
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.diarizeOnStop !== false ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.diarizeOnStop !== false ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
               <span className="text-sm">Auto-tag on enhance</span>
               <span className="text-xs text-muted-foreground">
                 AI adds concept tags from notes (reuses existing tags when possible)
@@ -1502,7 +1751,10 @@ export function SettingsPage({
               variant="outline"
               size="sm"
               onClick={handleTestConnection}
-              disabled={testingConnection || !aiSettings.apiKey}
+              disabled={
+                testingConnection ||
+                (!aiSettings.apiKey && !activeProvider.keyOptional)
+              }
             >
               {testingConnection ? (
                 <>
@@ -1879,6 +2131,30 @@ export function SettingsPage({
               />
             </button>
           </div>
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <span className="text-sm">Call detect prompt</span>
+              <span className="text-xs text-muted-foreground">
+                When Zoom/Teams/etc. is open, gently ask to start notes (never auto-records)
+              </span>
+            </div>
+            <button
+              role="switch"
+              aria-checked={settings.callDetectEnabled !== false}
+              onClick={() =>
+                update({ callDetectEnabled: !(settings.callDetectEnabled !== false) })
+              }
+              className={`relative inline-flex h-6 w-10 shrink-0 items-center rounded-2xl ring-1 ring-border/70 transition-colors ${
+                settings.callDetectEnabled !== false ? "bg-primary" : "bg-muted"
+              }`}
+            >
+              <span
+                className={`inline-block size-4 rounded-[calc(var(--radius)+2px)] bg-background shadow-sm transition-transform ${
+                  settings.callDetectEnabled !== false ? "translate-x-5" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
         </CardContent>
       </Card>
 
@@ -2016,7 +2292,51 @@ export function SettingsPage({
               <HugeiconsIcon icon={Download01Icon} strokeWidth={2} data-icon="inline-start" />
               Export all (Markdown)
             </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={async () => {
+                try {
+                  const result = await pickAndImportMeetings()
+                  if (!result) return
+                  if (result.errors.length && result.meetings.length === 0) {
+                    toast.error("Import failed", { description: result.errors[0] })
+                    return
+                  }
+                  const existing = loadMeetings()
+                  const { meetings, added, skipped } = mergeImportedMeetings(
+                    existing,
+                    result.meetings,
+                    { forceNewIds: result.source === "granola" },
+                  )
+                  saveMeetings(meetings)
+                  setMeetingCount(meetings.length)
+                  toast.success(
+                    `Imported ${added} note${added === 1 ? "" : "s"}`,
+                    {
+                      description: [
+                        `Source: ${result.source}`,
+                        skipped ? `${skipped} skipped (duplicates)` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · "),
+                    },
+                  )
+                } catch (e) {
+                  toast.error("Import failed", {
+                    description: e instanceof Error ? e.message : "Could not read file",
+                  })
+                }
+              }}
+            >
+              <HugeiconsIcon icon={FileImportIcon} strokeWidth={2} data-icon="inline-start" />
+              Import notes (JSON/MD)
+            </Button>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Import supports Myna JSON exports, Granola-style JSON, and Markdown (split on{" "}
+            <code className="text-[10px]">---</code> or H1 headings).
+          </p>
           <AlertDialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
             <AlertDialogTrigger asChild>
               <Button variant="destructive" size="sm" disabled={meetingCount === 0}>

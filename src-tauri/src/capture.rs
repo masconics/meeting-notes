@@ -28,6 +28,12 @@ struct CaptureError {
     text: String,
 }
 
+/// Path to the session WAV written by the streaming sidecar for offline diarization.
+#[derive(Clone, Serialize)]
+struct SessionWav {
+    path: String,
+}
+
 #[derive(Clone, Serialize)]
 struct AudioLevel {
     rms: f32,
@@ -191,6 +197,14 @@ async fn run_stream_processor(
         }
         if t == "DONE" {
             break;
+        }
+        if let Some(path) = t.strip_prefix("SESSION_WAV\t") {
+            let path = path.trim().to_string();
+            if !path.is_empty() {
+                log::info!("session wav ready: {path}");
+                let _ = app.emit("session-wav", SessionWav { path });
+            }
+            continue;
         }
         if let Some(msg) = t
             .strip_prefix("FATAL\t")

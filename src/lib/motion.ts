@@ -69,6 +69,23 @@ export const stagger = {
 /** Scale used for press feedback. Never below 0.95. */
 export const pressScale = 0.96
 
+/**
+ * Micro-interactions for Framer Motion (buttons, chips, rows).
+ * Keep springs bounce: 0; durations ≤ 300ms.
+ */
+export const micro = {
+  /** Primary control press */
+  tap: { scale: pressScale } as const,
+  /** Soft press for large rows / cards */
+  tapSoft: { scale: 0.985 } as const,
+  /** Icon / compact control hover */
+  hover: { scale: 1.04 } as const,
+  /** Transition for hover + tap */
+  spring: { type: "spring", duration: duration.spring, bounce: 0 } as const satisfies Transition,
+  /** Snappier CSS-like ease for simple taps */
+  snap: { duration: duration.fast, ease: easings.out } as const satisfies Transition,
+} as const
+
 // ── Variants ──────────────────────────────────────────────────────────────
 
 /** Route / full-page view swap (dashboard ↔ editor ↔ settings). */

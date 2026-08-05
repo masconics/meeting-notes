@@ -6,18 +6,37 @@
 
 type StreamSource = "mic" | "system"
 
+export type ChannelLabels = { mic: string; system: string }
+
+const DEFAULT_LABELS: ChannelLabels = { mic: "Me", system: "Them" }
+
 interface StreamMerge {
   confirmed: Record<StreamSource, string>
   volatile: Record<StreamSource, string>
   lastSource: StreamSource | null
+  labels: ChannelLabels
 }
 
-export function newStreamMerge(): StreamMerge {
-  return { confirmed: { mic: "", system: "" }, volatile: { mic: "", system: "" }, lastSource: null }
+export function newStreamMerge(labels?: Partial<ChannelLabels>): StreamMerge {
+  return {
+    confirmed: { mic: "", system: "" },
+    volatile: { mic: "", system: "" },
+    lastSource: null,
+    labels: {
+      mic: labels?.mic?.trim() || DEFAULT_LABELS.mic,
+      system: labels?.system?.trim() || DEFAULT_LABELS.system,
+    },
+  }
 }
 
-function labelFor(source: StreamSource): string {
-  return source === "mic" ? "Me" : "Them"
+/** Update live channel names mid-session (e.g. after user renames Them → Priya). */
+export function setChannelLabels(state: StreamMerge, labels: Partial<ChannelLabels>): void {
+  if (labels.mic?.trim()) state.labels.mic = labels.mic.trim()
+  if (labels.system?.trim()) state.labels.system = labels.system.trim()
+}
+
+function labelFor(state: StreamMerge, source: StreamSource): string {
+  return source === "mic" ? state.labels.mic : state.labels.system
 }
 
 export function normalizeSource(s: string): StreamSource {
@@ -42,7 +61,7 @@ export function consumeConfirmed(
   if (!labeled) return delta
   const newSpeaker = state.lastSource !== source
   state.lastSource = source
-  return newSpeaker ? `\n${labelFor(source)}: ${delta.replace(/^\s+/, "")}` : delta
+  return newSpeaker ? `\n${labelFor(state, source)}: ${delta.replace(/^\s+/, "")}` : delta
 }
 
 // Mutates `state`. Returns the muted live-preview string (both tails in dual mode).
@@ -55,8 +74,8 @@ export function consumeVolatile(
   state.volatile[source] = vol.trim()
   if (!labeled) return state.volatile[source]
   const parts: string[] = []
-  if (state.volatile.mic) parts.push(`${labelFor("mic")}: ${state.volatile.mic}`)
-  if (state.volatile.system) parts.push(`${labelFor("system")}: ${state.volatile.system}`)
+  if (state.volatile.mic) parts.push(`${labelFor(state, "mic")}: ${state.volatile.mic}`)
+  if (state.volatile.system) parts.push(`${labelFor(state, "system")}: ${state.volatile.system}`)
   return parts.join("   ")
 }
 

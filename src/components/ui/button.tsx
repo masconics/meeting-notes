@@ -1,11 +1,13 @@
 import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 import { Slot } from "radix-ui"
+import { motion } from "framer-motion"
 
 import { cn } from "@/lib/utils"
+import { micro } from "@/lib/motion"
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-2xl border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-[color,background-color,box-shadow] duration-150 outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
       variant: {
@@ -39,24 +41,59 @@ const buttonVariants = cva(
   }
 )
 
+/** Omit React DnD handlers that clash with Framer Motion's gesture props. */
+type ButtonProps = Omit<
+  React.ComponentProps<"button">,
+  "onDrag" | "onDragStart" | "onDragEnd" | "onAnimationStart" | "onAnimationEnd"
+> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean
+  }
+
 function Button({
   className,
   variant = "default",
   size = "default",
   asChild = false,
+  disabled,
   ...props
-}: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & {
-    asChild?: boolean
-  }) {
-  const Comp = asChild ? Slot.Root : "button"
+}: ButtonProps) {
+  const classes = cn(buttonVariants({ variant, size, className }))
+
+  // Slot / menu triggers: plain element so Radix can merge refs/props.
+  if (asChild) {
+    const { ref, ...slotProps } = props as React.ComponentProps<"button">
+    return (
+      <Slot.Root
+        data-slot="button"
+        data-variant={variant}
+        data-size={size}
+        className={cn(classes, "transition-transform duration-150 active:scale-[0.96]")}
+        ref={ref}
+        {...slotProps}
+      />
+    )
+  }
+
+  const isIcon = size === "icon" || size === "icon-sm" || size === "icon-xs" || size === "icon-lg"
+  const isLink = variant === "link"
 
   return (
-    <Comp
+    <motion.button
       data-slot="button"
       data-variant={variant}
       data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={classes}
+      disabled={disabled}
+      whileHover={
+        disabled || isLink
+          ? undefined
+          : isIcon
+            ? micro.hover
+            : { scale: 1.015 }
+      }
+      whileTap={disabled || isLink ? undefined : micro.tap}
+      transition={micro.spring}
       {...props}
     />
   )

@@ -457,6 +457,189 @@ ${transcript.slice(0, 4000)}`
 }
 
 /**
+ * Mid-call catch-up: summarize the last few minutes so the user can rejoin.
+ * Returns markdown bullets prioritized by decisions / actions / open threads.
+ */
+export async function summarizeWhatDidIMiss(
+  recentTranscript: string,
+  opts?: { windowSecs?: number; signal?: AbortSignal },
+): Promise<string> {
+  const text = recentTranscript.trim()
+  if (!text) return "Nothing to catch up on yet — keep recording."
+
+  const mins = Math.max(1, Math.round((opts?.windowSecs ?? 180) / 60))
+  const prompt = `You are helping someone who zoned out for ~${mins} minutes of a live meeting.
+Summarize ONLY the recent transcript slice below so they can rejoin confidently.
+
+Rules:
+- 3–6 short bullets, priority order (decisions first, then actions, then open questions)
+- Name people when labels/names appear
+- Include concrete numbers, owners, deadlines if present
+- Do not invent content
+- Start with one bold one-liner of the main thread, then bullets
+- Markdown only
+
+RECENT TRANSCRIPT:
+${text.slice(0, 8000)}`
+
+  const response = await callDeepSeek(
+    [
+      {
+        role: "system",
+        content: withVocabulary(
+          "You produce ultra-concise mid-meeting catch-up summaries. Markdown only. No preamble.",
+        ),
+      },
+      { role: "user", content: prompt },
+    ],
+    { temperature: 0.3, maxTokens: 700, signal: opts?.signal },
+  )
+  return response.trim()
+}
+
+/**
+ * Post-meeting polish: fix names/jargon using dictionary + known people context.
+ * Does not restructure — spelling and label cleanup only.
+ */
+export async function polishTranscript(
+  transcript: string,
+  context: {
+    attendees?: string[]
+    speakers?: string[]
+    title?: string
+  },
+): Promise<string> {
+  const text = transcript.trim()
+  if (!text) return transcript
+
+  const known = [
+    ...(context.speakers ?? []),
+    ...(context.attendees ?? []),
+  ]
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+  const prompt = `Polish this meeting transcript for name and jargon accuracy only.
+
+Rules:
+- Fix misspellings of known people, products, and terms (use vocabulary + known names)
+- Keep speaker labels like "Me:", "Them:", or named labels — do not remove them
+- Do NOT summarize, reorder, or invent lines
+- Preserve approximate line breaks and turn structure
+- Return ONLY the polished transcript text
+
+MEETING TITLE: ${context.title || "(untitled)"}
+KNOWN NAMES: ${known.length ? known.join(", ") : "(none)"}
+
+TRANSCRIPT:
+${text.slice(0, 24000)}`
+
+  try {
+    const response = await callDeepSeek(
+      [
+        {
+          role: "system",
+          content: withVocabulary(
+            "You polish transcripts for name/jargon accuracy only. Output the full transcript text, nothing else.",
+          ),
+        },
+        { role: "user", content: prompt },
+      ],
+      { temperature: 0.2, maxTokens: 8192 },
+    )
+    const out = response.trim()
+    // Guard: reject empty or drastically shorter rewrites (model sometimes summarizes).
+    if (!out || out.length < text.length * 0.5) return transcript
+    return out
+  } catch {
+    return transcript
+  }
+}
+
+/**
+ * Topic-organized summary: decisions, blockers, next steps by theme.
+ * Used after enhance or as a standalone recipe-style pass.
+ */
+export async function generateTopicSummary(
+  notes: string,
+  transcript: string,
+  title?: string,
+): Promise<string> {
+  const body = [notes, transcript].filter((s) => s.trim()).join("\n\n").trim()
+  if (!body) return ""
+
+  const prompt = `Create a meeting summary organized by topic that a busy reader will actually finish.
+
+Structure (use these ## headings, omit empty ones):
+## Overview
+## Decisions
+## Blockers & risks
+## Next steps
+## Open questions
+
+Rules:
+- Bullet points under each section
+- Owners and deadlines when known
+- No invented facts
+- Prefer notes over transcript when they conflict
+
+TITLE: ${title || "(untitled)"}
+
+CONTENT:
+${body.slice(0, 16000)}`
+
+  const response = await callDeepSeek(
+    [
+      {
+        role: "system",
+        content: withVocabulary(
+          "You write topic-organized meeting summaries. Markdown only with the requested headings.",
+        ),
+      },
+      { role: "user", content: prompt },
+    ],
+    { temperature: 0.3, maxTokens: 2048 },
+  )
+  return response.trim()
+}
+
+/** Live helper: suggest smart questions to ask right now based on recent talk. */
+export async function suggestLiveQuestions(
+  recentTranscript: string,
+  signal?: AbortSignal,
+): Promise<string[]> {
+  const text = recentTranscript.trim()
+  if (!text) return []
+
+  const prompt = `Based on this LIVE meeting slice, suggest 3 short questions the user could ask right now to sound prepared and move the discussion forward. Under 70 chars each. Return ONLY a JSON array of strings.
+
+RECENT:
+${text.slice(0, 4000)}`
+
+  try {
+    const response = await callDeepSeek(
+      [
+        {
+          role: "system",
+          content:
+            "You suggest sharp live-meeting questions. Respond only with a JSON array of strings.",
+        },
+        { role: "user", content: prompt },
+      ],
+      { temperature: 0.5, maxTokens: 256, signal },
+    )
+    const raw: unknown = JSON.parse(cleanJsonResponse(response))
+    if (!Array.isArray(raw)) return []
+    return raw
+      .filter((q): q is string => typeof q === "string" && q.trim().length > 0)
+      .map((q) => q.trim())
+      .slice(0, 4)
+  } catch {
+    return []
+  }
+}
+
+/**
  * Suggest concept tags for a meeting. Prefers reusing existing tag names
  * so related meetings cluster; invents short new tags only when needed.
  * Returns 1–5 display names (not ids).
@@ -545,8 +728,13 @@ ${content.slice(0, 6000)}`
 }
 
 export async function indexMeetingInMemory(meeting: Meeting): Promise<string> {
+  const { indexMeeting, needsReindex, getMemoryEntry } = await import("@/lib/context-memory")
+  const existing = getMemoryEntry(meeting.id)
+  // Skip digest regeneration when content hash is unchanged (saves AI calls).
+  if (existing && !needsReindex(meeting, existing)) {
+    return existing.digest
+  }
   const digest = await generateMeetingDigest(meeting)
-  const { indexMeeting } = await import("@/lib/context-memory")
   indexMeeting(meeting, digest)
   return digest
 }
@@ -624,11 +812,27 @@ export async function* streamGlobalChat(
     meetingContext = buildMemoryContextBlock(related, meetings, 6000)
   }
 
+  // Explicit meeting index so the model can cite real ids.
+  const meetingIndex = meetings
+    .slice(0, 40)
+    .map((m) => {
+      const title = (m.title || "Untitled").replaceAll("[", "").replaceAll("]", "")
+      return `- [[meeting:${m.id}|${title}]] (${m.date?.slice(0, 10) || "?"})`
+    })
+    .join("\n")
+
+  const { CITATION_INSTRUCTION } = await import("@/lib/citations")
   const context = knowledgeContext || meetingContext
   const folderHint = opts?.folderId ? " Scope answers to the selected folder's meetings only." : ""
 
   const systemMsg = withVocabulary(`You are a helpful assistant with access to context from the user's past meetings.${folderHint} Answer questions based on this context. If the answer cannot be found in the meeting context, say so honestly. Be concise and specific. Use markdown formatting — headings, bullet points, tables, and bold for emphasis where appropriate.
 
+${CITATION_INSTRUCTION}
+
+MEETING INDEX (use these exact ids in citations):
+${meetingIndex || "(none)"}
+
+CONTEXT:
 ${context || "(no relevant meetings found)"}
 
 ACTIONS: When the user asks you to *change* something (not just answer), propose actions. Emit each action as its own fenced code block with the language tag "action", containing one JSON object:

@@ -14,6 +14,7 @@ const SNIPPETS_KEY = "meeting-notes-snippets"
 const FOLDERS_KEY = "meeting-notes-folders"
 const RECIPES_KEY = "meeting-notes-recipes"
 const PEOPLE_KEY = "meeting-notes-people"
+const TOKEN_USAGE_KEY = "meeting-notes-token-usage"
 
 const ALL_KEYS = [
   MEETINGS_KEY,
@@ -27,6 +28,7 @@ const ALL_KEYS = [
   FOLDERS_KEY,
   RECIPES_KEY,
   PEOPLE_KEY,
+  TOKEN_USAGE_KEY,
 ]
 
 export async function hydrateFromVault(): Promise<void> {
@@ -172,7 +174,18 @@ export function loadAISettings(): AISettings {
   try {
     const raw = localStorage.getItem(AI_SETTINGS_KEY)
     if (!raw) return { ...DEFAULT_AI_SETTINGS }
-    return { ...DEFAULT_AI_SETTINGS, ...JSON.parse(raw) }
+    const parsed = { ...DEFAULT_AI_SETTINGS, ...JSON.parse(raw) } as AISettings
+    // Migrate older installs that only stored model + key (DeepSeek-only).
+    if (!parsed.provider) parsed.provider = DEFAULT_AI_SETTINGS.provider
+    if (parsed.baseUrl === undefined || parsed.baseUrl === null) parsed.baseUrl = ""
+    // Map removed/legacy DeepSeek ids if present without a provider switch.
+    if (
+      parsed.provider === "deepseek" &&
+      (parsed.model === "deepseek-v4-pro" || parsed.model === "deepseek-v4-flash")
+    ) {
+      // Keep as-is — still valid on DeepSeek for many accounts.
+    }
+    return parsed
   } catch {
     return { ...DEFAULT_AI_SETTINGS }
   }
@@ -193,15 +206,30 @@ async function getSecureStore() {
 }
 
 export async function saveApiKey(apiKey: string): Promise<void> {
+  // Never fall back to unencrypted localStorage — fail closed.
   const store = await getSecureStore()
   await store.set(SECURE_API_KEY_KEY, apiKey)
+  // Scrub any legacy plaintext copy from older builds.
+  try {
+    localStorage.removeItem(SECURE_API_KEY_KEY)
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function loadApiKey(): Promise<string> {
   try {
     const store = await getSecureStore()
     const value = await store.get<string>(SECURE_API_KEY_KEY)
-    return value ?? ""
+    if (value) return value
+    // One-time migration: pull legacy localStorage key into secure store.
+    const legacy = localStorage.getItem(SECURE_API_KEY_KEY)
+    if (legacy) {
+      await store.set(SECURE_API_KEY_KEY, legacy)
+      localStorage.removeItem(SECURE_API_KEY_KEY)
+      return legacy
+    }
+    return ""
   } catch {
     return ""
   }
@@ -662,10 +690,19 @@ export async function writeMcpSnapshot(): Promise<void> {
         folderIds: m.folderIds ?? [],
         attendees: m.attendees ?? [],
         personIds: m.personIds ?? [],
+        speakerLabels: m.speakerLabels ?? [],
         transcriptPreview: (m.transcript || "").slice(0, 2000),
+        // Longer transcript for MCP get_transcript (still capped for snapshot size).
+        transcript: (m.transcript || "").slice(0, 50000),
       })),
       folders: loadFolders(),
-      people: loadPeople(),
+      people: loadPeople().map((p) => ({
+        id: p.id,
+        name: p.name,
+        aliases: p.aliases,
+        email: p.email,
+        meetingIds: p.meetingIds,
+      })),
       openActions: loadKnowledgeGraph().items.filter(
         (i) => i.kind === "action_item" && (i.status === "open" || i.status === "unknown"),
       ),

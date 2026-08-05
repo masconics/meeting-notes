@@ -24,6 +24,7 @@ import { streamGlobalChat } from "@/lib/ai-service"
 import { isAIConfigured } from "@/lib/ai-service"
 import { GLOBAL_SUGGESTED_QUESTIONS } from "@/lib/constants"
 import { applyChatAction, describeChatAction, parseChatActions, stripChatActions } from "@/lib/chat-actions"
+import { citationsToMarkdown, parseMeetingCitations } from "@/lib/citations"
 import { MarkdownView } from "@/components/markdown-view"
 import type { Meeting, ChatMessage } from "@/types"
 
@@ -32,10 +33,12 @@ interface GlobalChatProps {
   open: boolean
   onClose: () => void
   onOpenSettings?: () => void
+  /** Open a cited meeting in the editor. */
+  onOpenMeeting?: (meeting: Meeting) => void
   folderId?: string
 }
 
-export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }: GlobalChatProps) {
+export function GlobalChat({ meetings, open, onClose, onOpenSettings, onOpenMeeting, folderId }: GlobalChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState("")
   const [streaming, setStreaming] = useState(false)
@@ -164,25 +167,25 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }
             animate="animate"
             exit="exit"
             transition={transitions.panel}
-            className="fixed top-0 right-0 z-50 h-full w-[420px] max-w-[90vw] border-l bg-background flex flex-col shadow-xl"
+            className="mac-panel fixed top-0 right-0 z-50 h-full w-[400px] max-w-[90vw] shadow-2xl ring-1 ring-black/10 dark:ring-white/10"
         >
-          <div className="flex items-center justify-between px-4 py-3 border-b shrink-0">
-            <div className="flex items-center gap-2 min-w-0">
+          <div className="app-panel-header">
+            <div className="flex min-w-0 items-center gap-2">
               <span className="ai-mark shrink-0" data-ai={streaming ? "busy" : "active"}>
                 <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-3.5 text-white" />
               </span>
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium">
+                <p className="app-panel-title truncate">
                   <span className="ai-label" data-ai={streaming ? "busy" : "idle"}>
-                    Ask about all meetings
+                    Ask All Notes
                   </span>
                 </p>
-                <p className="text-xs text-muted-foreground">
-                  {meetings.length} meeting{meetings.length !== 1 ? "s" : ""}
+                <p className="app-panel-meta">
+                  {meetings.length} note{meetings.length !== 1 ? "s" : ""}
                 </p>
               </div>
             </div>
-            <Button variant="ghost" size="icon-sm" onClick={onClose} title="Close">
+            <Button variant="ghost" size="icon-sm" onClick={onClose} title="Close" className="text-muted-foreground hover:text-foreground">
               <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
             </Button>
           </div>
@@ -244,7 +247,9 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }
                           ) : (
                             <div>
                               {msg.content ? (
-                                <MarkdownView markdown={stripChatActions(msg.content)} />
+                                <MarkdownView
+                                  markdown={citationsToMarkdown(stripChatActions(msg.content))}
+                                />
                               ) : streaming && i === messages.length - 1 ? (
                                 <span className="inline-flex items-center gap-1 text-muted-foreground">
                                   <span className="inline-flex gap-0.5">
@@ -257,6 +262,37 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }
                             </div>
                           )}
                         </div>
+                        {msg.role === "assistant" && msg.content && !streaming && (() => {
+                          const cites = parseMeetingCitations(msg.content)
+                          if (cites.length === 0) return null
+                          return (
+                            <div className="flex flex-wrap gap-1">
+                              {cites.map((c) => {
+                                const meeting = meetings.find((m) => m.id === c.meetingId)
+                                const label = meeting?.title || c.title
+                                return (
+                                  <button
+                                    key={c.meetingId}
+                                    type="button"
+                                    className="inline-flex max-w-full items-center gap-1 truncate rounded-full border border-border/60 bg-card px-2 py-0.5 text-[10px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                                    title={label}
+                                    onClick={() => {
+                                      if (meeting && onOpenMeeting) {
+                                        onOpenMeeting(meeting)
+                                        onClose()
+                                      } else {
+                                        window.location.hash = `#editor/${c.meetingId}`
+                                        onClose()
+                                      }
+                                    }}
+                                  >
+                                    <span className="truncate">{label}</span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          )
+                        })()}
                         {actions.length > 0 && (
                           <div className="flex flex-col gap-1.5">
                             {actions.map((action, ai) => {
@@ -317,7 +353,7 @@ export function GlobalChat({ meetings, open, onClose, onOpenSettings, folderId }
             )}
           </div>
 
-          <div className="border-t px-3 py-2.5 shrink-0">
+          <div className="shrink-0 px-3 py-2.5">
             <div className="flex items-end gap-1.5">
               <Textarea
                 ref={inputRef}

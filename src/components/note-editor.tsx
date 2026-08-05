@@ -35,19 +35,20 @@ import {
   PauseIcon,
   PlayIcon,
   ArrowDown01Icon,
+  FlashIcon,
 } from "@hugeicons/core-free-icons"
 import { toast } from "@/components/ui/toaster"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { copyRichText, exportMeetingMarkdown } from "@/lib/export"
 import { useAudioDevices } from "@/lib/use-audio-devices"
 import { MeetingTemplateSelector } from "@/components/meeting-template-selector"
-import { TemplateIcon } from "@/components/template-icon"
 import { NoteRenderer } from "@/components/note-renderer"
 import { MarkdownView } from "@/components/markdown-view"
 import { EditorInfoSidebar } from "@/components/editor-info-sidebar"
 import { EditorArtifacts, ARTIFACT_RECIPE_IDS } from "@/components/editor-artifacts"
 import { buildSidebarPeople } from "@/lib/sidebar-people"
 import { Waveform } from "@/components/Waveform"
+import { LiveAssistPanel } from "@/components/live-assist-panel"
 import { useRecording } from "@/lib/use-recording"
 import { saveTemplate as persistTemplate } from "@/lib/templates"
 import { useChat } from "@/lib/use-chat"
@@ -57,6 +58,12 @@ import { SPEAKER_TAILWIND_COLORS } from "@/lib/constants"
 import type { Meeting, AppSettings, MeetingTemplate, ChatMessage, SpeakerLabel, Recipe } from "@/types"
 import { findRelatedMeetings } from "@/lib/context-memory"
 import { correctWithSavedDictionary } from "@/lib/dictionary"
+import {
+  applySpeakerRename,
+  channelLabelMap,
+  mergeSpeakerNames,
+  seedSpeakersFromAttendees,
+} from "@/lib/speakers"
 import { replaceKnowledgeForMeeting, loadKnowledgeGraph, addKnowledgeEdges, loadRecipes, updateMeeting as persistMeetingFields, linkPeopleFromMeeting, loadPeople, updateKnowledgeItem } from "@/lib/storage"
 import { shareViaEmail, shareExportToFolder, shareViaSlack } from "@/lib/share"
 import { getPrepContext } from "@/lib/meeting-brief"
@@ -134,16 +141,23 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const [folderIds, setFolderIds] = useState<string[]>(() => note?.folderIds ?? [])
   const folderIdsRef = useRef(folderIds)
   useEffect(() => { folderIdsRef.current = folderIds }, [folderIds])
+  // Keep local tag state aligned when the open note changes (dashboard → editor).
   useEffect(() => {
-    setFolderIds(note?.folderIds ?? [])
+    const next = note?.folderIds ?? []
+    const t = window.setTimeout(() => setFolderIds(next), 0)
+    return () => window.clearTimeout(t)
   }, [note?.id, note?.folderIds])
   const [dualFocus, setDualFocus] = useState<"notes" | "transcript" | "split">("split")
   const [recipeOutputs, setRecipeOutputs] = useState<Record<string, string>>(note?.recipeOutputs ?? {})
-  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(() => {
-    const outs = note?.recipeOutputs ?? {}
-    return ARTIFACT_RECIPE_IDS.find((id) => outs[id]?.trim()) ?? null
-  })
+  // Collapsed by default — artifacts are post-edit appendix, not part of writing chrome.
+  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null)
   const [runningRecipeId, setRunningRecipeId] = useState<string | null>(null)
+  const [liveAssistOpen, setLiveAssistOpen] = useState(false)
+  /** Session WAV from fluidasr stream dump — used for post-stop diarization. */
+  const sessionWavRef = useRef<string | null>(null)
+  const [transcriptSegments, setTranscriptSegments] = useState<
+    { speakerIndex: number; text: string }[] | undefined
+  >(note?.transcriptSegments)
   /** Bumps after enhance so open loops re-read the knowledge graph. */
   const [prepTick, setPrepTick] = useState(0)
   const manualNotesRef = useRef(manualNotes)
@@ -214,6 +228,14 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   }, [])
 
   const onSilenceLimit = useCallback(() => setRecorderState("idle"), [])
+  const liveChannelLabels = useMemo(
+    () =>
+      channelLabelMap({
+        speakers: speakerLabels,
+        attendees: note?.attendees,
+      }),
+    [speakerLabels, note?.attendees],
+  )
   const {
     audioLevel,
     isSpeaking,
@@ -225,10 +247,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     resume: resumeCapture,
     abort: abortCapture,
     prewarm: prewarmCapture,
+    updateChannelLabels,
   } = useRecording({
     audioSource,
     speechLang: settings.speechLang,
     transcriptionModel: settings.transcriptionModel,
+    channelLabels: liveChannelLabels,
     setText: setNotes,
     getText: () => notesRef.current,
     onError: toast.error,
@@ -236,12 +260,45 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     onSilenceLimit,
   })
 
+  // Seed speaker list from calendar attendees once for this note (idle only).
+  useEffect(() => {
+    if (!note?.attendees?.length) return
+    if (speakerLabels.length > 0) return
+    const seeded = seedSpeakersFromAttendees(note.attendees, [])
+    if (seeded.length === 0) return
+    // Defer so we don't set state synchronously inside the effect body path
+    // that eslint flags as cascading renders during mount.
+    const t = window.setTimeout(() => {
+      setSpeakerLabels((prev) => (prev.length > 0 ? prev : seeded))
+    }, 0)
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- seed once per note when empty
+  }, [note?.id])
+
   // Pre-load the ASR model in a parked sidecar as soon as the editor opens (and
   // whenever the source/model choice changes), so pressing record starts
   // capturing immediately instead of waiting through the model load.
   useEffect(() => {
     prewarmCapture()
   }, [prewarmCapture])
+
+  // Streaming sidecar writes a session WAV on stop for offline diarization.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined
+    let cancelled = false
+    import("@tauri-apps/api/event").then(({ listen }) => {
+      listen<{ path: string }>("session-wav", (e) => {
+        if (e.payload?.path) sessionWavRef.current = e.payload.path
+      }).then((u) => {
+        if (cancelled) u()
+        else unlisten = u
+      }).catch(() => {})
+    })
+    return () => {
+      cancelled = true
+      unlisten?.()
+    }
+  }, [])
 
   const relatedMeetings = useMemo(() => {
     if (!note) return []
@@ -323,13 +380,33 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
   const startRecording = useCallback(async () => {
     setIsPaused(false)
+    setLiveAssistOpen(false)
+    sessionWavRef.current = null
+    // Ensure dual-channel Me/Them (or attendee names) exist so rename UI works.
+    if (audioSource === "both") {
+      setSpeakerLabels((prev) => {
+        if (prev.length > 0) return prev
+        const map = channelLabelMap({
+          speakers: prev,
+          attendees: note?.attendees,
+        })
+        return mergeSpeakerNames(
+          [
+            { name: map.mic, color: SPEAKER_TAILWIND_COLORS[0] },
+            { name: map.system, color: SPEAKER_TAILWIND_COLORS[1] },
+          ],
+          [],
+          note?.attendees,
+        )
+      })
+    }
     try {
       await startCapture()
       setRecorderState("recording")
     } catch {
       // useRecording already surfaced the error via onError.
     }
-  }, [startCapture])
+  }, [startCapture, audioSource, note?.attendees])
 
   const pauseRecording = useCallback(async () => {
     setIsPaused(true)
@@ -346,36 +423,65 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   }, [resumeCapture])
 
   const autoDetectSpeakers = useCallback(async (transcript: string): Promise<SpeakerLabel[]> => {
-    if (speakerLabels.length > 0) return speakerLabels
     try {
       const { detectSpeakers, isAIConfigured } = await import("@/lib/ai-service")
-      if (!isAIConfigured()) return []
-      const names = await detectSpeakers(transcript)
-      if (names.length === 0) return []
-      const newLabels = names.map((name, i) => ({
-        name,
-        color: SPEAKER_TAILWIND_COLORS[i % SPEAKER_TAILWIND_COLORS.length],
-      }))
+      let detected: string[] = []
+      if (isAIConfigured()) {
+        detected = await detectSpeakers(transcript)
+      }
+      let merged: SpeakerLabel[] = []
       setSpeakerLabels((prev) => {
-        const existing = new Set(prev.map((s) => s.name.toLowerCase()))
-        const extra = newLabels.filter((s) => !existing.has(s.name.toLowerCase()))
-        return extra.length === 0 ? prev : [...prev, ...extra]
+        merged = mergeSpeakerNames(prev, detected, note?.attendees)
+        return merged
       })
-      return newLabels
+      return merged
     } catch {
-      return []
+      return speakerLabels
     }
-  }, [speakerLabels])
+  }, [speakerLabels, note?.attendees])
+
+  const handleRenameSpeaker = useCallback(
+    (index: number, newName: string) => {
+      const old = speakerLabels[index]
+      if (!old) return
+      const result = applySpeakerRename({
+        oldName: old.name,
+        newName,
+        transcript: rawTranscript || notesRef.current,
+        notes: notesRef.current,
+        speakers: speakerLabels,
+      })
+      setSpeakerLabels(result.speakers)
+      setNotes(result.notes)
+      notesRef.current = result.notes
+      setRawTranscript(result.transcript)
+      // Live dual-channel: if they renamed Me/Them, update stream labels.
+      if (/^me$/i.test(old.name)) updateChannelLabels({ mic: newName })
+      if (/^them$/i.test(old.name)) updateChannelLabels({ system: newName })
+      toast.success(`Renamed to ${newName.trim()}`, {
+        description: "Applied across this transcript",
+      })
+    },
+    [speakerLabels, rawTranscript, updateChannelLabels],
+  )
 
   const stopRecording = useCallback(async () => {
     setRecorderState("idle")
     setIsPaused(false)
     setIsTranscribing(true)
+    setLiveAssistOpen(false)
     autoEnhanceRanRef.current = false
     pendingAutoEnhanceRef.current = true
 
     try {
       await stopCapture(800)
+      // SESSION_WAV is emitted after the sidecar finishes ASR flush — may land
+      // slightly after the 800ms flush wait. Poll briefly before diarizing.
+      if (settings.diarizeOnStop !== false && !sessionWavRef.current) {
+        for (let i = 0; i < 40 && !sessionWavRef.current; i++) {
+          await new Promise((r) => setTimeout(r, 100))
+        }
+      }
 
       // Live captions land in `notes` during recording; treat that as the
       // transcript. User shorthand lives in `manualNotes` and is merged on Enhance.
@@ -384,24 +490,43 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         setPreviousNotes(notesRef.current)
         // Protect People + this meeting's attendees/speakers so e.g. "Christy"
         // is not force-rewritten to "Christian" when both are real names.
-        const corrected = correctWithSavedDictionary(content, {
+        let corrected = correctWithSavedDictionary(content, {
           protectNames: [
             ...(note?.attendees?.map((a) => a.name) ?? []),
             ...speakerLabels.map((s) => s.name),
           ],
         })
+
+        const { isAIConfigured, polishTranscript, generateTitle } = await import("@/lib/ai-service")
+        if (settings.polishTranscriptOnStop !== false && isAIConfigured()) {
+          try {
+            corrected = await polishTranscript(corrected, {
+              title: titleRef.current,
+              attendees: note?.attendees?.map((a) => a.name),
+              speakers: speakerLabels.map((s) => s.name),
+            })
+            // Dictionary pass again after model polish.
+            corrected = correctWithSavedDictionary(corrected, {
+              protectNames: [
+                ...(note?.attendees?.map((a) => a.name) ?? []),
+                ...speakerLabels.map((s) => s.name),
+              ],
+            })
+          } catch {
+            /* polish is best-effort */
+          }
+        }
+
         if (corrected !== content) {
           setNotes(corrected)
           notesRef.current = corrected
         }
         setRawTranscript(corrected)
 
-        const { isAIConfigured } = await import("@/lib/ai-service")
         if (isAIConfigured()) {
           try {
             const defaultTitle = titleRef.current.trim() === "" || titleRef.current === settings.titlePrefix
             if (defaultTitle) {
-              const { generateTitle } = await import("@/lib/ai-service")
               const seed = `${manualNotesRef.current}\n${corrected}`.trim()
               const autoTitle = await generateTitle(seed, corrected)
               if (autoTitle) setTitle(autoTitle)
@@ -409,11 +534,61 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           } catch { /* ignore title generation failure */ }
         }
         autoDetectSpeakers(corrected)
+
+        // FluidAudio offline diarization on the session WAV (when available).
+        if (settings.diarizeOnStop !== false && sessionWavRef.current) {
+          try {
+            toast("Identifying speakers…", { id: "diarize", duration: 0 })
+            const { diarizeAudioFile, speakersFromDiarize, transcriptSegmentsFromDiarize } =
+              await import("@/lib/diarize")
+            const language =
+              settings.speechLang === "auto" ? null : settings.speechLang || null
+            const diarize = await diarizeAudioFile(sessionWavRef.current, {
+              language,
+              withAsr: true,
+            })
+            const labeled = (diarize.transcript ?? "").trim()
+            if (labeled) {
+              setPreviousNotes(notesRef.current)
+              setNotes(labeled)
+              notesRef.current = labeled
+              setRawTranscript(labeled)
+              setSpeakerLabels(speakersFromDiarize(diarize))
+              setTranscriptSegments(transcriptSegmentsFromDiarize(diarize))
+              toast.success("Speakers labeled", {
+                id: "diarize",
+                description: `${diarize.speakers.length || diarize.segments.length} speaker region(s)`,
+              })
+            } else if (diarize.segments.length > 0) {
+              setSpeakerLabels(speakersFromDiarize(diarize))
+              toast.success("Speaker timeline ready", {
+                id: "diarize",
+                description: "Rename speakers in the info panel",
+              })
+            } else {
+              toast.dismiss("diarize")
+            }
+          } catch (e) {
+            toast.error("Diarization skipped", {
+              id: "diarize",
+              description: e instanceof Error ? e.message : "Could not label speakers",
+            })
+          }
+        }
       }
     } finally {
       setIsTranscribing(false)
     }
-  }, [stopCapture, settings.titlePrefix, autoDetectSpeakers, note?.attendees, speakerLabels])
+  }, [
+    stopCapture,
+    settings.titlePrefix,
+    settings.polishTranscriptOnStop,
+    settings.diarizeOnStop,
+    settings.speechLang,
+    autoDetectSpeakers,
+    note?.attendees,
+    speakerLabels,
+  ])
 
   // Import an existing audio file and append its transcript to this note,
   // mirroring the live-recording stop flow (dictionary corrections, undo via
@@ -423,7 +598,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     toast("Transcribing audio file…", { id: "import-audio", duration: 0 })
     try {
       const { pickAndTranscribeAudio } = await import("@/lib/import-audio")
-      const result = await pickAndTranscribeAudio()
+      const result = await pickAndTranscribeAudio({ diarize: settings.diarizeOnStop !== false })
       if (!result) { toast.dismiss("import-audio"); return }
       if (!result.text) { toast.error("No speech detected in that file", { id: "import-audio" }); return }
       setPreviousNotes(notesRef.current)
@@ -431,6 +606,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
         protectNames: [
           ...(note?.attendees?.map((a) => a.name) ?? []),
           ...speakerLabels.map((s) => s.name),
+          ...(result.speakerLabels?.map((s) => s.name) ?? []),
         ],
       })
       const base = notesRef.current.trim()
@@ -438,12 +614,17 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       setNotes(next)
       notesRef.current = next
       setRawTranscript((prev) => (prev ? `${prev}\n\n${corrected}` : corrected))
-      toast.success("Audio transcribed", { id: "import-audio", description: result.fileName })
-      autoDetectSpeakers(corrected)
+      if (result.speakerLabels?.length) setSpeakerLabels(result.speakerLabels)
+      if (result.transcriptSegments?.length) setTranscriptSegments(result.transcriptSegments)
+      toast.success(
+        result.diarize ? "Audio transcribed with speakers" : "Audio transcribed",
+        { id: "import-audio", description: result.fileName },
+      )
+      if (!result.speakerLabels?.length) autoDetectSpeakers(corrected)
     } catch (e) {
       toast.error("Import failed", { id: "import-audio", description: e instanceof Error ? e.message : "Transcription failed" })
     }
-  }, [autoDetectSpeakers, note?.attendees, speakerLabels])
+  }, [autoDetectSpeakers, note, speakerLabels, settings.diarizeOnStop])
 
   const handleEnhance = useCallback(async () => {
     const transcript = (rawTranscript || notes).trim()
@@ -559,8 +740,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           } catch { /* recipe optional */ }
         }
         setRecipeOutputs(outputs)
-        const firstArtifact = ARTIFACT_RECIPE_IDS.find((id) => outputs[id]?.trim())
-        if (firstArtifact) setActiveArtifactId(firstArtifact)
+        // Leave artifacts collapsed — they live below the note, opened on demand.
       }
 
       // Detect speakers before people-link so names land in People memory.
@@ -700,6 +880,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       )
       const next = { ...recipeOutputs, [recipe.id]: out }
       setRecipeOutputs(next)
+      // User asked for this artifact — open it in the appendix below the note.
+      if ((ARTIFACT_RECIPE_IDS as readonly string[]).includes(recipe.id)) {
+        setActiveArtifactId(recipe.id)
+      }
 
       // Ensure a real meeting id so digests can land in home Actions / People.
       const meetingId = note?.id ?? crypto.randomUUID()
@@ -810,6 +994,34 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     setSpeakerLabels(speakerLabels.filter((_, i) => i !== idx))
   }, [speakerLabels])
 
+  const handleTopicSummary = useCallback(async () => {
+    const transcript = (rawTranscript || notes).trim()
+    const primary = (manualNotesRef.current || notes).trim()
+    if (!primary && !transcript) return
+    setIsEnhancing(true)
+    try {
+      const { generateTopicSummary, isAIConfigured } = await import("@/lib/ai-service")
+      if (!isAIConfigured()) {
+        toast.error("AI is not configured", {
+          description: "Set your API key in Settings.",
+          action: { label: "Open Settings", onClick: onSettings },
+        })
+        return
+      }
+      setPreviousNotes(notesRef.current)
+      const md = await generateTopicSummary(primary || transcript, transcript, title)
+      if (md) {
+        setNotes(md)
+        notesRef.current = md
+        toast.success("Topic summary ready")
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Topic summary failed")
+    } finally {
+      setIsEnhancing(false)
+    }
+  }, [rawTranscript, notes, title, onSettings])
+
   const handleCopyMarkdown = useCallback(async () => {
     let md = ""
     if (title.trim()) md += `# ${title.trim()}\n\n`
@@ -872,7 +1084,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     enhancedNotes: note?.enhancedNotes,
     chatHistory: chatHistoryRef.current.length > 0 ? chatHistoryRef.current : note?.chatHistory,
     speakerLabels: speakerLabels.length > 0 ? speakerLabels : note?.speakerLabels,
-    transcriptSegments: note?.transcriptSegments,
+    transcriptSegments: transcriptSegments ?? note?.transcriptSegments,
     // Legacy field — no longer generated in-editor; preserve if present.
     brief: note?.brief,
     folderIds: folderIds.length > 0 ? folderIds : undefined,
@@ -881,7 +1093,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
     personIds: note?.personIds,
     autoEnhancedAt: note?.autoEnhancedAt,
     recipeOutputs: Object.keys(recipeOutputs).length > 0 ? recipeOutputs : note?.recipeOutputs,
-  }), [title, note, duration, rawTranscript, notes, manualNotes, description, selectedTemplate, speakerLabels, recipeOutputs, folderIds])
+  }), [title, note, duration, rawTranscript, notes, manualNotes, description, selectedTemplate, speakerLabels, transcriptSegments, recipeOutputs, folderIds])
 
   const handleShareEmail = useCallback(async () => {
     try {
@@ -1053,6 +1265,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const enhanceBusy = isStreaming
   const chatAiState = chatStreaming ? "busy" : showAIPanel ? "active" : "idle"
 
+  // Only surface status when it matters — hide idle "Autosave on" / "Ready" chrome.
   const statusLabel = aiPhase === "enhance"
     ? "Enhancing"
     : aiPhase === "titling"
@@ -1060,10 +1273,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
       : justSaved
         ? "Saved"
         : isDirty
-          ? "Unsaved"
-          : note
-            ? "Autosave on"
-            : "Ready"
+          ? "Edited"
+          : null
+  const statusState = aiBusy ? "busy" : justSaved ? "saved" : isDirty ? "dirty" : undefined
 
   const audioSourceMeta = {
     mic: { label: "Mic", icon: MicIcon },
@@ -1073,38 +1285,48 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
   const activeSource = audioSourceMeta[audioSource]
   const captureDockState =
     recorderState === "recording" ? (isPaused ? "paused" : "live") : isTranscribing ? "processing" : "idle"
+  const displayTitle = title.trim() || "Untitled"
+  const dockBtn =
+    "size-8 shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
 
   return (
     <TooltipProvider delayDuration={280}>
       <main className="editor-shell">
-        <h1 className="sr-only">{note ? `Edit note: ${note.title}` : "New note"}</h1>
+        <h1 className="sr-only">
+          {title.trim() || note?.title?.trim() || "Untitled note"}
+        </h1>
 
+        {/* Mac document toolbar: back · title · status · panels · save */}
         <header data-tauri-drag-region className="editor-header">
-          {/* Left — navigate + identity */}
-          <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5" data-no-drag>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon"
+                  size="icon-sm"
                   onClick={onCancel}
-                  className="size-8 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
+                  className="shrink-0 text-muted-foreground hover:text-foreground"
                   aria-label="Back to dashboard"
                 >
                   <HugeiconsIcon icon={ArrowLeft01Icon} strokeWidth={2} />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Back</TooltipContent>
+              <TooltipContent side="bottom">Notes</TooltipContent>
             </Tooltip>
 
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-center gap-2">
-                <p className="truncate text-[13px] font-medium leading-tight tracking-tight">
-                  {title.trim() || (note ? "Meeting note" : "New note")}
-                </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <p
+                className={cn(
+                  "truncate text-[13px] leading-none tracking-tight",
+                  title.trim() ? "font-semibold text-foreground" : "font-medium text-muted-foreground",
+                )}
+              >
+                {displayTitle}
+              </p>
+              {statusLabel ? (
                 <span
                   className="editor-header-status shrink-0"
-                  data-state={aiBusy ? "busy" : justSaved ? "saved" : isDirty ? "dirty" : undefined}
+                  data-state={statusState}
                   aria-live="polite"
                 >
                   {aiBusy ? (
@@ -1114,27 +1336,21 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     </>
                   ) : (
                     <>
-                      {isDirty ? (
-                        <span className="size-1.5 shrink-0 rounded-full bg-amber-500" />
-                      ) : justSaved ? (
-                        <span className="size-1.5 shrink-0 rounded-full bg-emerald-500/80" />
-                      ) : (
-                        <span className="size-1.5 shrink-0 rounded-full bg-muted-foreground/30" />
-                      )}
+                      <span
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          isDirty ? "bg-amber-500" : "bg-emerald-500/80",
+                        )}
+                      />
                       <span>{statusLabel}</span>
                     </>
                   )}
                 </span>
-              </div>
-              <p className="mt-0.5 hidden truncate text-[11px] text-muted-foreground sm:block">
-                {note ? "Meeting note" : "New note"}
-                {selectedTemplate ? ` · ${selectedTemplate.name}` : ""}
-              </p>
+              ) : null}
             </div>
           </div>
 
-          {/* Right — tools cluster + save */}
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          <div className="flex shrink-0 items-center gap-1" data-no-drag>
             <div className="editor-header-cluster" role="toolbar" aria-label="Editor tools">
               {!focusMode && (
                 <>
@@ -1142,32 +1358,31 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="icon"
+                        size="icon-sm"
                         onClick={() => setShowInfoPanel((v) => !v)}
-                        aria-label={showInfoPanel ? "Hide info panel" : "Show info panel"}
+                        aria-label={showInfoPanel ? "Hide details" : "Show details"}
                         aria-pressed={showInfoPanel}
                         className={cn(
-                          "size-8 rounded-xl text-muted-foreground hover:text-foreground",
+                          "text-muted-foreground hover:text-foreground",
                           showInfoPanel && "bg-background text-foreground shadow-sm",
                         )}
                       >
                         <HugeiconsIcon icon={AlignBoxMiddleLeftIcon} strokeWidth={1.8} />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">{showInfoPanel ? "Hide info" : "Show info"}</TooltipContent>
+                    <TooltipContent side="bottom">{showInfoPanel ? "Hide details" : "Details"}</TooltipContent>
                   </Tooltip>
 
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="icon"
+                        size="icon-sm"
                         onClick={() => setShowAIPanel((v) => !v)}
                         aria-label={showAIPanel ? "Hide chat" : "Show chat"}
                         aria-pressed={showAIPanel}
                         data-ai={chatAiState}
                         className={cn(
-                          "size-8 rounded-xl",
                           chatAiState === "idle"
                             ? "text-muted-foreground hover:text-foreground"
                             : "text-brand",
@@ -1182,10 +1397,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                         />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">{showAIPanel ? "Hide chat" : "Show chat"}</TooltipContent>
+                    <TooltipContent side="bottom">{showAIPanel ? "Hide chat" : "Chat"}</TooltipContent>
                   </Tooltip>
 
-                  <div className="mx-0.5 h-4 w-px shrink-0 bg-border/70" aria-hidden />
+                  <div className="mx-0.5 h-3.5 w-px shrink-0 bg-border/50" aria-hidden />
                 </>
               )}
 
@@ -1193,47 +1408,48 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => setFocusMode((v) => !v)}
                     aria-label={focusMode ? "Exit focus mode" : "Enter focus mode"}
                     aria-pressed={focusMode}
                     className={cn(
-                      "size-8 rounded-xl text-muted-foreground hover:text-foreground",
+                      "text-muted-foreground hover:text-foreground",
                       focusMode && "bg-background text-foreground shadow-sm",
                     )}
                   >
                     <HugeiconsIcon icon={CenterFocusIcon} strokeWidth={1.8} />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">{focusMode ? "Exit focus · ⌘⇧F" : "Focus mode · ⌘⇧F"}</TooltipContent>
+                <TooltipContent side="bottom">{focusMode ? "Exit focus · ⌘⇧F" : "Focus · ⌘⇧F"}</TooltipContent>
               </Tooltip>
             </div>
 
             {!focusMode && (
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleSaveAndNew}
-                  className="hidden h-8 rounded-xl px-2.5 text-muted-foreground sm:inline-flex"
-                >
-                  Save &amp; new
-                </Button>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      size="sm"
-                      onClick={handleSave}
-                      aria-label="Save note"
-                      className="h-8 gap-1.5 rounded-xl px-3 active:scale-[0.96]"
-                    >
-                      <HugeiconsIcon icon={SaveIcon} strokeWidth={1.8} data-icon="inline-start" className="size-3.5" />
-                      Save
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Save · ⌘S</TooltipContent>
-                </Tooltip>
-              </div>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isDirty || !note ? "default" : "ghost"}
+                    size={isDirty || !note ? "sm" : "icon-sm"}
+                    onClick={handleSave}
+                    aria-label="Save note"
+                    className={cn(
+                      "ml-0.5",
+                      isDirty || !note
+                        ? "gap-1.5"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <HugeiconsIcon
+                      icon={SaveIcon}
+                      strokeWidth={1.8}
+                      data-icon={isDirty || !note ? "inline-start" : undefined}
+                      className="size-3.5"
+                    />
+                    {(isDirty || !note) && "Save"}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Save · ⌘S</TooltipContent>
+              </Tooltip>
             )}
           </div>
         </header>
@@ -1270,6 +1486,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   }}
                   onNewSpeakerNameChange={setNewSpeakerName}
                   onRemoveSpeaker={handleRemoveSpeaker}
+                  onRenameSpeaker={handleRenameSpeaker}
                   onOpenRelated={(id) => {
                     if (note?.id !== id) {
                       window.dispatchEvent(new CustomEvent("navigate-meeting", { detail: { id } }))
@@ -1295,7 +1512,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       if (e.key === "Enter") e.preventDefault()
                     }}
                     rows={1}
-                    placeholder="Untitled meeting"
+                    placeholder="Untitled"
                     aria-label="Note title"
                     className="editor-title-input"
                   />
@@ -1305,14 +1522,13 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                         <TooltipTrigger asChild>
                           <Button
                             variant="ghost"
-                            size="icon"
+                            size="icon-sm"
                             onClick={handleEnhanceTitle}
                             disabled={aiBusy || !notes.trim()}
                             aria-busy={aiPhase === "titling"}
                             data-ai={aiPhase === "titling" ? "busy" : "idle"}
                             className={cn(
-                              "size-8 rounded-xl",
-                              aiPhase === "titling" ? "text-brand" : "text-muted-foreground/45 hover:text-foreground",
+                              aiPhase === "titling" ? "text-brand" : "text-muted-foreground/40 hover:text-foreground",
                             )}
                             aria-label="Generate title with AI"
                           >
@@ -1332,10 +1548,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   <textarea
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    rows={2}
+                    rows={1}
                     maxLength={280}
-                    placeholder="Short description for the notes list…"
-                    aria-label="Meeting description"
+                    placeholder="Description for the notes list"
+                    aria-label="Note description"
                     className="editor-description-input"
                   />
                 )}
@@ -1351,29 +1567,9 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   {noteStats.words > 0 && (
                     <>
                       <span className="editor-meta-sep" aria-hidden>·</span>
-                      <span title={`${noteStats.words.toLocaleString()} words`}>
-                        {noteStats.words.toLocaleString()} {noteStats.words === 1 ? "word" : "words"}
-                        <span className="text-muted-foreground/70"> · {noteStats.minutes} min</span>
+                      <span className="tabular-nums" title={`${noteStats.words.toLocaleString()} words`}>
+                        {noteStats.words.toLocaleString()} words
                       </span>
-                    </>
-                  )}
-                  {recorderState === "recording" && (
-                    <>
-                      <span className="editor-meta-sep" aria-hidden>·</span>
-                      <Tabs
-                        value={dualFocus}
-                        onValueChange={(v) =>
-                          setDualFocus(v as "notes" | "transcript" | "split")
-                        }
-                        variant="segment"
-                        size="sm"
-                      >
-                        <TabsList aria-label="Recording layout">
-                          <TabsTrigger value="notes">Notes</TabsTrigger>
-                          <TabsTrigger value="split">Split</TabsTrigger>
-                          <TabsTrigger value="transcript">Live</TabsTrigger>
-                        </TabsList>
-                      </Tabs>
                     </>
                   )}
                   {recorderState === "recording" && silenceSeconds > 30 && (
@@ -1384,23 +1580,26 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                   )}
                 </div>
 
-                {/* Action digest / Standup / Follow-up — first-class, not under ⋯ */}
-                {recorderState !== "recording" &&
-                  !focusMode &&
-                  (notes.trim() || manualNotes.trim() || Object.keys(recipeOutputs).length > 0) && (
-                    <EditorArtifacts
-                      recipes={loadRecipes()}
-                      outputs={recipeOutputs}
-                      activeId={activeArtifactId}
-                      onActiveChange={setActiveArtifactId}
-                      runningId={runningRecipeId}
-                      onRun={(recipe) => void handleRunRecipe(recipe)}
-                      onUpdateOutput={handleUpdateArtifactOutput}
-                      canRun={Boolean(notes.trim() || manualNotes.trim() || rawTranscript.trim())}
-                    />
-                  )}
+                {recorderState === "recording" && (
+                  <div className="editor-live-bar">
+                    <Tabs
+                      value={dualFocus}
+                      onValueChange={(v) =>
+                        setDualFocus(v as "notes" | "transcript" | "split")
+                      }
+                      variant="segment"
+                      size="sm"
+                    >
+                      <TabsList aria-label="Recording layout">
+                        <TabsTrigger value="notes">Notes</TabsTrigger>
+                        <TabsTrigger value="split">Split</TabsTrigger>
+                        <TabsTrigger value="transcript">Live</TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                  </div>
+                )}
 
-                <div className="mt-6 flex min-h-[28rem] flex-1 flex-col">
+                <div className="editor-body">
                   {enhanceBusy && (
                     <div className="ai-status mb-4" data-ai="busy">
                       <span className="size-3 animate-spin rounded-full border-2 border-brand/30 border-t-brand" />
@@ -1417,7 +1616,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     >
                       {(dualFocus === "notes" || dualFocus === "split") && (
                         <div className="editor-pane">
-                          <div className="editor-pane-header border-b border-border/40">
+                          <div className="editor-pane-header">
                             <span>My notes</span>
                             <span className="font-normal text-muted-foreground/70">Private shorthand</span>
                           </div>
@@ -1432,7 +1631,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       )}
                       {(dualFocus === "transcript" || dualFocus === "split") && (
                         <div className="editor-pane bg-muted/20">
-                          <div className="editor-pane-header border-b border-border/40">
+                          <div className="editor-pane-header">
                             <span>Live transcript</span>
                             <span className="inline-flex items-center gap-1.5 font-normal text-muted-foreground/70">
                               <span className="size-1.5 animate-pulse rounded-full bg-destructive" />
@@ -1471,12 +1670,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                           </pre>
                         </details>
                       )}
-                      {/* Custom recipes (non-artifact) still listed compactly */}
+                      {/* Custom recipes (non-artifact) — appendix, collapsed */}
                       {Object.entries(recipeOutputs).some(
                         ([id]) => !(ARTIFACT_RECIPE_IDS as readonly string[]).includes(id),
                       ) && (
-                        <div className="mt-4 flex flex-col gap-2">
-                          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        <div className="mt-8 flex flex-col gap-2 border-t border-black/[0.05] pt-6 dark:border-white/[0.06]">
+                          <p className="text-[11px] font-medium text-muted-foreground">
                             Other recipes
                           </p>
                           {Object.entries(recipeOutputs)
@@ -1484,11 +1683,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                             .map(([id, out]) => {
                               const recipe = loadRecipes().find((r) => r.id === id)
                               return (
-                                <details key={id} className="editor-pane text-sm open:pb-1">
+                                <details key={id} className="mac-group text-sm open:pb-1">
                                   <summary className="cursor-pointer px-3.5 py-2.5 text-xs font-medium transition-colors hover:text-foreground">
                                     {recipe?.name ?? "Recipe"}
                                   </summary>
-                                  <div className="border-t border-border/40 px-3.5 py-2.5">
+                                  <div className="border-t border-black/[0.05] px-3.5 py-2.5 dark:border-white/[0.06]">
                                     <MarkdownView markdown={out} />
                                   </div>
                                 </details>
@@ -1496,44 +1695,32 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                             })}
                         </div>
                       )}
+
+                      {/* Artifacts only after something was generated — never while empty-editing */}
+                      {!focusMode &&
+                        (runningRecipeId ||
+                          ARTIFACT_RECIPE_IDS.some((id) => recipeOutputs[id]?.trim())) && (
+                          <EditorArtifacts
+                            className="mt-8 border-t border-black/[0.05] pt-6 dark:border-white/[0.06]"
+                            recipes={loadRecipes()}
+                            outputs={recipeOutputs}
+                            activeId={activeArtifactId}
+                            onActiveChange={setActiveArtifactId}
+                            runningId={runningRecipeId}
+                            onRun={(recipe) => void handleRunRecipe(recipe)}
+                            onUpdateOutput={handleUpdateArtifactOutput}
+                            canRun={Boolean(notes.trim() || manualNotes.trim() || rawTranscript.trim())}
+                          />
+                        )}
                     </div>
                   )}
 
                   {isEmpty && recorderState === "idle" && viewMode !== "source" && !focusMode && !enhanceBusy && (
-                    <div className="mt-8 rounded-2xl bg-muted/40 px-4 py-4 ring-1 ring-foreground/5 dark:ring-foreground/10">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-medium tracking-tight">Start capturing</p>
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            Record the room, pick a template, or just start typing.
-                          </p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Button variant="default" size="sm" onClick={startRecording}>
-                            <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />
-                            Record
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setShowTemplatePicker(true)}>
-                            Template
-                          </Button>
-                        </div>
-                      </div>
-                      <p className="mt-3 border-t border-border/40 pt-3 text-[11px] leading-relaxed text-muted-foreground/75">
-                        <kbd className="rounded-md bg-background/80 px-1.5 py-0.5 font-sans ring-1 ring-border/60">/</kbd>{" "}
-                        blocks · select text for format / AI ·{" "}
-                        <kbd className="rounded-md bg-background/80 px-1.5 py-0.5 font-sans ring-1 ring-border/60">⌘⇧F</kbd>{" "}
-                        focus ·{" "}
-                        <kbd className="rounded-md bg-background/80 px-1.5 py-0.5 font-sans ring-1 ring-border/60">;trigger</kbd>{" "}
-                        snippets ·{" "}
-                        <button
-                          type="button"
-                          onClick={onSettings}
-                          className="underline decoration-border underline-offset-2 transition-colors hover:text-foreground"
-                        >
-                          Settings
-                        </button>
-                      </p>
-                    </div>
+                    <p className="editor-empty-hint">
+                      Type to write, or <button type="button" className="editor-empty-hint-action" onClick={startRecording}>Record</button>
+                      {" · "}
+                      <kbd>/</kbd> blocks · <kbd>⌘⇧F</kbd> focus
+                    </p>
                   )}
                 </div>
               </div>
@@ -1562,12 +1749,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     document.body.style.userSelect = "none"
                   }}
                 />
-                <div className="flex shrink-0 items-center justify-between px-3.5 py-2.5">
-                  <span className="flex items-center gap-2 text-sm font-medium tracking-tight">
+                <div className="app-panel-header px-3.5">
+                  <span className="flex items-center gap-2">
                     <span className="ai-mark" data-ai={chatStreaming ? "busy" : "active"}>
                       <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} className="size-3.5 text-white" />
                     </span>
-                    <span className="ai-label" data-ai={chatStreaming ? "busy" : "idle"}>
+                    <span className="app-panel-title ai-label" data-ai={chatStreaming ? "busy" : "idle"}>
                       Chat
                     </span>
                   </span>
@@ -1576,12 +1763,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                     size="icon-sm"
                     onClick={() => setShowAIPanel(false)}
                     aria-label="Close chat"
-                    className="text-muted-foreground"
+                    className="text-muted-foreground hover:text-foreground"
                   >
                     <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
                   </Button>
                 </div>
-                <div className="flex min-h-0 flex-1 flex-col border-t border-border/40">
+                <div className="flex min-h-0 flex-1 flex-col">
                   <div ref={chatScrollRef} className="scroll-fade flex flex-1 flex-col gap-3 overflow-y-auto px-3.5 py-3">
                     {messages.length === 0 && (
                       suggestedQuestions.length > 0 ? (
@@ -1665,12 +1852,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       </div>
                     )}
                   </div>
-                  <div className="flex shrink-0 items-end gap-2 border-t border-border/40 p-3">
+                  <div className="flex shrink-0 items-end gap-1.5 px-3 py-2.5">
                     <Input
                       value={chatInput}
                       onChange={(e) => setChatInput(e.target.value)}
-                      placeholder="Ask about this meeting…"
-                      className="h-9 flex-1 rounded-2xl text-sm"
+                      placeholder="Ask about this note…"
+                      className="mac-search h-8 flex-1 text-[13px]"
                       disabled={chatStreaming}
                       onKeyDown={(e) => {
                         if (e.key === "Enter") {
@@ -1680,12 +1867,12 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       }}
                     />
                     {chatStreaming ? (
-                      <Button size="icon" variant="destructive" onClick={stopChatStreaming} aria-label="Stop generating">
+                      <Button size="icon-sm" variant="destructive" onClick={stopChatStreaming} aria-label="Stop generating">
                         <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
                       </Button>
                     ) : (
                       <Button
-                        size="icon"
+                        size="icon-sm"
                         onClick={() => sendMessage(chatInput)}
                         disabled={!chatInput.trim()}
                         aria-label="Send message"
@@ -1705,25 +1892,50 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
           <footer className="editor-capture" data-state={captureDockState}>
             <div className="editor-capture-inner">
               <div
-                className="editor-dock"
+                className="editor-dock relative"
                 data-state={captureDockState}
                 role={recorderState === "recording" || isTranscribing ? "status" : undefined}
                 aria-live={recorderState === "recording" || isTranscribing ? "polite" : undefined}
               >
+                {recorderState === "recording" && (
+                  <LiveAssistPanel
+                    open={liveAssistOpen}
+                    onClose={() => setLiveAssistOpen(false)}
+                    transcript={notes}
+                    durationSecs={(note?.duration ?? 0) + duration}
+                  />
+                )}
+
                 {recorderState === "recording" && isPaused && (
                   <>
                     <div className="editor-dock-status">
                       <span className="inline-flex size-2 shrink-0 rounded-full bg-amber-500" aria-hidden />
-                      <span className="text-sm font-medium tabular-nums text-foreground">
+                      <span className="text-[13px] font-medium tabular-nums text-foreground">
                         {formatTimer((note?.duration ?? 0) + duration)}
                       </span>
-                      <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Paused</span>
+                      <span className="text-[12px] font-medium text-amber-600 dark:text-amber-400">Paused</span>
                     </div>
-                    <Button variant="secondary" size="sm" onClick={resumeRecording} className="h-9 shrink-0 gap-1.5 rounded-2xl px-3">
+                    <div className="editor-dock-divider" aria-hidden />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => setLiveAssistOpen((v) => !v)}
+                          className={cn(dockBtn, liveAssistOpen && "bg-background text-brand shadow-sm")}
+                          aria-label="What did I miss?"
+                          aria-pressed={liveAssistOpen}
+                        >
+                          <HugeiconsIcon icon={FlashIcon} strokeWidth={2} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">What did I miss?</TooltipContent>
+                    </Tooltip>
+                    <Button variant="secondary" size="sm" onClick={resumeRecording} className="h-8 shrink-0 gap-1.5">
                       <HugeiconsIcon icon={PlayIcon} strokeWidth={2} className="size-3.5" />
                       Resume
                     </Button>
-                    <Button variant="destructive" size="sm" onClick={stopRecording} className="h-9 shrink-0 gap-1.5 rounded-2xl px-3">
+                    <Button variant="destructive" size="sm" onClick={stopRecording} className="h-8 shrink-0 gap-1.5">
                       <HugeiconsIcon icon={StopIcon} strokeWidth={2} className="size-3.5" />
                       Stop
                     </Button>
@@ -1738,11 +1950,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                         <span className="relative inline-flex size-2 rounded-full bg-destructive" />
                       </span>
                       <span className="text-[11px] font-semibold uppercase tracking-wide text-destructive">Rec</span>
-                      <span className="text-sm font-medium tabular-nums text-foreground">
+                      <span className="text-[13px] font-medium tabular-nums text-foreground">
                         {formatTimer((note?.duration ?? 0) + duration)}
                       </span>
-                      <Waveform active level={audioLevel} className="text-destructive" width={120} height={26} />
-                      <span className="hidden text-xs text-muted-foreground md:inline">
+                      <Waveform active level={audioLevel} className="text-destructive" width={100} height={22} />
+                      <span className="hidden text-[12px] text-muted-foreground sm:inline">
                         {isSpeaking ? "Speaking" : silenceSeconds > 10 ? `Silent ${silenceSeconds}s` : "Listening"}
                       </span>
                     </div>
@@ -1751,9 +1963,24 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       <TooltipTrigger asChild>
                         <Button
                           variant="ghost"
-                          size="icon"
+                          size="icon-sm"
+                          onClick={() => setLiveAssistOpen((v) => !v)}
+                          className={cn(dockBtn, liveAssistOpen && "bg-background text-brand shadow-sm")}
+                          aria-label="What did I miss?"
+                          aria-pressed={liveAssistOpen}
+                        >
+                          <HugeiconsIcon icon={FlashIcon} strokeWidth={2} />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">What did I miss?</TooltipContent>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
                           onClick={pauseRecording}
-                          className="size-9 shrink-0 rounded-2xl text-muted-foreground"
+                          className={dockBtn}
                           aria-label="Pause recording"
                         >
                           <HugeiconsIcon icon={PauseIcon} strokeWidth={2} />
@@ -1761,7 +1988,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                       </TooltipTrigger>
                       <TooltipContent side="top">Pause</TooltipContent>
                     </Tooltip>
-                    <Button variant="destructive" size="sm" onClick={stopRecording} className="h-9 shrink-0 gap-1.5 rounded-2xl px-3.5">
+                    <Button variant="destructive" size="sm" onClick={stopRecording} className="h-8 shrink-0 gap-1.5">
                       <HugeiconsIcon icon={StopIcon} strokeWidth={2} className="size-3.5" />
                       Stop
                     </Button>
@@ -1771,7 +1998,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                 {isTranscribing && (
                   <div className="editor-dock-status py-0.5">
                     <span className="size-3.5 animate-spin rounded-full border-2 border-brand/30 border-t-brand" />
-                    <span className="text-sm text-muted-foreground">
+                    <span className="text-[13px] text-muted-foreground">
                       Processing
                       <span className="ml-1.5 tabular-nums text-foreground">
                         {formatTimer((note?.duration ?? 0) + duration)}
@@ -1782,7 +2009,6 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
                 {recorderState === "idle" && !isTranscribing && (
                   <>
-                    {/* Collapsed audio source: one control, full options in menu */}
                     <DropdownMenu>
                       <Tooltip>
                         <TooltipTrigger asChild>
@@ -1790,11 +2016,11 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-9 gap-1.5 rounded-2xl px-2.5 text-muted-foreground"
+                              className="h-8 gap-1.5 px-2 text-muted-foreground"
                               aria-label={`Audio source: ${activeSource.label}`}
                             >
                               <HugeiconsIcon icon={activeSource.icon} strokeWidth={1.6} className="size-3.5" />
-                              <span className="hidden text-sm sm:inline">{activeSource.label}</span>
+                              <span className="hidden text-[13px] sm:inline">{activeSource.label}</span>
                               <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} className="size-3 opacity-50" />
                             </Button>
                           </DropdownMenuTrigger>
@@ -1838,54 +2064,24 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
                     <div className="editor-dock-divider" aria-hidden />
 
-                    <Button
-                      variant="default"
-                      onClick={startRecording}
-                      className="h-9 gap-1.5 rounded-2xl px-4 active:scale-[0.96]"
-                    >
+                    <Button variant="default" size="sm" onClick={startRecording} className="h-8 gap-1.5 px-3">
                       <HugeiconsIcon icon={AiVoiceIcon} strokeWidth={1.5} data-icon="inline-start" />
                       Record
                     </Button>
 
                     {!focusMode && (
                       <>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setShowTemplatePicker(true)}
-                              className="h-9 gap-1.5 rounded-2xl px-2.5 text-muted-foreground"
-                            >
-                              {selectedTemplate ? (
-                                <>
-                                  <TemplateIcon name={selectedTemplate.icon} className="size-3.5" />
-                                  <span className="hidden max-w-[6.5rem] truncate sm:inline">{selectedTemplate.name}</span>
-                                </>
-                              ) : (
-                                <span className="hidden sm:inline">Template</span>
-                              )}
-                              {!selectedTemplate && (
-                                <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} className="size-3.5 sm:hidden" />
-                              )}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">Template for enhance</TooltipContent>
-                        </Tooltip>
-
-                        {/* Only after enhance finishes — not while the API is still running */}
                         {previousNotes && !enhanceBusy && (
                           <Button
                             variant="ghost"
                             size="sm"
                             onClick={handleUndoEnhance}
-                            className="h-9 rounded-2xl px-2.5 text-amber-600 hover:text-amber-700"
+                            className="h-8 px-2 text-amber-600 hover:text-amber-700"
                           >
                             Undo
                           </Button>
                         )}
 
-                        {/* Glass orb enhance — coral→violet gradient from brand AI mark */}
                         {(notes.trim() || manualNotes.trim() || enhanceBusy) && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -1910,7 +2106,7 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent side="top">
-                              {enhanceBusy ? "Enhancing this note" : "Structure transcript into notes"}
+                              {enhanceBusy ? "Enhancing this note" : "Structure into notes"}
                             </TooltipContent>
                           </Tooltip>
                         )}
@@ -1919,16 +2115,20 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
 
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-9 rounded-2xl" aria-label="More note actions">
+                            <Button variant="ghost" size="icon-sm" className={dockBtn} aria-label="More">
                               <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={1.8} />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="min-w-56" side="top" sideOffset={8}>
                             <DropdownMenuLabel>Note</DropdownMenuLabel>
                             <DropdownMenuGroup>
+                              <DropdownMenuItem onSelect={handleSaveAndNew}>
+                                <HugeiconsIcon icon={SaveIcon} strokeWidth={1.5} />
+                                Save &amp; new
+                              </DropdownMenuItem>
                               <DropdownMenuItem onSelect={() => setViewMode(viewMode === "wysiwyg" ? "source" : "wysiwyg")}>
                                 <HugeiconsIcon icon={CodeIcon} strokeWidth={1.5} />
-                                {viewMode === "wysiwyg" ? "Edit Markdown source" : "Return to rich text"}
+                                {viewMode === "wysiwyg" ? "Markdown source" : "Rich text"}
                               </DropdownMenuItem>
                               {rawTranscript && (
                                 <DropdownMenuItem onSelect={() => setShowRawTranscript(!showRawTranscript)}>
@@ -1943,6 +2143,13 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                               <DropdownMenuItem disabled={!notes.trim()} onSelect={handleCopyRichText}>
                                 <HugeiconsIcon icon={Copy01Icon} strokeWidth={1.5} />
                                 Copy rich text
+                              </DropdownMenuItem>
+                              <DropdownMenuItem
+                                disabled={enhanceBusy || (!notes.trim() && !rawTranscript.trim())}
+                                onSelect={() => void handleTopicSummary()}
+                              >
+                                <HugeiconsIcon icon={AiMagicIcon} strokeWidth={1.5} />
+                                Topic summary
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
                             <DropdownMenuSeparator />
@@ -1985,6 +2192,10 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                             )}
                             <DropdownMenuSeparator />
                             <DropdownMenuGroup>
+                              <DropdownMenuItem onSelect={() => setShowTemplatePicker(true)}>
+                                <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
+                                {selectedTemplate ? `Template: ${selectedTemplate.name}` : "Choose template…"}
+                              </DropdownMenuItem>
                               <DropdownMenuItem onSelect={handleImportAudio}>
                                 <HugeiconsIcon icon={FileImportIcon} strokeWidth={1.5} />
                                 Import audio…
@@ -1993,28 +2204,13 @@ export function NoteEditor({ note, meetings, onSave, onCancel, onSettings, setti
                                 <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
                                 Save as template
                               </DropdownMenuItem>
-                              <DropdownMenuItem onSelect={() => setShowTemplatePicker(true)}>
-                                <HugeiconsIcon icon={FileAddIcon} strokeWidth={1.5} />
-                                Choose template…
+                              <DropdownMenuItem onSelect={onSettings}>
+                                <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} />
+                                Settings
                               </DropdownMenuItem>
                             </DropdownMenuGroup>
                           </DropdownMenuContent>
                         </DropdownMenu>
-
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={onSettings}
-                              className="size-9 rounded-2xl text-muted-foreground hover:text-foreground"
-                              aria-label="Settings"
-                            >
-                              <HugeiconsIcon icon={Settings02Icon} strokeWidth={1.5} />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="top">Settings</TooltipContent>
-                        </Tooltip>
                       </>
                     )}
                   </>

@@ -2,11 +2,19 @@
 // meter, duration/silence timers. Owns the transient feedback state
 // (volatile tail, audio level, speaking, timers); the caller owns the
 // transcript text (via `setText`) and its own state machine.
-import { useCallback, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { invoke } from "@tauri-apps/api/core"
 import { listen, emit } from "@tauri-apps/api/event"
 import { error as logError } from "@tauri-apps/plugin-log"
-import { newStreamMerge, consumeConfirmed, consumeVolatile, normalizeSource, appendStream } from "@/lib/stream-transcript"
+import {
+  newStreamMerge,
+  consumeConfirmed,
+  consumeVolatile,
+  normalizeSource,
+  appendStream,
+  setChannelLabels,
+  type ChannelLabels,
+} from "@/lib/stream-transcript"
 import type { TranscriptionModel } from "@/types"
 
 export type AudioSourceKind = "mic" | "system" | "both"
@@ -15,6 +23,8 @@ export interface UseRecordingOptions {
   audioSource: AudioSourceKind
   speechLang: string
   transcriptionModel: TranscriptionModel
+  /** Dual-channel live labels (defaults Me/Them). */
+  channelLabels?: Partial<ChannelLabels>
   /** Receives the live transcript text. Compatible with a React state setter. */
   setText: React.Dispatch<React.SetStateAction<string>>
   /** Returns the current editor text (a ref read, not state). Used to detect
@@ -37,6 +47,7 @@ export function useRecording({
   audioSource,
   speechLang,
   transcriptionModel,
+  channelLabels,
   setText,
   getText,
   onError,
@@ -51,8 +62,15 @@ export function useRecording({
   const [silenceSeconds, setSilenceSeconds] = useState(0)
 
   // Merges the mic + system streaming feeds into one interleaved transcript.
-  const streamMergeRef = useRef(newStreamMerge())
+  const streamMergeRef = useRef(newStreamMerge(channelLabels))
+  const channelLabelsRef = useRef(channelLabels)
   const unlistenRef = useRef<Array<() => void>>([])
+
+  // Keep channel labels ref in sync without writing refs during render.
+  useEffect(() => {
+    channelLabelsRef.current = channelLabels
+    if (channelLabels) setChannelLabels(streamMergeRef.current, channelLabels)
+  }, [channelLabels])
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const silenceRef = useRef(0)
   const micLevelRef = useRef(0)
@@ -200,7 +218,7 @@ export function useRecording({
   }, [transcriptionModel, audioSource])
 
   const start = useCallback(async () => {
-    streamMergeRef.current = newStreamMerge()
+    streamMergeRef.current = newStreamMerge(channelLabelsRef.current)
     resetLiveState()
     setDuration(0)
     // Existing editor content stays as the prefix; the session's stream text
@@ -218,6 +236,12 @@ export function useRecording({
       throw err
     }
   }, [attachListeners, invokeStart, beginTick, teardown, resetLiveState, anchorText, onError])
+
+  /** Live-update dual-channel speaker names mid-recording. */
+  const updateChannelLabels = useCallback((labels: Partial<ChannelLabels>) => {
+    setChannelLabels(streamMergeRef.current, labels)
+    channelLabelsRef.current = { ...channelLabelsRef.current, ...labels }
+  }, [])
 
   /** Stop and wait `flushMs` for the backend to flush the final transcript
    *  before detaching listeners — detaching first would lose the tail. */
@@ -237,7 +261,7 @@ export function useRecording({
    *  The merge state resets so the next session's confirmed restarts clean. */
   const pause = useCallback(async () => {
     clearTick()
-    streamMergeRef.current = newStreamMerge()
+    streamMergeRef.current = newStreamMerge(channelLabelsRef.current)
     setVolatileText("")
     await invoke("stop_continuous").catch(() => {})
     // Re-prewarm so resume skips the model load (the stopped sidecar exits with
@@ -260,5 +284,18 @@ export function useRecording({
     }
   }, [invokeStart, beginTick, teardown, anchorText, onError])
 
-  return { volatileText, audioLevel, isSpeaking, duration, silenceSeconds, start, stop, pause, resume, abort, prewarm }
+  return {
+    volatileText,
+    audioLevel,
+    isSpeaking,
+    duration,
+    silenceSeconds,
+    start,
+    stop,
+    pause,
+    resume,
+    abort,
+    prewarm,
+    updateChannelLabels,
+  }
 }

@@ -1058,6 +1058,200 @@ pub async fn transcribe_audio_file_fluid(
     }
 }
 
+/// Offline speaker diarization (FluidAudio OfflineDiarizerManager / pyannote VBx).
+/// Spawns a one-shot `--diarize` sidecar so diarizer models don't load into the
+/// long-lived ASR process. When `with_asr` is true, each segment is re-transcribed
+/// and a labeled transcript is returned.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizeSegment {
+    pub speaker_id: String,
+    pub start: f32,
+    pub end: f32,
+    pub quality: f32,
+    #[serde(default)]
+    pub text: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiarizeResult {
+    pub segments: Vec<DiarizeSegment>,
+    pub speakers: Vec<String>,
+    #[serde(default)]
+    pub transcript: Option<String>,
+    pub duration_seconds: f32,
+}
+
+#[tauri::command]
+pub async fn diarize_audio_file_fluid(
+    app: AppHandle,
+    path: String,
+    language: Option<String>,
+    with_asr: Option<bool>,
+) -> Result<DiarizeResult, String> {
+    if !binary_present(&app) {
+        return Err("ASR sidecar not installed.".into());
+    }
+    if !std::path::PathBuf::from(&path).exists() {
+        return Err(format!("audio file not found: {path}"));
+    }
+
+    let with_asr = with_asr.unwrap_or(true);
+    let lang = language.unwrap_or_default();
+    let bin = binary_path(&app);
+
+    log::debug!(
+        "diarize_audio_file_fluid: path={}, with_asr={}, lang={}",
+        path,
+        with_asr,
+        if lang.is_empty() { "auto" } else { &lang }
+    );
+
+    let mut cmd = Command::new(&bin);
+    cmd.kill_on_drop(true);
+    cmd.arg("--diarize");
+    if with_asr {
+        cmd.arg("--with-asr");
+    }
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn diarize sidecar: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("no stdin")?;
+    let mut stdout = BufReader::new(child.stdout.take().ok_or("no stdout")?);
+
+    if let Some(stderr) = child.stderr.take() {
+        tauri::async_runtime::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                log::info!("[diarize-sidecar] {line}");
+            }
+        });
+    }
+
+    // Wait for READY (model download can take a while on first run).
+    let ready = tokio::time::timeout(Duration::from_secs(600), async {
+        loop {
+            let mut line = String::new();
+            let n = stdout
+                .read_line(&mut line)
+                .await
+                .map_err(|e| format!("read READY: {e}"))?;
+            if n == 0 {
+                return Err("diarize sidecar exited before READY".to_string());
+            }
+            let line = line.trim();
+            if line == "READY" || line.ends_with("READY") {
+                return Ok(());
+            }
+            if let Some(msg) = line.strip_prefix("FATAL\t") {
+                return Err(format!("diarize fatal: {msg}"));
+            }
+            // Progress lines while models download.
+            if line.starts_with("PROGRESS\t") {
+                continue;
+            }
+        }
+    })
+    .await
+    .map_err(|_| "diarize sidecar timed out waiting for READY".to_string())??;
+
+    let _ = ready;
+
+    let req = if lang.is_empty() {
+        format!("{path}\n")
+    } else {
+        format!("{lang}\t{path}\n")
+    };
+    stdin
+        .write_all(req.as_bytes())
+        .await
+        .map_err(|e| format!("write diarize req: {e}"))?;
+    // Close stdin so the sidecar exits its read loop after one job.
+    drop(stdin);
+
+    let mut deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    let json_body = loop {
+        let mut line = String::new();
+        let n = match tokio::time::timeout_at(deadline, stdout.read_line(&mut line)).await {
+            Ok(r) => r.map_err(|e| format!("read diarize resp: {e}"))?,
+            Err(_) => return Err("diarize request timed out".into()),
+        };
+        if n == 0 {
+            return Err("diarize sidecar closed before OK".into());
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
+        if let Some(text) = line.strip_prefix("OK\t") {
+            break text.to_string();
+        }
+        if let Some(msg) = line.strip_prefix("ERR\t") {
+            return Err(format!("diarization error: {msg}"));
+        }
+        if let Some(msg) = line.strip_prefix("FATAL\t") {
+            return Err(format!("diarize fatal: {msg}"));
+        }
+        if let Some(rest) = line.strip_prefix("INFO\t") {
+            if let Some(secs) = rest
+                .strip_prefix("duration=")
+                .and_then(|v| v.trim().parse::<f64>().ok())
+            {
+                if secs.is_finite() && secs > 0.0 {
+                    // Diarization is often >> realtime on first model compile; budget loosely.
+                    let budget = Duration::from_secs(90) + Duration::from_secs_f64(secs * 2.0);
+                    deadline = tokio::time::Instant::now() + budget.max(Duration::from_secs(120));
+                }
+            }
+            continue;
+        }
+    };
+
+    let _ = child.wait().await;
+
+    // Sidecar emits camelCase via Encodable keys matching our struct with rename.
+    // Swift uses speakerId, start, end, quality, text, speakers, transcript, durationSeconds.
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Raw {
+        segments: Vec<RawSeg>,
+        speakers: Vec<String>,
+        transcript: Option<String>,
+        duration_seconds: f32,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RawSeg {
+        speaker_id: String,
+        start: f32,
+        end: f32,
+        quality: f32,
+        text: Option<String>,
+    }
+
+    let raw: Raw = serde_json::from_str(&json_body)
+        .map_err(|e| format!("parse diarize JSON: {e}; body={}", &json_body[..json_body.len().min(200)]))?;
+
+    Ok(DiarizeResult {
+        segments: raw
+            .segments
+            .into_iter()
+            .map(|s| DiarizeSegment {
+                speaker_id: s.speaker_id,
+                start: s.start,
+                end: s.end,
+                quality: s.quality,
+                text: s.text,
+            })
+            .collect(),
+        speakers: raw.speakers,
+        transcript: raw.transcript,
+        duration_seconds: raw.duration_seconds,
+    })
+}
+
 // FluidAudio caches its CoreML models (Parakeet encoder/decoder, Silero VAD)
 // under ~/Library/Application Support/FluidAudio/Models. They download on first
 // use and are not part of the app bundle, so this is the on-disk footprint a

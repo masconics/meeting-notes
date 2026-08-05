@@ -140,6 +140,8 @@ export function App() {
     // the way out — otherwise the rest of the app runs on stale values
     // (title prefix, audio source, AI popup toggle…) until the next launch.
     setSettings(loadSettings())
+    // Imports and other Data actions write straight to storage — refresh list.
+    setMeetings(loadMeetings())
     const ret = settingsReturnRef.current
     if (ret.view === "editor") {
       if (ret.meetingId) {
@@ -305,6 +307,64 @@ export function App() {
     return () => { cancelled = true; unlisten?.() }
   }, [navigate])
 
+  // Smart start: when idle on dashboard, detect Zoom/Teams/etc. and prompt —
+  // never auto-records (consent + privacy).
+  useEffect(() => {
+    if (!settings.callDetectEnabled) return
+    let cancelled = false
+    let lastPromptAt = 0
+    let dismissedKey = ""
+
+    const tick = async () => {
+      if (cancelled) return
+      if (viewRef.current !== "dashboard") return
+      if (recorderDirtyRef.current) return
+      try {
+        const { invoke } = await import("@tauri-apps/api/core")
+        const result = await invoke<{ active: boolean; apps: string[]; strong: boolean }>(
+          "detect_call_apps",
+        )
+        if (!result?.active || !result.strong) return
+        const key = result.apps.slice().sort().join("|") || "call"
+        const now = Date.now()
+        // Don't re-prompt same app cluster within 20 minutes.
+        if (key === dismissedKey && now - lastPromptAt < 20 * 60 * 1000) return
+        if (now - lastPromptAt < 90_000) return
+        lastPromptAt = now
+        const appLabel = result.apps[0] || "a call"
+        toast(`Looks like you're in ${appLabel}`, {
+          id: "call-detect",
+          description: "Start notes? Myna never records without you.",
+          duration: 12_000,
+          action: {
+            label: "Start notes",
+            onClick: () => {
+              dismissedKey = key
+              setEditorNote(undefined)
+              navigate("editor")
+              // Let the editor mount, then kick recording.
+              window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent("toggle-recording"))
+              }, 400)
+            },
+          },
+        })
+        dismissedKey = key
+      } catch {
+        /* not in Tauri or command missing */
+      }
+    }
+
+    const id = window.setInterval(() => { void tick() }, 45_000)
+    // First check after a short delay so startup isn't noisy.
+    const first = window.setTimeout(() => { void tick() }, 8_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+      window.clearTimeout(first)
+    }
+  }, [settings.callDetectEnabled, navigate])
+
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail as { pane?: string }
@@ -318,7 +378,7 @@ export function App() {
 
   return (
     <MotionConfig reducedMotion="user">
-      <div className="h-screen overflow-hidden bg-muted/30">
+      <div className="h-screen overflow-hidden bg-background">
         <ErrorBoundary>
         <AnimatePresence mode="wait">
           {view === "dashboard" && (
@@ -372,8 +432,9 @@ export function App() {
               animate="animate"
               exit="exit"
               transition={pageTransition}
+              className="flex h-screen min-h-0 flex-col overflow-hidden"
             >
-              <main className="scroll-fade h-screen overflow-y-auto">
+              <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 <SettingsPage
                   onBack={goBackFromSettings}
                   onClearData={handleClearData}

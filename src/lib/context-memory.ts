@@ -361,8 +361,12 @@ export function buildMemoryContextBlock(
   return context
 }
 
+export function getMemoryEntry(meetingId: string): MemoryEntry | null {
+  return getMemoryCache().find((e) => e.meetingId === meetingId) ?? null
+}
+
 export function needsReindex(meeting: Meeting, existingEntry?: MemoryEntry | null): boolean {
-  const entry = existingEntry ?? getMemoryCache().find((e) => e.meetingId === meeting.id)
+  const entry = existingEntry ?? getMemoryEntry(meeting.id)
   if (!entry) return true
   const currentHash = contentHash(meeting)
   return currentHash !== entry.contentHash

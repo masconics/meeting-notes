@@ -169,8 +169,9 @@ export function TabsTrigger({
     )
   }
 
-  const radius = variant === "pill" ? "rounded-full" : "rounded-xl"
-  const radiusPx = variant === "pill" ? 9999 : 12
+  // Mac segmented control: soft rounded rect indicator (not iOS pill stadium).
+  const radius = "rounded-md"
+  const radiusPx = 6
   // Product item classes handle size/hover; active fill lives on the sliding
   // indicator (layoutId) so we never set data-active for background.
   const itemClass = variant === "pill" ? "dashboard-nav-item" : "app-control-item"

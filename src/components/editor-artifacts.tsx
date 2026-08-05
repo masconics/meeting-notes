@@ -47,8 +47,9 @@ export interface EditorArtifactsProps {
 }
 
 /**
- * First-class home for Action digest, Standup blockers, Follow-up email.
- * Reachable above the note body — not only under ⋯ → Recipes.
+ * Post-note appendix for Action digest / Standup / Follow-up.
+ * Parent only mounts this when something has been generated or is running —
+ * never as empty chrome above the writing surface.
  */
 export function EditorArtifacts({
   recipes,
@@ -66,30 +67,36 @@ export function EditorArtifacts({
     return ARTIFACT_RECIPE_IDS.map((id) => byId.get(id)).filter((r): r is Recipe => Boolean(r))
   }, [recipes])
 
-  if (artifacts.length === 0) return null
+  // Prefer artifacts that already have output (or are running).
+  const visible = useMemo(
+    () =>
+      artifacts.filter(
+        (r) => outputs[r.id]?.trim() || runningId === r.id,
+      ),
+    [artifacts, outputs, runningId],
+  )
 
-  const active = activeId ? artifacts.find((r) => r.id === activeId) : null
+  if (visible.length === 0) return null
+
+  const active = activeId ? visible.find((r) => r.id === activeId) : null
   const activeOut = active ? outputs[active.id] : undefined
-  const hasAnyOutput = artifacts.some((r) => outputs[r.id]?.trim())
 
   return (
     <section
       className={cn("editor-artifacts", className)}
-      aria-label="Meeting artifacts"
+      aria-label="Generated artifacts"
     >
       <div className="editor-artifacts-head">
-        <p className="text-[11px] font-medium uppercase tracking-[0.05em] text-muted-foreground">
-          Artifacts
+        <p className="text-[11px] font-medium text-muted-foreground">
+          Generated
         </p>
-        {!hasAnyOutput && canRun && (
-          <p className="text-[11px] text-muted-foreground/80">
-            Run after the meeting — or after Enhance
-          </p>
-        )}
+        <p className="text-[11px] text-muted-foreground/70">
+          From ⋯ · Recipes, or Enhance
+        </p>
       </div>
 
       <div className="editor-artifacts-tabs" role="tablist" aria-label="Artifact type">
-        {artifacts.map((recipe) => {
+        {visible.map((recipe) => {
           const ready = Boolean(outputs[recipe.id]?.trim())
           const running = runningId === recipe.id
           const selected = activeId === recipe.id
@@ -122,7 +129,7 @@ export function EditorArtifacts({
 
       {active && (
         <div className="editor-artifacts-panel" role="tabpanel">
-          <div className="flex items-center justify-between gap-2 border-b border-border/40 px-3 py-2">
+          <div className="flex items-center justify-between gap-2 px-3 py-2">
             <p className="min-w-0 truncate text-[12px] text-muted-foreground">
               {RECIPE_HINTS[active.id] ?? active.name}
             </p>
@@ -163,50 +170,7 @@ export function EditorArtifacts({
                 <MarkdownView markdown={activeOut} proseClassName="mdx-brief" />
               )}
             </div>
-          ) : (
-            <div className="flex flex-col items-start gap-2 px-3 py-5">
-              <p className="text-[12px] text-muted-foreground">
-                {canRun
-                  ? `Generate a ${active.name.toLowerCase()} from this note’s transcript.`
-                  : "Add notes or record first, then generate."}
-              </p>
-              {canRun && (
-                <Button
-                  size="sm"
-                  className="h-8 rounded-xl"
-                  disabled={runningId === active.id}
-                  onClick={() => onRun(active)}
-                >
-                  Generate {active.name.toLowerCase()}
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* When nothing selected: one-row quick actions so digests stay one click away */}
-      {!active && canRun && (
-        <div className="editor-artifacts-quick">
-          {artifacts.map((recipe) => {
-            const ready = Boolean(outputs[recipe.id]?.trim())
-            if (ready) return null
-            return (
-              <Button
-                key={recipe.id}
-                variant="outline"
-                size="sm"
-                className="h-7 rounded-xl text-[12px]"
-                disabled={runningId === recipe.id || !canRun}
-                onClick={() => {
-                  onActiveChange(recipe.id)
-                  onRun(recipe)
-                }}
-              >
-                {runningId === recipe.id ? "Running…" : recipe.name}
-              </Button>
-            )
-          })}
+          ) : null}
         </div>
       )}
     </section>

@@ -112,6 +112,38 @@ fn tool_defs() -> Value {
                 },
                 "required": ["id"]
             }
+        },
+        {
+            "name": "get_transcript",
+            "description": "Get the transcript (or transcript preview) for a meeting by id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string" },
+                    "maxChars": { "type": "number", "description": "Optional max characters (default 12000)" }
+                },
+                "required": ["id"]
+            }
+        },
+        {
+            "name": "list_people",
+            "description": "List people remembered across meetings (name, aliases, meeting ids).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "number" }
+                }
+            }
+        },
+        {
+            "name": "get_meeting_citations",
+            "description": "Return meeting ids and titles for citation as [[meeting:id|title]].",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": { "type": "number" }
+                }
+            }
         }
     ])
 }
@@ -235,6 +267,60 @@ fn call_tool(name: &str, args: &Value) -> Value {
                 })),
                 None => err_result(format!("Meeting not found: {id}")),
             }
+        }
+        "get_transcript" => {
+            let id = args.get("id").and_then(|x| x.as_str()).unwrap_or("");
+            let max = args.get("maxChars").and_then(|x| x.as_u64()).unwrap_or(12000) as usize;
+            let meetings = snap.get("meetings").and_then(|m| m.as_array());
+            let found = meetings.and_then(|arr| arr.iter().find(|m| m.get("id").and_then(|x| x.as_str()) == Some(id)));
+            match found {
+                Some(m) => {
+                    let full = m
+                        .get("transcript")
+                        .and_then(|x| x.as_str())
+                        .or_else(|| m.get("transcriptPreview").and_then(|x| x.as_str()))
+                        .unwrap_or("");
+                    let clipped: String = full.chars().take(max).collect();
+                    text_result(json!({
+                        "id": id,
+                        "title": m.get("title"),
+                        "transcript": clipped,
+                        "truncated": full.chars().count() > max,
+                    }))
+                }
+                None => err_result(format!("Meeting not found: {id}")),
+            }
+        }
+        "list_people" => {
+            let limit = args.get("limit").and_then(|x| x.as_u64()).unwrap_or(100) as usize;
+            let people = snap
+                .get("people")
+                .and_then(|p| p.as_array())
+                .cloned()
+                .unwrap_or_default();
+            text_result(json!(people.into_iter().take(limit).collect::<Vec<_>>()))
+        }
+        "get_meeting_citations" => {
+            let limit = args.get("limit").and_then(|x| x.as_u64()).unwrap_or(50) as usize;
+            let meetings = snap
+                .get("meetings")
+                .and_then(|m| m.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let cites: Vec<Value> = meetings
+                .into_iter()
+                .take(limit)
+                .map(|m| {
+                    let id = m.get("id").and_then(|x| x.as_str()).unwrap_or("");
+                    let title = m.get("title").and_then(|x| x.as_str()).unwrap_or("Untitled");
+                    json!({
+                        "id": id,
+                        "title": title,
+                        "citation": format!("[[meeting:{id}|{title}]]"),
+                    })
+                })
+                .collect();
+            text_result(json!(cites))
         }
         _ => err_result(format!("Unknown tool: {name}")),
     }

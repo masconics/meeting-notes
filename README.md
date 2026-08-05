@@ -14,6 +14,7 @@ Local meeting notes for macOS. Live transcription runs **on this Mac** (Apple Ne
 ## Features
 
 - **On-device ASR** — Parakeet v3 via [FluidAudio](https://github.com/FluidInference/FluidAudio) Core ML  
+- **Speaker diarization** — FluidAudio offline pyannote/VBx pipeline after stop or audio import (`Speaker 1:` …)  
 - **System audio capture** — Core Audio process tap (macOS 14.4+); dual mode labels `Me:` / `Them:`  
 - **Dual-pane notepad** — shorthand + live transcript; Enhance merges both  
 - **Concept tags** — multi-label topics; AI can auto-tag after Enhance  
@@ -27,7 +28,7 @@ Local meeting notes for macOS. Live transcription runs **on this Mac** (Apple Ne
 
 - macOS 14+ (Apple Silicon recommended; Fluid sidecar ships `aarch64-apple-darwin`)  
 - Xcode CLT for building the sidecar  
-- Optional: DeepSeek API key for Enhance / chat  
+- Optional: AI API key for Enhance / chat (DeepSeek, OpenAI, Anthropic, xAI/Grok, Gemini, Groq, OpenRouter, Ollama, or custom)  
 
 ## Develop
 

@@ -295,11 +295,19 @@
 [data-tauri-drag-region] {
   -webkit-user-select: none;
   user-select: none;
-  cursor: grab;
+  cursor: default;
+  /* Tauri uses data-tauri-drag-region; app-region helps native drag */
+  -webkit-app-region: drag;
+  app-region: drag;
 }
 
-[data-tauri-drag-region]:active {
-  cursor: grabbing;
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] input,
+[data-tauri-drag-region] [data-no-drag],
+[data-tauri-drag-region] [data-no-drag] * {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }
 
 ::selection {
@@ -353,11 +361,66 @@
 
 @layer components {
   /*
-   * Granola-style content column (~48rem / 768px).
-   * Home, settings, and chrome share this so the app feels one-width.
+   * Mac-native design system (single source of truth)
+   * ------------------------------------------------
+   * Gaps this layer closes:
+   * 1. Duplicate toolbars (home/settings/editor) → one chrome recipe
+   * 2. Mixed surface language (cards + rings + borders) → mac-surface / mac-group
+   * 3. Search fields each styled differently → mac-search
+   * 4. Webby 24px cards in Settings → preference groups
+   * 5. Heavy action cards → flat grouped lists
+   * 6. Empty states + type scale consistency
    */
+
+  /* ── Shell ─────────────────────────────────────────────────────── */
+  .app-shell {
+    @apply flex h-full max-h-full min-h-0 w-full flex-col overflow-hidden bg-background;
+  }
+
+  /* Toolbar chrome shared by home / settings / editor */
+  .mac-toolbar,
+  .app-topbar,
+  .dashboard-topbar,
+  .editor-header {
+    @apply relative z-30 flex h-[52px] shrink-0 items-center gap-2 bg-background/80 pr-3 backdrop-blur-2xl sm:pr-4;
+    padding-left: 5rem; /* traffic lights (hiddenTitle) */
+  }
+
+  .mac-toolbar-inner,
+  .app-topbar-inner,
+  .dashboard-topbar-inner {
+    @apply grid h-full w-full min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-2;
+  }
+
+  .app-topbar-inner--bleed {
+    @apply flex h-full w-full min-w-0 items-center justify-between gap-2;
+  }
+
+  .editor-header {
+    @apply justify-between sm:gap-3;
+  }
+
+  .mac-toolbar-start {
+    @apply flex min-w-0 items-center gap-1.5;
+  }
+
+  .mac-toolbar-center {
+    @apply flex shrink-0 items-center justify-center;
+  }
+
+  .mac-toolbar-end {
+    @apply flex min-w-0 items-center justify-end gap-1;
+  }
+
+  /* Content column (Notes library, Actions, People) */
+  .mac-content,
+  .app-body,
+  .dashboard-body {
+    @apply scroll-fade mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-4 overflow-y-auto px-5 py-4 sm:px-7 sm:py-5;
+  }
+
   .app-page {
-    @apply mx-auto flex min-h-full w-full max-w-3xl flex-col gap-3 px-5 py-5 sm:px-8;
+    @apply mx-auto flex min-h-full w-full max-w-3xl flex-col gap-4 px-5 py-4 sm:px-7 sm:py-5;
   }
 
   .app-page-narrow {
@@ -365,88 +428,141 @@
   }
 
   .app-page-header {
-    @apply border-b border-border/60 pb-4;
+    @apply flex min-w-0 items-center gap-2;
   }
 
   .app-page-title {
-    @apply font-heading text-xl font-medium tracking-tight;
+    @apply font-heading text-[13px] font-semibold leading-none tracking-tight text-foreground;
   }
 
   .app-page-description {
-    @apply mt-1 text-sm text-muted-foreground;
+    @apply mt-0.5 text-[11px] leading-snug text-muted-foreground;
+  }
+
+  .app-section-head {
+    @apply flex flex-wrap items-end justify-between gap-2 px-0.5;
+  }
+
+  .app-section-title {
+    @apply text-[15px] font-semibold tracking-tight text-foreground;
+  }
+
+  .app-section-desc {
+    @apply mt-0.5 text-[12px] text-muted-foreground;
+  }
+
+  /* ── Surfaces ──────────────────────────────────────────────────── */
+  /* Soft inset well (search, fields) */
+  .mac-search {
+    @apply h-8 border-0 bg-muted/55 shadow-none ring-1 ring-black/[0.04] dark:bg-muted/40 dark:ring-white/[0.06];
+    border-radius: 0.5rem; /* 8px — Mac field */
+  }
+
+  /* Grouped list / preference block */
+  .mac-group {
+    @apply overflow-hidden rounded-[10px] bg-card ring-1 ring-black/[0.06] dark:ring-white/[0.08];
+  }
+
+  .mac-group-row {
+    @apply flex items-start gap-2.5 px-3 py-2.5 transition-colors duration-100 hover:bg-muted/50;
+  }
+
+  .mac-group-row + .mac-group-row {
+    @apply border-t border-black/[0.04] dark:border-white/[0.06];
+  }
+
+  /* Side panels (chat / details) */
+  .mac-panel {
+    @apply flex h-full min-h-0 flex-col bg-card;
+  }
+
+  .mac-panel-header {
+    @apply flex h-11 shrink-0 items-center justify-between gap-2 px-3.5;
+  }
+
+  /* ── Controls ──────────────────────────────────────────────────── */
+  .app-cluster,
+  .dashboard-nav,
+  .editor-header-cluster,
+  .app-control-strip {
+    @apply inline-flex select-none items-center gap-0.5 rounded-lg bg-muted/70 p-0.5 ring-1 ring-black/[0.05] dark:ring-white/[0.08];
   }
 
   .app-toolbar {
-    @apply flex items-center gap-2 rounded-2xl bg-card p-1 shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10;
+    @apply flex items-center gap-1.5 rounded-lg bg-muted/50 p-0.5 ring-1 ring-black/[0.05] dark:ring-white/[0.08];
   }
 
-  .app-empty {
-    @apply flex flex-col items-center gap-3 py-8 text-center;
-  }
-
-  .app-alert {
-    @apply flex items-start justify-between gap-3 rounded-[min(var(--radius-4xl),24px)] border bg-card px-4 py-3 text-sm shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10;
-  }
-
-  .app-code-block {
-    @apply rounded-2xl bg-background p-3 font-mono text-xs text-muted-foreground ring-1 ring-border/80;
-  }
-
-  .app-control-strip {
-    @apply inline-flex select-none items-center rounded-2xl bg-muted p-0.5 ring-1 ring-border/70;
-  }
-
+  .dashboard-nav-item,
   .app-control-item {
-    /* Active fill is the sliding motion indicator (TabsTrigger layoutId). */
-    @apply inline-flex h-8 select-none items-center justify-center gap-1.5 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-[color,transform] duration-150 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:scale-[0.96];
+    @apply inline-flex h-7 select-none items-center justify-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium text-muted-foreground transition-[color,background-color,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] will-change-transform hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:scale-[0.96];
   }
 
+  .dashboard-nav-item {
+    @apply px-3;
+  }
+
+  .dashboard-nav-item[data-active="true"],
   .app-control-item[data-active="true"] {
     @apply text-foreground;
   }
 
-  /* ── Dashboard (Granola-inspired home) ───────────────────────────── */
+  .app-empty,
+  .dashboard-empty {
+    @apply flex flex-1 flex-col items-center justify-center gap-3 px-4 py-16 text-center;
+  }
+
+  .app-alert {
+    @apply flex items-start justify-between gap-3 rounded-[10px] bg-muted/40 px-3.5 py-3 text-sm ring-1 ring-black/[0.05] dark:ring-white/[0.08];
+  }
+
+  .app-code-block {
+    @apply rounded-lg bg-muted/50 p-3 font-mono text-xs text-muted-foreground ring-1 ring-black/[0.05] dark:ring-white/[0.08];
+  }
+
+  .app-panel-header {
+    @apply flex h-11 shrink-0 items-center justify-between gap-2 px-3.5;
+  }
+
+  .app-panel-title {
+    @apply text-[13px] font-semibold tracking-tight;
+  }
+
+  .app-panel-meta {
+    @apply mt-0.5 text-[11px] tabular-nums text-muted-foreground;
+  }
+
+  .app-pressable {
+    @apply transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] will-change-transform active:scale-[0.96];
+  }
+
+  .app-scrollbar-hidden {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .app-scrollbar-hidden::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ── Home ──────────────────────────────────────────────────────── */
   .dashboard-shell {
     @apply flex h-full min-h-0 w-full flex-col bg-background;
   }
 
-  .dashboard-topbar {
-    @apply shrink-0 border-b border-border/40 bg-background/80 backdrop-blur-xl;
-  }
-
-  .dashboard-topbar-inner {
-    /* Granola-style column — same max as .app-page */
-    @apply mx-auto grid w-full max-w-3xl grid-cols-[1fr_auto_1fr] items-center gap-3 px-5 py-3 sm:px-8;
-  }
-
-  .dashboard-nav {
-    @apply inline-flex select-none items-center gap-0.5 rounded-full bg-muted/70 p-0.5 ring-1 ring-border/50;
-  }
-
-  .dashboard-nav-item {
-    /* Active fill is the sliding motion indicator (TabsTrigger layoutId). */
-    @apply inline-flex h-8 select-none items-center justify-center gap-1.5 rounded-full px-3.5 text-sm font-medium text-muted-foreground transition-[color,transform] duration-150 ease-out hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:scale-[0.96];
-  }
-
-  .dashboard-nav-item[data-active="true"] {
-    @apply text-foreground;
-  }
-
-  .dashboard-body {
-    @apply scroll-fade mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col gap-5 overflow-y-auto px-5 py-5 sm:px-8 sm:py-6;
+  .dashboard-pane {
+    @apply flex min-h-0 min-w-0 flex-1 flex-col gap-4;
   }
 
   .dashboard-filters {
-    @apply flex flex-col gap-2;
+    @apply flex shrink-0 flex-col gap-2;
   }
 
-  /* ── Actions inbox (Linear / Todoist-style) ──────────────────────── */
   .actions-chip {
-    @apply inline-flex h-7 max-w-full items-center gap-1.5 rounded-full px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30;
+    @apply inline-flex h-6 max-w-full items-center gap-1.5 rounded-md px-2 text-[11px] font-medium text-muted-foreground transition-[color,background-color,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 active:scale-[0.96];
   }
 
   .actions-chip-active {
-    @apply bg-muted text-foreground shadow-sm ring-1 ring-border/60;
+    @apply bg-muted text-foreground;
   }
 
   .actions-avatar {
@@ -458,7 +574,7 @@
   }
 
   .actions-list {
-    @apply flex flex-col;
+    @apply flex flex-col overflow-hidden rounded-[10px] bg-card ring-1 ring-black/[0.06] dark:ring-white/[0.08];
   }
 
   .actions-row {
@@ -466,46 +582,89 @@
   }
 
   .dashboard-day-label {
-    @apply px-2 pb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/75;
+    @apply px-2.5 pb-1 pt-2 text-[11px] font-medium text-muted-foreground;
   }
 
+  /* Apple Notes list rows — soft hover + press */
   .dashboard-note-row {
-    @apply flex cursor-pointer items-start gap-3 rounded-2xl border border-border/70 bg-card/40 px-3 py-3.5 outline-none transition-[color,background-color,border-color,box-shadow,transform] duration-150 ease-out hover:border-border hover:bg-muted/45 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.995];
+    @apply flex cursor-pointer items-start gap-3 rounded-lg px-2.5 py-2 outline-none transition-[background-color,transform,box-shadow] duration-150 ease-[cubic-bezier(0.2,0,0,1)] will-change-transform hover:bg-muted/65 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-ring;
   }
 
   .dashboard-day-label + ul {
-    @apply flex flex-col gap-2;
+    @apply flex flex-col gap-px;
   }
 
-  /* Soft press feedback for primary interactive rows */
-  .app-pressable {
-    @apply transition-transform duration-150 ease-out active:scale-[0.96];
+  /* Preferences (Settings) — body fills shell; detail is the scroll surface */
+  .mac-prefs-body {
+    @apply flex w-full min-h-0 flex-1 overflow-hidden;
+    /* flex-basis: 0 is required so the pane is height-bounded and can scroll */
+    flex: 1 1 0%;
   }
 
-  .dashboard-empty {
-    @apply flex flex-1 flex-col items-center justify-center gap-4 py-16;
+  .mac-prefs-sidebar {
+    @apply flex w-[12rem] shrink-0 flex-col gap-3 overflow-y-auto overscroll-contain bg-muted/30 px-2 py-3;
+  }
+
+  .mac-prefs-detail {
+    /*
+     * This is the only vertical scroller for Settings (Audio, AI Enhancement, …).
+     * flex-basis 0 + min-height 0 is the reliable “scroll inside flex child” pattern.
+     */
+    flex: 1 1 0%;
+    min-width: 0;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 1.25rem 1.25rem 2.5rem;
+  }
+
+  @media (min-width: 640px) {
+    .mac-prefs-detail {
+      padding-inline: 1.75rem;
+    }
+  }
+
+  /* Settings cards → preference groups; never clip tall sections (e.g. AI Enhancement) */
+  .mac-prefs-detail [data-slot="card"] {
+    border-radius: 10px;
+    box-shadow: none;
+    overflow: visible;
+    --card-spacing: 1rem;
+    background: color-mix(in oklch, var(--card) 100%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--foreground) 6%, transparent);
+  }
+
+  .mac-prefs-detail [data-slot="card-title"] {
+    font-size: 0.8125rem; /* 13px */
+    font-weight: 600;
+  }
+
+  .mac-prefs-detail [data-slot="card-description"] {
+    font-size: 0.75rem; /* 12px */
   }
 
   /* ── Folders ─────────────────────────────────────────────────────── */
   .folder-rail {
     /* Fixed track height so create/manage UI never reflows the dashboard. */
-    @apply min-h-8 min-w-0;
+    @apply min-h-7 min-w-0;
   }
 
   .folder-rail-scroll {
-    @apply scroll-fade-x flex h-8 items-center gap-1 overflow-x-auto overflow-y-hidden;
+    @apply scroll-fade-x flex h-7 items-center gap-1 overflow-x-auto overflow-y-hidden;
   }
 
   .folder-pill-group {
-    @apply inline-flex h-8 shrink-0 items-center;
+    @apply inline-flex h-7 shrink-0 items-center;
   }
 
   .folder-pill {
-    @apply inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring;
+    @apply inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-[color,background-color,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-muted/70 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96];
   }
 
   .folder-pill-active {
-    @apply bg-muted text-foreground shadow-sm ring-1 ring-border/60;
+    @apply bg-muted text-foreground;
   }
 
   .folder-pill-count {
@@ -533,30 +692,13 @@
     @apply h-8;
   }
 
-  .app-scrollbar-hidden {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-  }
-
-  .app-scrollbar-hidden::-webkit-scrollbar {
-    display: none;
-  }
-
   /* ── Editor shell (production note surface) ─────────────────────── */
   .editor-shell {
-    @apply flex h-full w-full flex-col bg-background;
-  }
-
-  .editor-header {
-    @apply relative z-30 flex min-h-12 shrink-0 items-center gap-2 border-b border-border/40 bg-background/75 px-2.5 backdrop-blur-xl sm:gap-3 sm:px-3;
-  }
-
-  .editor-header-cluster {
-    @apply flex items-center gap-0.5 rounded-2xl bg-muted/50 p-0.5 ring-1 ring-border/50;
+    @apply flex h-full min-h-0 w-full flex-col bg-background;
   }
 
   .editor-header-status {
-    @apply inline-flex max-w-full items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] tabular-nums text-muted-foreground;
+    @apply inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[11px] tabular-nums text-muted-foreground;
   }
 
   .editor-header-status[data-state="busy"] {
@@ -579,14 +721,11 @@
   }
 
   .editor-col-info {
-    /* Opaque card surface — bg-muted/10 looked transparent at min window sizes.
-       Width is driven by Framer Motion; keep shrink-0 so the editor doesn't crush it. */
-    @apply flex shrink-0 flex-col overflow-hidden border-r border-border/50 bg-card;
+    @apply flex shrink-0 flex-col overflow-hidden bg-muted/20;
   }
 
-  /* Left details rail — dense inspector, not a second page */
   .editor-info-header {
-    @apply flex shrink-0 items-start justify-between gap-2 border-b border-border/40 bg-card px-3 py-2.5;
+    @apply flex h-11 shrink-0 items-start justify-between gap-2 px-3.5 py-2;
   }
 
   .editor-info-body {
@@ -643,7 +782,7 @@
   }
 
   .editor-info-footer {
-    @apply shrink-0 border-t border-border/40 bg-card px-2 py-2;
+    @apply shrink-0 bg-card px-2 py-2;
   }
 
   .editor-info-loop {
@@ -670,9 +809,9 @@
     @apply flex w-full items-center gap-2 rounded-xl px-2 py-1.5 text-left text-[12px] text-foreground/90 transition-colors hover:bg-foreground/[0.04];
   }
 
-  /* Post-meeting artifacts (action digest, standup, follow-up) */
+  /* Post-note appendix (only when something was generated) */
   .editor-artifacts {
-    @apply mt-6 flex flex-col gap-2;
+    @apply flex flex-col gap-2;
   }
 
   .editor-artifacts-head {
@@ -684,11 +823,11 @@
   }
 
   .editor-artifacts-tab {
-    @apply inline-flex h-8 max-w-full select-none items-center gap-1.5 rounded-xl px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground;
+    @apply inline-flex h-7 max-w-full select-none items-center gap-1.5 rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-[color,background-color,transform] duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-muted hover:text-foreground active:scale-[0.96];
   }
 
   .editor-artifacts-tab--active {
-    @apply bg-muted text-foreground shadow-sm ring-1 ring-border/60;
+    @apply bg-muted text-foreground;
   }
 
   .editor-artifacts-tab--ready:not(.editor-artifacts-tab--active) {
@@ -696,15 +835,11 @@
   }
 
   .editor-artifacts-panel {
-    @apply overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10;
+    @apply overflow-hidden rounded-[10px] bg-muted/30 ring-1 ring-black/[0.05] dark:ring-white/[0.07];
   }
 
   .editor-artifacts-body {
     @apply scroll-fade max-h-[min(18rem,40vh)] select-text overflow-y-auto px-3 py-2.5 text-muted-foreground;
-  }
-
-  .editor-artifacts-quick {
-    @apply flex flex-wrap gap-1.5;
   }
 
   .editor-col-main {
@@ -715,7 +850,11 @@
   }
 
   .editor-col-chat {
-    @apply relative flex w-[min(20rem,28vw)] shrink-0 flex-col overflow-hidden border-l border-border/50 bg-card;
+    @apply relative flex w-[min(20rem,28vw)] shrink-0 flex-col overflow-hidden bg-muted/20;
+  }
+
+  .editor-pane {
+    @apply flex min-h-0 flex-col overflow-hidden rounded-[10px] bg-muted/30 ring-1 ring-black/[0.05] dark:ring-white/[0.07];
   }
 
   .editor-side-scroll {
@@ -744,7 +883,7 @@
    */
   .editor-canvas {
     --editor-gutter: clamp(1rem, 2.25cqi + 0.75rem, 3.25rem);
-    --editor-cap: 80rem;
+    --editor-cap: 48rem; /* ~ notes measure — writing, not full dashboard width */
 
     box-sizing: border-box;
     display: flex;
@@ -754,18 +893,38 @@
     margin-inline: auto;
     flex-direction: column;
     padding-inline: var(--editor-gutter);
-    padding-top: clamp(1.5rem, 1.1cqi + 1.1rem, 2.75rem);
-    padding-bottom: clamp(5rem, 7cqi, 7rem);
+    padding-top: clamp(1.25rem, 0.8cqi + 0.9rem, 2rem);
+    padding-bottom: clamp(5.5rem, 7cqi, 7.5rem);
   }
 
   @supports not (width: 1cqi) {
     .editor-canvas {
-      --editor-gutter: clamp(1rem, 3vw, 3rem);
-      width: min(100%, 80rem);
+      --editor-gutter: clamp(1rem, 3vw, 2.5rem);
+      width: min(100%, 48rem);
       padding-inline: var(--editor-gutter);
-      padding-top: clamp(1.5rem, 2vw + 1rem, 2.75rem);
-      padding-bottom: 6rem;
+      padding-top: 1.5rem;
+      padding-bottom: 6.5rem;
     }
+  }
+
+  .editor-body {
+    @apply mt-5 flex min-h-[24rem] flex-1 flex-col;
+  }
+
+  .editor-live-bar {
+    @apply mt-3 flex items-center;
+  }
+
+  .editor-empty-hint {
+    @apply mt-10 text-center text-[12px] text-muted-foreground/70;
+  }
+
+  .editor-empty-hint kbd {
+    @apply rounded-md bg-muted/70 px-1.5 py-0.5 font-sans text-[11px] text-muted-foreground ring-1 ring-black/[0.05] dark:ring-white/[0.07];
+  }
+
+  .editor-empty-hint-action {
+    @apply font-medium text-foreground/80 underline decoration-border underline-offset-2 transition-colors hover:text-foreground;
   }
 
   /* Same measure as the note body — full canvas content box, not content-sized */
@@ -795,7 +954,7 @@
   }
 
   .editor-description-input {
-    @apply mt-2 box-border min-h-[2.5rem] w-full max-w-full resize-none border-none bg-transparent px-0 py-0 text-[14px] leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/40 focus-visible:ring-0;
+    @apply mt-1.5 box-border min-h-[1.4rem] w-full max-w-full resize-none border-none bg-transparent px-0 py-0 text-[13px] leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/40 focus-visible:ring-0;
     field-sizing: content;
   }
 
@@ -806,7 +965,7 @@
   }
 
   .editor-meta {
-    @apply mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] tabular-nums text-muted-foreground;
+    @apply mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] tabular-nums text-muted-foreground/80;
   }
 
   .editor-meta-sep {
@@ -817,7 +976,7 @@
     @apply inline-flex items-center gap-1.5 rounded-full bg-muted/80 px-2.5 py-1 text-xs font-medium text-foreground/80 transition-colors hover:bg-muted;
   }
 
-  /* Floating capture dock (Granola-style) — centered island, not a full bar */
+  /* Capture dock — floating island, Mac control density */
   .editor-capture {
     @apply pointer-events-none relative z-20 shrink-0 px-3 pb-3 pt-1 sm:px-4 sm:pb-4;
   }
@@ -841,27 +1000,27 @@
   }
 
   .editor-dock {
-    @apply flex max-w-full items-center gap-1 rounded-[1.35rem] bg-card/95 p-1.5 shadow-[0_12px_40px_-16px_rgba(0,0,0,0.45)] ring-1 ring-foreground/10 backdrop-blur-xl dark:bg-card/90 dark:shadow-[0_16px_48px_-12px_rgba(0,0,0,0.7)] dark:ring-foreground/12;
+    @apply flex max-w-full items-center gap-0.5 rounded-[12px] bg-card/95 p-1 shadow-[0_10px_32px_-14px_rgba(0,0,0,0.4)] ring-1 ring-black/[0.08] backdrop-blur-xl dark:bg-card/90 dark:shadow-[0_14px_40px_-12px_rgba(0,0,0,0.65)] dark:ring-white/[0.1];
   }
 
   .editor-dock[data-state="live"] {
-    @apply w-full max-w-xl gap-1.5 p-1.5 ring-destructive/20 sm:max-w-2xl;
+    @apply w-full max-w-lg gap-1 p-1 ring-destructive/20 sm:max-w-xl;
   }
 
   .editor-dock[data-state="paused"] {
-    @apply w-full max-w-md gap-1.5 ring-amber-500/25 sm:max-w-lg;
+    @apply w-full max-w-sm gap-1 ring-amber-500/25 sm:max-w-md;
   }
 
   .editor-dock[data-state="processing"] {
-    @apply gap-2 px-3 py-2;
+    @apply gap-2 px-3 py-1.5;
   }
 
   .editor-dock-divider {
-    @apply mx-0.5 h-5 w-px shrink-0 bg-border/80;
+    @apply mx-0.5 h-4 w-px shrink-0 bg-border/60;
   }
 
   .editor-dock-status {
-    @apply flex min-w-0 flex-1 items-center gap-2 px-1.5 sm:gap-2.5 sm:px-2;
+    @apply flex min-w-0 flex-1 items-center gap-1.5 px-1.5 sm:gap-2 sm:px-2;
   }
 
   /* ── AI chrome (radial ramps) — data-ai="idle|active|busy" ── */
@@ -1084,10 +1243,6 @@
   .ai-ring[data-ai="busy"] {
     box-shadow: 0 0 0 1px color-mix(in oklch, var(--brand) 28%, transparent);
     color: var(--brand);
-  }
-
-  .editor-pane {
-    @apply flex min-h-0 flex-col overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10;
   }
 
   .editor-pane-header {
@@ -1889,6 +2044,28 @@
   --duration-motion-micro: 120ms;
   --duration-motion-fast: 150ms;
   --duration-motion-base: 200ms;
+}
+
+/*
+ * Global micro-interactions for plain interactive elements
+ * (menus, chips, list buttons that aren't <Button />).
+ * Framer handles Button; CSS covers the rest without wrapping the tree.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  [data-slot="dropdown-menu-item"],
+  [data-slot="select-item"],
+  [role="menuitem"],
+  [role="option"] {
+    transition: background-color 150ms cubic-bezier(0.2, 0, 0, 1),
+      color 150ms cubic-bezier(0.2, 0, 0, 1),
+      transform 150ms cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  [data-slot="dropdown-menu-item"]:active,
+  [data-slot="select-item"]:active,
+  [role="menuitem"]:active {
+    transform: scale(0.98);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

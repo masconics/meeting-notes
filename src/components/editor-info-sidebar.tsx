@@ -1,3 +1,4 @@
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -36,6 +37,8 @@ export interface EditorInfoSidebarProps {
   onAddSpeakerCancel: () => void
   onNewSpeakerNameChange: (name: string) => void
   onRemoveSpeaker: (index: number) => void
+  /** Rename speaker and rewrite labels across transcript (apply-all). */
+  onRenameSpeaker?: (index: number, newName: string) => void
   onOpenRelated: (id: string) => void
   /** Mark an open loop done / reopen in the knowledge graph. */
   onToggleLoop?: (id: string, resolved: boolean) => void
@@ -63,10 +66,13 @@ export function EditorInfoSidebar({
   onAddSpeakerCancel,
   onNewSpeakerNameChange,
   onRemoveSpeaker,
+  onRenameSpeaker,
   onOpenRelated,
   onToggleLoop,
   className,
 }: EditorInfoSidebarProps) {
+  const [renamingIndex, setRenamingIndex] = useState<number | null>(null)
+  const [renameValue, setRenameValue] = useState("")
   const hasPeople = people.length > 0
   const hasLoops = openLoops.length > 0
   const hasRelated = related.length > 0
@@ -76,8 +82,8 @@ export function EditorInfoSidebar({
       <div className={cn("editor-info flex h-full min-h-0 flex-col", className)}>
         <header className="editor-info-header">
           <div className="min-w-0">
-            <p className="text-[13px] font-medium tracking-tight">Details</p>
-            <p className="mt-0.5 truncate text-[11px] tabular-nums text-muted-foreground">
+            <p className="app-panel-title">Details</p>
+            <p className="app-panel-meta truncate">
               {formatDate(dateIso)}
               <span className="text-border"> · </span>
               {formatTime(dateIso)}
@@ -135,13 +141,78 @@ export function EditorInfoSidebar({
             <ul className="editor-info-people">
               {people.map((p) => {
                 if (p.kind === "speaker") {
+                  if (renamingIndex === p.index) {
+                    return (
+                      <li key={`sp-${p.index}`} className="editor-info-person editor-info-person--edit">
+                        <Input
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          placeholder="Real name"
+                          className="h-7 border-0 bg-transparent px-0 text-xs shadow-none focus-visible:ring-0"
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && renameValue.trim() && onRenameSpeaker) {
+                              onRenameSpeaker(p.index, renameValue.trim())
+                              setRenamingIndex(null)
+                              setRenameValue("")
+                            }
+                            if (e.key === "Escape") {
+                              setRenamingIndex(null)
+                              setRenameValue("")
+                            }
+                          }}
+                        />
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          onClick={() => {
+                            if (renameValue.trim() && onRenameSpeaker) {
+                              onRenameSpeaker(p.index, renameValue.trim())
+                            }
+                            setRenamingIndex(null)
+                            setRenameValue("")
+                          }}
+                          aria-label="Confirm rename"
+                        >
+                          <HugeiconsIcon icon={Add01Icon} strokeWidth={2} />
+                        </Button>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          onClick={() => {
+                            setRenamingIndex(null)
+                            setRenameValue("")
+                          }}
+                          aria-label="Cancel rename"
+                        >
+                          <HugeiconsIcon icon={Cancel01Icon} strokeWidth={2} />
+                        </Button>
+                      </li>
+                    )
+                  }
                   return (
                     <li key={`sp-${p.index}`} className="editor-info-person group">
                       <span className={cn("editor-info-avatar", p.color)}>{initials(p.name)}</span>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[12px] font-medium leading-tight">{p.name}</p>
-                        <p className="text-[10px] text-muted-foreground">Speaker</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          Speaker
+                          {onRenameSpeaker ? " · click to rename" : ""}
+                        </p>
                       </div>
+                      {onRenameSpeaker && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRenamingIndex(p.index)
+                            setRenameValue(p.name)
+                          }}
+                          className="rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground opacity-0 transition-opacity hover:bg-foreground/8 hover:text-foreground group-hover:opacity-100"
+                          aria-label={`Rename ${p.name}`}
+                        >
+                          Rename
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => onRemoveSpeaker(p.index)}

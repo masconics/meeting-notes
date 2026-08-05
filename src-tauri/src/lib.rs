@@ -1,5 +1,6 @@
 mod capture;
 mod calendar;
+mod call_detect;
 mod embed;
 mod fluid;
 mod mcp_snapshot;
@@ -132,6 +133,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             fluid::transcribe_audio_fluid,
             fluid::transcribe_audio_file_fluid,
+            fluid::diarize_audio_file_fluid,
             fluid::check_fluid_ready,
             fluid::setup_fluid,
             fluid::setup_fluid_model,
@@ -153,6 +155,7 @@ pub fn run() {
             calendar::request_calendar_access,
             calendar::list_upcoming_events,
             calendar::calendar_authorization_status,
+            call_detect::detect_call_apps,
             mcp_snapshot::write_mcp_snapshot,
             mcp_snapshot::mcp_snapshot_path,
         ])

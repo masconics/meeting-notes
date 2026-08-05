@@ -12,14 +12,6 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Mic01Icon,
@@ -44,7 +36,7 @@ import {
 import { markOnboardingComplete } from "@/lib/onboarding"
 import { testConnection } from "@/lib/ai-service"
 import type { AISettings } from "@/types"
-import { AI_MODELS } from "@/types"
+
 
 const TOTAL_STEPS = 5
 
@@ -234,9 +226,9 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
   }, [micStream, onComplete])
 
   const validateApiKey = useCallback((key: string): string | null => {
+    // Soft check only — multi-provider keys have many prefixes.
     if (!key) return null
-    if (!key.startsWith("sk-")) return "API key must start with 'sk-'"
-    if (key.length < 20) return "API key must be at least 20 characters"
+    if (key.trim().length < 8) return "API key looks too short"
     return null
   }, [])
 
@@ -520,7 +512,7 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
                     <HugeiconsIcon icon={AiMagicIcon} strokeWidth={2} className="size-8 text-primary" />
                   </div>
                   <DialogDescription className="text-pretty">
-                    Optional: connect DeepSeek to enhance notes, auto-tag by concept, and chat about
+                    Optional: connect an AI provider (DeepSeek, OpenAI, Claude, Grok…) to enhance notes, auto-tag by concept, and chat about
                     meetings. Skip for now — recording and local transcription work without a key.
                   </DialogDescription>
 
@@ -557,23 +549,21 @@ export function OnboardingWizard({ open, onComplete }: OnboardingWizardProps) {
 
                     <div className="flex flex-col gap-1.5 text-left">
                       <label className="text-xs font-medium">Model</label>
-                      <Select
+                      <Input
                         value={aiSettings.model}
-                        onValueChange={(v) => updateAI({ model: v })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select model..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {Object.entries(AI_MODELS).map(([code, name]) => (
-                              <SelectItem key={code} value={code}>
-                                {name}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
+                        onChange={(e) => updateAI({ model: e.target.value.trimStart() })}
+                        onBlur={() => {
+                          const m = aiSettings.model.trim()
+                          if (m !== aiSettings.model) updateAI({ model: m })
+                        }}
+                        placeholder="deepseek-chat"
+                        spellCheck={false}
+                        autoComplete="off"
+                        autoCapitalize="off"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Type the exact model id from your provider. Switch provider (OpenAI, Claude, Grok…) later in Settings.
+                      </p>
                     </div>
 
                     <div className="flex items-center gap-3">

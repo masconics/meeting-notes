@@ -881,12 +881,12 @@ export function ActionsInbox({
   }
 
   return (
-    <div className="actions-inbox flex flex-col gap-4">
+    <div className="actions-inbox flex min-h-full flex-1 flex-col gap-4">
       {/* Header — count + status (Linear/Things) */}
-      <header className="flex flex-wrap items-end justify-between gap-3 px-0.5">
+      <header className="app-section-head shrink-0">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold tracking-tight text-foreground">Actions</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <h2 className="app-section-title">Actions</h2>
+          <p className="app-section-desc">
             {showDone
               ? `${doneCount} completed`
               : openCount === 0
@@ -915,7 +915,7 @@ export function ActionsInbox({
 
       {/* Toolbar — search + assignee chips */}
       <div className="flex flex-col gap-2">
-        <InputGroup className="h-9 border-0 bg-muted/40 shadow-none ring-1 ring-border/50">
+        <InputGroup className="mac-search">
           <InputGroupInput
             type="search"
             value={query}
@@ -973,24 +973,24 @@ export function ActionsInbox({
 
       {/* List */}
       {items.length === 0 ? (
-        <div className="app-empty rounded-2xl border border-dashed border-border/70 bg-card/30 py-14">
-          <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-muted">
+        <div className="dashboard-empty">
+          <span className="inline-flex size-10 items-center justify-center rounded-xl bg-muted/80">
             <HugeiconsIcon icon={CheckListIcon} strokeWidth={1.75} className="size-5 text-muted-foreground" />
           </span>
-          <div>
-            <p className="text-sm font-medium">
+          <div className="max-w-xs">
+            <p className="text-[15px] font-semibold tracking-tight">
               {query || assigneeFocus
-                ? "No matching actions"
+                ? "No Matching Actions"
                 : showDone
-                  ? "No completed actions"
-                  : "Inbox zero"}
+                  ? "No Completed Actions"
+                  : "All Clear"}
             </p>
-            <p className="mt-1 max-w-sm text-xs text-pretty text-muted-foreground">
+            <p className="mt-1 text-[13px] text-pretty text-muted-foreground">
               {query || assigneeFocus
                 ? "Try another search or clear the assignee filter."
                 : showDone
                   ? "Completed items land here when you check them off."
-                  : "Enhance a note to pull out action items. They group by meeting so you can clear them in context."}
+                  : "Enhance a note to pull out action items."}
             </p>
           </div>
           {(query || assigneeFocus) && (
@@ -1034,15 +1034,15 @@ export function ActionsInbox({
                   </span>
                 </div>
 
-                <ul className="actions-list overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10">
+                <ul className="actions-list">
                   {group.items.map((item, idx) => {
                     const done = item.status === "resolved"
                     return (
                       <li
                         key={item.id}
                         className={cn(
-                          "actions-row group/row flex items-start gap-2.5 px-3 py-2.5 transition-[background-color,color] duration-150 ease-out hover:bg-muted/40",
-                          idx > 0 && "border-t border-border/40",
+                          "actions-row mac-group-row group/row",
+                          idx > 0 && "border-t border-black/[0.04] dark:border-white/[0.06]",
                         )}
                       >
                         <button
@@ -1215,20 +1215,15 @@ export function PeopleMemory({
 
   if (people.length === 0) {
     return (
-      <div className="people-memory flex flex-col gap-4">
-        <header className="px-0.5">
-          <h2 className="text-base font-semibold tracking-tight">People</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">Memory from meetings and assignees</p>
-        </header>
-        <div className="app-empty rounded-2xl border border-dashed border-border/70 bg-card/30 py-14">
-          <span className="inline-flex size-11 items-center justify-center rounded-2xl bg-muted">
+      <div className="people-memory flex min-h-full flex-1 flex-col gap-4">
+        <div className="dashboard-empty">
+          <span className="inline-flex size-10 items-center justify-center rounded-xl bg-muted/80">
             <HugeiconsIcon icon={UserGroupIcon} strokeWidth={1.75} className="size-5 text-muted-foreground" />
           </span>
-          <div>
-            <p className="text-sm font-medium">No people yet</p>
-            <p className="mt-1 max-w-sm text-xs text-pretty text-muted-foreground">
-              People appear from calendar invitees, speakers, and action assignees after you enhance notes
-              or start a meeting from the calendar.
+          <div className="max-w-xs">
+            <p className="text-[15px] font-semibold tracking-tight">No People</p>
+            <p className="mt-1 text-[13px] text-pretty text-muted-foreground">
+              People appear from invitees, speakers, and action assignees.
             </p>
           </div>
         </div>
@@ -1237,18 +1232,18 @@ export function PeopleMemory({
   }
 
   return (
-    <div className="people-memory flex flex-col gap-4">
-      <header className="flex flex-wrap items-end justify-between gap-3 px-0.5">
+    <div className="people-memory flex min-h-full flex-1 flex-col gap-4">
+      <header className="app-section-head shrink-0">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold tracking-tight">People</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <h2 className="app-section-title">People</h2>
+          <p className="app-section-desc">
             {people.length} contact{people.length === 1 ? "" : "s"}
             {filteredPeople.length !== people.length ? ` · ${filteredPeople.length} shown` : ""}
           </p>
         </div>
       </header>
 
-      <InputGroup className="h-9 border-0 bg-muted/40 shadow-none ring-1 ring-border/50">
+      <InputGroup className="mac-search">
         <InputGroupInput
           type="search"
           value={query}
@@ -1269,7 +1264,7 @@ export function PeopleMemory({
       </InputGroup>
 
       {filteredPeople.length === 0 ? (
-        <div className="app-empty rounded-2xl border border-dashed border-border/70 bg-card/30 py-12">
+        <div className="app-empty">
           <p className="text-sm font-medium">No matching people</p>
           <p className="mt-1 text-xs text-muted-foreground">Try another name or email.</p>
           <Button variant="outline" size="sm" onClick={() => setQuery("")}>
@@ -1280,7 +1275,7 @@ export function PeopleMemory({
         <div className="grid min-h-[22rem] gap-3 md:grid-cols-[minmax(0,14rem)_1fr]">
           {/* Directory */}
           <div
-            className="flex max-h-[min(32rem,65vh)] flex-col overflow-hidden rounded-2xl bg-card shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10"
+            className="mac-group flex max-h-[min(32rem,65vh)] flex-col"
             role="listbox"
             aria-label="People"
           >
@@ -1321,16 +1316,16 @@ export function PeopleMemory({
 
           {/* Detail */}
           {selected ? (
-            <div className="scroll-fade flex min-h-0 flex-col gap-5 overflow-y-auto rounded-2xl bg-card p-4 shadow-sm ring-1 ring-foreground/5 dark:ring-foreground/10 sm:p-5">
+            <div className="mac-group scroll-fade flex min-h-0 flex-col gap-4 overflow-y-auto p-4 sm:p-5">
               <div className="flex items-start gap-3">
                 <span
-                  className="inline-flex size-11 shrink-0 items-center justify-center rounded-2xl bg-foreground/8 text-base font-semibold text-foreground"
+                  className="inline-flex size-10 shrink-0 items-center justify-center rounded-lg bg-foreground/8 text-sm font-semibold text-foreground"
                   aria-hidden
                 >
                   {selected.name.slice(0, 1).toUpperCase()}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <h3 className="font-heading text-lg font-semibold tracking-tight text-balance">
+                  <h3 className="font-heading text-[15px] font-semibold tracking-tight text-balance">
                     {selected.name}
                   </h3>
                   {selected.email ? (
@@ -1343,7 +1338,7 @@ export function PeopleMemory({
                       {selected.aliases.map((a) => (
                         <span
                           key={a}
-                          className="rounded-full bg-muted/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                          className="rounded-md bg-muted/80 px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
                         >
                           {a}
                         </span>
@@ -1470,7 +1465,7 @@ export function PeopleMemory({
               </div>
             </div>
           ) : (
-            <div className="app-empty rounded-2xl border border-dashed border-border/70 py-12">
+            <div className="app-empty">
               <p className="text-sm text-muted-foreground">Select a person</p>
             </div>
           )}

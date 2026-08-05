@@ -7,6 +7,8 @@ export interface ChatMessage {
   role: "user" | "assistant"
   content: string
   timestamp: string
+  /** Meeting ids cited by the assistant (source-linked ask-anything). */
+  sources?: { meetingId: string; title: string }[]
 }
 
 export interface QuickAction {
@@ -191,10 +193,29 @@ export interface KnowledgeGraph {
   lastUpdated: string
 }
 
+/** Cloud / local chat provider for Enhance, polish, and meeting chat. */
+export type AIProviderId =
+  | "deepseek"
+  | "openai"
+  | "xai"
+  | "anthropic"
+  | "gemini"
+  | "groq"
+  | "openrouter"
+  | "ollama"
+  | "custom"
+
 export interface AISettings {
   apiKey: string
   model: string
   enabled: boolean
+  /** Which market provider / endpoint to use. */
+  provider: AIProviderId
+  /**
+   * Override base URL (OpenAI-compatible root or Anthropic host).
+   * Empty = use the provider default.
+   */
+  baseUrl: string
 }
 
 export type TranscriptionModel = "parakeet-v3"
@@ -223,12 +244,26 @@ export interface AppSettings {
   exportFolderPath: string
   /** Slack Incoming Webhook URL for sharing notes (optional). */
   slackWebhookUrl: string
+  /**
+   * When idle, detect Zoom/Teams/etc. and gently prompt to start notes.
+   * Never auto-records — prompt only (consent + privacy).
+   */
+  callDetectEnabled: boolean
+  /** After stop, run a dictionary/calendar-aware transcript polish pass (AI). */
+  polishTranscriptOnStop: boolean
+  /**
+   * After recording stops (or audio import), run FluidAudio offline diarization
+   * and rewrite the transcript with Speaker N: labels when possible.
+   */
+  diarizeOnStop: boolean
 }
 
 export const DEFAULT_AI_SETTINGS: AISettings = {
   apiKey: "",
-  model: "deepseek-v4-pro",
+  model: "deepseek-chat",
   enabled: true,
+  provider: "deepseek",
+  baseUrl: "",
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -247,6 +282,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   mcpEnabled: true,
   exportFolderPath: "",
   slackWebhookUrl: "",
+  callDetectEnabled: true,
+  polishTranscriptOnStop: true,
+  diarizeOnStop: true,
 }
 
 export const BUILTIN_RECIPES: Recipe[] = [
@@ -280,10 +318,11 @@ export const BUILTIN_RECIPES: Recipe[] = [
   },
 ]
 
-export const AI_MODELS: Record<string, string> = {
-  "deepseek-v4-flash": "DeepSeek V4 Flash — fast, great for chat",
-  "deepseek-v4-pro": "DeepSeek V4 Pro — powerful, best for enhancement",
-}
+/**
+ * @deprecated Model ids are free-form now (Settings → Model text field).
+ * Kept empty so any old import doesn't crash.
+ */
+export const AI_MODELS: Record<string, string> = {}
 
 export const SPEECH_LANGS: Record<string, string> = {
   "auto": "Auto-detect",

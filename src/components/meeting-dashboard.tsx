@@ -41,17 +41,18 @@ import {
 import type { Meeting } from "@/types"
 import { useState, useMemo, useCallback, useRef, useEffect } from "react"
 import { AnimatePresence, motion } from "framer-motion"
-import { getTemplateById } from "@/lib/templates"
-import { loadKnowledgeGraph, loadSavedSearches, saveSavedSearches, saveSortPreference } from "@/lib/storage"
-import { toast } from "@/components/ui/toaster"
-import { GlobalChat } from "@/components/global-chat"
-import { MynaLogo } from "@/components/myna-logo"
 import {
+  micro,
   listContainerVariants,
   listItemVariants,
   paneVariants,
   transitions,
 } from "@/lib/motion"
+import { getTemplateById } from "@/lib/templates"
+import { loadKnowledgeGraph, loadSavedSearches, saveSavedSearches, saveSortPreference } from "@/lib/storage"
+import { toast } from "@/components/ui/toaster"
+import { GlobalChat } from "@/components/global-chat"
+import { MynaLogo } from "@/components/myna-logo"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   ActionsInbox,
@@ -401,26 +402,28 @@ export function MeetingDashboard({
 
   return (
     <div className="dashboard-shell">
-      {/* Granola-style top bar: nav center, actions right */}
-      <header className="dashboard-topbar">
+      {/* Unified Mac toolbar: traffic lights · logo · principal nav · actions */}
+      <header data-tauri-drag-region className="dashboard-topbar">
         <div className="dashboard-topbar-inner">
-          <div className="flex min-w-0 items-center">
-            <MynaLogo className="size-6 text-foreground" title="Myna Notes" />
+          <div className="mac-toolbar-start" data-no-drag>
+            <MynaLogo className="size-8 text-foreground sm:size-9" title="Myna Notes" />
           </div>
 
-          <Tabs
-            value={pane}
-            onValueChange={(v) => setPane(v as DashboardPane)}
-            variant="pill"
-          >
-            <TabsList aria-label="Dashboard views">
-              <TabsTrigger value="notes">Notes</TabsTrigger>
-              <TabsTrigger value="actions">Actions</TabsTrigger>
-              <TabsTrigger value="people">People</TabsTrigger>
-            </TabsList>
-          </Tabs>
+          <div className="mac-toolbar-center" data-no-drag>
+            <Tabs
+              value={pane}
+              onValueChange={(v) => setPane(v as DashboardPane)}
+              variant="pill"
+            >
+              <TabsList aria-label="Dashboard views">
+                <TabsTrigger value="notes">Notes</TabsTrigger>
+                <TabsTrigger value="actions">Actions</TabsTrigger>
+                <TabsTrigger value="people">People</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
 
-          <div className="flex items-center justify-end gap-1 sm:gap-1.5">
+          <div className="mac-toolbar-end" data-no-drag>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -474,7 +477,7 @@ export function MeetingDashboard({
             animate="animate"
             exit="exit"
             transition={transitions.enter}
-            className="flex min-h-0 flex-1 flex-col"
+            className="dashboard-pane"
           >
             <ActionsInbox meetings={meetings} onOpenMeeting={onViewMeeting} />
           </motion.div>
@@ -486,7 +489,7 @@ export function MeetingDashboard({
             animate="animate"
             exit="exit"
             transition={transitions.enter}
-            className="flex min-h-0 flex-1 flex-col"
+            className="dashboard-pane"
           >
             <PeopleMemory meetings={meetings} onOpenMeeting={onViewMeeting} />
           </motion.div>
@@ -498,8 +501,26 @@ export function MeetingDashboard({
             animate="animate"
             exit="exit"
             transition={transitions.enter}
-            className="flex min-h-0 flex-1 flex-col gap-5"
+            className="dashboard-pane"
           >
+            {meetings.length === 0 ? (
+              <div className="dashboard-empty">
+                <div className="inline-flex size-10 items-center justify-center rounded-xl bg-muted/80">
+                  <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={1.75} className="size-5 text-muted-foreground" />
+                </div>
+                <div className="max-w-xs">
+                  <p className="text-[15px] font-semibold tracking-tight">No Notes</p>
+                  <p className="mt-1 text-[13px] text-pretty text-muted-foreground">
+                    Record a meeting or write a note. Speech stays on this Mac.
+                  </p>
+                </div>
+                <Button size="sm" onClick={onNewMeeting}>
+                  <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
+                  New Note
+                </Button>
+              </div>
+            ) : (
+              <>
             <UpcomingEvents
               onStartFromEvent={(meeting) => {
                 onImportMeeting(meeting)
@@ -508,7 +529,7 @@ export function MeetingDashboard({
             {/* Search + filters — Linear-style: tags live in the toolbar, not a pill rail */}
             <div className="dashboard-filters">
               <div className="flex items-center gap-1.5">
-                <InputGroup className="h-9 min-w-0 flex-1 border-0 bg-muted/40 shadow-none ring-1 ring-border/50">
+                <InputGroup className="mac-search min-w-0 flex-1">
                   <InputGroupInput
                     ref={searchInputRef}
                     type="search"
@@ -618,7 +639,7 @@ export function MeetingDashboard({
                     <button
                       key={q}
                       type="button"
-                      className="inline-flex items-center gap-1 rounded-full bg-muted/60 px-2.5 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      className="inline-flex items-center gap-1 rounded-md bg-muted/60 px-2 py-0.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                       onClick={() => handleSelectSavedSearch(q)}
                     >
                       {q}
@@ -676,24 +697,7 @@ export function MeetingDashboard({
               )}
             </div>
 
-            {meetings.length === 0 ? (
-              <div className="dashboard-empty">
-                <div className="inline-flex size-12 items-center justify-center rounded-3xl bg-muted/70">
-                  <HugeiconsIcon icon={FolderOpenIcon} strokeWidth={1.75} className="size-6 text-muted-foreground" />
-                </div>
-                <div className="max-w-sm text-center">
-                  <p className="text-base font-medium">No notes yet</p>
-                  <p className="mt-1 text-sm text-pretty text-muted-foreground">
-                    Start a note, record mic or system audio, then Enhance for structured notes, tags, and actions.
-                    Speech stays on this Mac.
-                  </p>
-                </div>
-                <Button onClick={onNewMeeting}>
-                  <HugeiconsIcon icon={PlayListAddIcon} strokeWidth={2} data-icon="inline-start" />
-                  New note
-                </Button>
-              </div>
-            ) : filteredMeetings.length === 0 ? (
+            {filteredMeetings.length === 0 ? (
               <div className="dashboard-empty">
                 <p className="text-sm text-muted-foreground">
                   {folderFilter && !hasQuery
@@ -755,6 +759,7 @@ export function MeetingDashboard({
                             key={meeting.id}
                             variants={listItemVariants}
                             transition={transitions.item}
+                            whileTap={micro.tapSoft}
                             layout={false}
                           >
                             <div
@@ -762,7 +767,7 @@ export function MeetingDashboard({
                               tabIndex={0}
                               className={cn(
                                 "dashboard-note-row group",
-                                isSelected && "bg-primary/5 ring-1 ring-primary/25",
+                                isSelected && "bg-primary/12 dark:bg-primary/20",
                               )}
                               onClick={() => {
                                 if (batchMode) toggleSelect(meeting.id)
@@ -959,6 +964,8 @@ export function MeetingDashboard({
                 ))}
               </div>
             )}
+              </>
+            )}
           </motion.div>
         )}
         </AnimatePresence>
@@ -1012,6 +1019,7 @@ export function MeetingDashboard({
         open={showGlobalChat}
         onClose={() => setShowGlobalChat(false)}
         onOpenSettings={onSettings}
+        onOpenMeeting={onViewMeeting}
         folderId={chatFolderId}
       />
     </div>
