@@ -30,10 +30,9 @@ pub fn run() {
                     hasher.update(&input);
                     input = hasher.finalize().to_vec();
                 }
-                let mut key = Vec::with_capacity(64);
-                key.extend_from_slice(&input);
-                key.extend_from_slice(&input);
-                key
+                // iota_stronghold requires the derived key to be exactly the
+                // BoxProvider key length (32 bytes for XChaCha20Poly1305).
+                input
             })
             .build(),
         )
