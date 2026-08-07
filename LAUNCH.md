@@ -25,11 +25,60 @@
 yarn tauri:build
 ```
 
-Artifact typically under `src-tauri/target/release/bundle/dmg/`.
+Artifact typically under `src-tauri/target/release/bundle/dmg/` (and the `.app` under `bundle/macos/`).
 
-## Signing & notarization (macOS public install)
+## Free distribution (unsigned ZIP + install.sh)
 
-Unsigned builds show Gatekeeper warnings. For distribution outside your Mac:
+No Apple Developer fee. Best for friends, closed beta, and technical users.
+
+```bash
+yarn tauri:build
+yarn package:unsigned
+```
+
+Upload `dist-release/Myna-Notes-macos-arm64.zip` as a **GitHub Release** asset (keep that exact name; `scripts/install.sh` defaults to it).
+
+Users install with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh | bash
+```
+
+Overrides:
+
+```bash
+MYNA_VERSION=0.1.0 bash scripts/install.sh
+MYNA_RELEASE_URL=https://example.com/Myna-Notes-macos-arm64.zip bash scripts/install.sh
+MYNA_APP_DIR=~/Applications bash scripts/install.sh
+```
+
+What the script does:
+
+1. Downloads the ZIP from GitHub Releases  
+2. Installs `Myna Notes.app` to `/Applications` (or `MYNA_APP_DIR`)  
+3. Clears `com.apple.quarantine`  
+4. Ad-hoc codesigns the app tree (local signature only)
+
+**Limits:** not a Gatekeeper replacement. Non-technical users may still need right-click → Open. This is the free path; paid notarization is the clean public path.
+
+Fallback if still blocked:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Myna Notes.app"
+open "/Applications/Myna Notes.app"
+```
+
+Release checklist (unsigned):
+
+- [ ] `yarn tauri:build` succeeds on Apple Silicon  
+- [ ] `yarn package:unsigned` produces `dist-release/Myna-Notes-macos-arm64.zip`  
+- [ ] GitHub Release tag matches version (`v0.1.0`) and asset name is exact  
+- [ ] Fresh Mac / clean user: install.sh works end-to-end  
+- [ ] README install blurb points at current repo URL  
+
+## Signing & notarization (optional paid path)
+
+Only needed when you want double-click install for arbitrary users with no terminal:
 
 1. Apple Developer Program membership  
 2. Developer ID Application certificate in Keychain  
@@ -41,7 +90,7 @@ Document your exact team ID and entitlements (`src-tauri/Entitlements.plist`) in
 
 ## Closed beta
 
-- [ ] Signed + notarized DMG (or TestFlight-style internal only)  
+- [ ] Unsigned ZIP on GitHub Releases + `install.sh` verified, **or** signed + notarized DMG  
 - [ ] 5–10 real meetings of use  
 - [ ] Support email or form  
 - [ ] Short privacy blurb on landing page (copy from Settings → About)  
@@ -51,7 +100,8 @@ Document your exact team ID and entitlements (`src-tauri/Entitlements.plist`) in
 - [ ] Landing: 3 screenshots + 30s GIF (record → enhance → tags)  
 - [ ] Changelog for 0.1.0  
 - [ ] “Apple Silicon / macOS 14+” requirements clear  
-- [ ] Plan for updates (manual DMG is fine for 0.1; Tauri updater later)  
+- [ ] Install path documented (unsigned `install.sh` for free beta, or notarized DMG later)  
+- [ ] Plan for updates (manual ZIP/DMG is fine for 0.1; Tauri updater later)  
 
 ## Known non-blockers for 0.1
 

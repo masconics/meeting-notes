@@ -28,3 +28,6 @@ src-tauri/gen
 *.sw?
 
 fluid-sidecar/.build
+
+# Unsigned release packages (scripts/package-unsigned.sh)
+dist-release/

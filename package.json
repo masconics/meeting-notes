@@ -13,7 +13,8 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:build": "tauri build",
+    "package:unsigned": "bash scripts/package-unsigned.sh"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",

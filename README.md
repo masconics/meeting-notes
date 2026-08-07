@@ -45,7 +45,39 @@ Build release DMG:
 yarn tauri:build
 ```
 
-See **[LAUNCH.md](./LAUNCH.md)** for signing, notarization, and ship checklist.
+### Install (unsigned, free)
+
+No Apple Developer Program / notarization required. Users run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh | bash
+```
+
+Safer (inspect first):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh -o install.sh
+less install.sh
+bash install.sh
+```
+
+This downloads the latest GitHub Release asset `Myna-Notes-macos-arm64.zip`, installs to `/Applications`, and clears the download quarantine flag. It is a **user-assisted** install, not Gatekeeper approval.
+
+Publish a ZIP after building:
+
+```bash
+yarn tauri:build
+yarn package:unsigned
+# upload dist-release/Myna-Notes-macos-arm64.zip to the GitHub Release
+```
+
+If macOS still blocks the app: Finder → right-click **Myna Notes** → **Open** → **Open**, or:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Myna Notes.app"
+```
+
+See **[LAUNCH.md](./LAUNCH.md)** for release packaging and optional paid signing/notarization.
 
 ## Local MCP
 

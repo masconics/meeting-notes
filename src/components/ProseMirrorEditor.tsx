@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect, useState } from "react"
+import { useCallback, useRef, useEffect, useState, type MouseEvent as ReactMouseEvent } from "react"
 import { Editor, rootCtx, defaultValueCtx, editorViewCtx } from "@milkdown/kit/core"
 import type { CmdKey } from "@milkdown/kit/core"
 import {
@@ -33,6 +33,20 @@ import { ArrowDown01Icon, ArrowUp01Icon, Cancel01Icon, Link01Icon, Search01Icon 
 import { loadSnippets } from "@/lib/storage"
 import { decodeHljsEntities, highlightCode } from "@/lib/highlight"
 import { toast } from "@/components/ui/toaster"
+import {
+  ContextMenu,
+  ContextMenuCheckboxItem,
+  ContextMenuContent,
+  ContextMenuGroup,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import "@milkdown/kit/prose/view/style/prosemirror.css"
 
 // Show greyed placeholder text while the document is empty (a single empty
@@ -647,7 +661,7 @@ function MilkdownEditorInner({
   // below it should still focus the editor (cursor at the end) so the note
   // is writable anywhere in the pane.
   const focusEditor = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
+    (e: ReactMouseEvent<HTMLDivElement>) => {
       if (e.target !== e.currentTarget) return
       const editor = getEditor()
       editor?.action((ctx) => {
@@ -911,23 +925,71 @@ export function ProseMirrorEditor({
     }
   }, [markAiMenuDismissed])
 
+  // Snapshot of the current editor selection (for context-menu / floating-menu
+  // actions that must not depend on the floating popup still being open).
+  const getSelectionSnapshot = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return null
+    return editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const { from, to, empty } = view.state.selection
+      const text = empty ? "" : view.state.doc.textBetween(from, to, "\n").trim()
+      return { from, to, empty, text }
+    })
+  }, [])
+
   const runAiEdit = useCallback(async (action: AiStreamKind, customInstruction?: string) => {
-    const editor = editorRef.current; const menu = aiMenu
-    if (!editor || !menu || aiStreaming) return
+    const editor = editorRef.current
+    if (!editor || aiStreaming) return
     if (action === "custom" && !customInstruction?.trim()) return
+    const snap = aiMenu
+      ? { from: aiMenu.from, to: aiMenu.to, text: aiMenu.text }
+      : getSelectionSnapshot()
+    if (!snap || snap.from === snap.to || !snap.text) return
     aiUndoMarkdownRef.current = null
     toast.dismiss("ai-edit-undo")
     const fullCtx = editor.action(getMarkdown())
     abortRef.current?.abort(); const ctrl = new AbortController(); abortRef.current = ctrl
     const shown = action === "custom" ? customInstruction!.trim() : AI_INSTRUCTIONS[action]
-    setAiStreaming(action); setAiMenu({ ...menu, text: shown })
+    setAiStreaming(action)
+    // Keep a floating progress chip over the selection while the stream runs.
+    const placeMenu = () => {
+      const v = editor.action((c) => c.get(editorViewCtx))
+      if (!v) {
+        setAiMenu({ x: 16, y: 16, from: snap.from, to: snap.to, text: shown })
+        return
+      }
+      try {
+        const startCoords = v.coordsAtPos(Math.min(snap.from, v.state.doc.content.size))
+        setAiMenu({
+          x: Math.max(8, Math.min(startCoords.left, window.innerWidth - 348)),
+          y: Math.max(6, Math.min(startCoords.bottom + 8, window.innerHeight - 120)),
+          from: snap.from,
+          to: snap.to,
+          text: shown,
+        })
+      } catch {
+        setAiMenu({ x: 16, y: 16, from: snap.from, to: snap.to, text: shown })
+      }
+    }
+    placeMenu()
     if (action === "custom") setAiCustomInput("")
     try {
+      // Ensure the PM selection still matches the range we are rewriting.
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        const size = view.state.doc.content.size
+        const from = Math.min(snap.from, size)
+        const to = Math.min(snap.to, size)
+        if (from < to) {
+          view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)))
+        }
+      })
       editor.action(callCommand(startStreamingCmd.key, { insertAt: "selection" }))
       const { streamRewriteSelection, streamCustomEdit } = await import("@/lib/ai-service")
       const gen = action === "custom"
-        ? streamCustomEdit(menu.text, customInstruction!.trim(), fullCtx, ctrl.signal)
-        : streamRewriteSelection(menu.text, action, fullCtx, ctrl.signal)
+        ? streamCustomEdit(snap.text, customInstruction!.trim(), fullCtx, ctrl.signal)
+        : streamRewriteSelection(snap.text, action, fullCtx, ctrl.signal)
       for await (const chunk of gen) {
         editor.action(callCommand(pushChunkCmd.key, chunk))
       }
@@ -958,7 +1020,7 @@ export function ProseMirrorEditor({
         // away) — nothing left to abort in the document.
       }
     } finally { abortRef.current = null; setAiStreaming(null); setAiMenu(null) }
-  }, [aiMenu, aiStreaming])
+  }, [aiMenu, aiStreaming, getSelectionSnapshot])
 
   // Apply a formatting command to the current selection, then return focus to
   // the editor so the user can keep typing. Buttons use onMouseDown/preventDefault
@@ -1048,35 +1110,60 @@ export function ProseMirrorEditor({
   useEffect(() => { if (!aiMenu) { setTurnIntoOpen(false); setLinkDraft(null) } }, [aiMenu])
 
   const openLinkDraft = useCallback(() => {
-    const menu = aiMenu
-    if (!menu) return
+    const snap = aiMenu
+      ? { from: aiMenu.from, to: aiMenu.to }
+      : getSelectionSnapshot()
+    if (!snap || snap.from === snap.to) return
     let existing = ""
     editorRef.current?.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const linkType = view.state.schema.marks.link
       if (!linkType) return
-      const $from = view.state.doc.resolve(Math.min(menu.from, view.state.doc.content.size))
-      const $to = view.state.doc.resolve(Math.min(menu.to, view.state.doc.content.size))
+      const $from = view.state.doc.resolve(Math.min(snap.from, view.state.doc.content.size))
+      const $to = view.state.doc.resolve(Math.min(snap.to, view.state.doc.content.size))
       const marks = $from.marksAcross($to) ?? []
       const found = marks.find((m) => m.type === linkType)
       existing = typeof found?.attrs.href === "string" ? found.attrs.href : ""
     })
+    // Ensure the floating menu is present so the URL field has somewhere to
+    // live when Link is chosen from the right-click context menu.
+    if (!aiMenu) {
+      editorRef.current?.action((ctx) => {
+        const view = ctx.get(editorViewCtx)
+        try {
+          const start = view.coordsAtPos(Math.min(snap.from, view.state.doc.content.size))
+          const text = view.state.doc.textBetween(snap.from, snap.to, "\n").trim()
+          setAiMenu({
+            x: Math.max(8, Math.min(start.left, window.innerWidth - 348)),
+            y: Math.max(6, Math.min(start.bottom + 8, window.innerHeight - 120)),
+            from: snap.from,
+            to: snap.to,
+            text,
+          })
+        } catch {
+          // selection coords unavailable — still open the draft; field can ride
+          // a fallback placement on next selection settle.
+        }
+      })
+    }
     setLinkDraft(existing)
-  }, [aiMenu])
+  }, [aiMenu, getSelectionSnapshot])
 
   // Enter applies; an empty field removes the link. Scheme-less input gets
   // https:// so "example.com" works as typed.
   const applyLinkDraft = useCallback((raw: string) => {
     const editor = editorRef.current
-    const menu = aiMenu
+    const snap = aiMenu
+      ? { from: aiMenu.from, to: aiMenu.to }
+      : getSelectionSnapshot()
     setLinkDraft(null)
-    if (!editor || !menu) return
+    if (!editor || !snap || snap.from === snap.to) return
     editor.action((ctx) => {
       const view = ctx.get(editorViewCtx)
       const linkType = view.state.schema.marks.link
       if (!linkType) return
-      const from = Math.min(menu.from, view.state.doc.content.size)
-      const to = Math.min(menu.to, view.state.doc.content.size)
+      const from = Math.min(snap.from, view.state.doc.content.size)
+      const to = Math.min(snap.to, view.state.doc.content.size)
       if (from >= to) return
       const value = raw.trim()
       const tr = view.state.tr
@@ -1089,7 +1176,7 @@ export function ProseMirrorEditor({
       view.dispatch(tr)
       view.focus()
     })
-  }, [aiMenu])
+  }, [aiMenu, getSelectionSnapshot])
 
   // --- In-note find (⌘F) ------------------------------------------------
   const [findOpen, setFindOpen] = useState(false)
@@ -1215,6 +1302,51 @@ export function ProseMirrorEditor({
   // Flip the dropdown upward when the menu sits too low for ~8 rows below it.
   const turnIntoDropUp = aiMenu !== null && aiMenu.y + 380 > window.innerHeight
 
+  const [contextHasSelection, setContextHasSelection] = useState(false)
+  const currentIsText = !TURN_INTO_ITEMS.some((o) => o.active && activeKeys.includes(o.active))
+
+  const prepareContextMenuTarget = useCallback((e: ReactMouseEvent) => {
+    // Close nested floating UI so the shadcn context menu is the only surface.
+    // Do not mark the selection as dismissed — the bubble menu can return after.
+    if (aiMenuTimerRef.current) {
+      clearTimeout(aiMenuTimerRef.current)
+      aiMenuTimerRef.current = null
+    }
+    setSlash(null)
+    setAiMenu(null)
+    setTurnIntoOpen(false)
+    setLinkDraft(null)
+
+    const editor = editorRef.current
+    if (!editor) {
+      setContextHasSelection(false)
+      return
+    }
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx)
+      const posInfo = view.posAtCoords({ left: e.clientX, top: e.clientY })
+      if (!posInfo) {
+        const { from, to } = view.state.selection
+        const text = from === to ? "" : view.state.doc.textBetween(from, to, "\n").trim()
+        setContextHasSelection(from !== to && text.length > 0)
+        return
+      }
+      const { from, to, empty } = view.state.selection
+      // Keep an existing non-empty selection when the click lands inside it;
+      // otherwise move the caret so format/block commands have a target.
+      if (!empty && posInfo.pos >= from && posInfo.pos <= to) {
+        const text = view.state.doc.textBetween(from, to, "\n").trim()
+        setContextHasSelection(text.length > 0)
+        view.focus()
+        return
+      }
+      const sel = TextSelection.near(view.state.doc.resolve(posInfo.pos))
+      view.dispatch(view.state.tr.setSelection(sel))
+      view.focus()
+      setContextHasSelection(false)
+    })
+  }, [])
+
   return (
     <div className={`flex min-h-0 flex-col ${className}`}>
       {findOpen && (
@@ -1264,9 +1396,83 @@ export function ProseMirrorEditor({
           </button>
         </div>
       )}
-      <MilkdownProvider>
-        <MilkdownEditorInner value={value} onChange={onChange} className="pm-editor min-h-0 flex-1" editorLabel={editorLabel} placeholder={placeholder} onActive={handleActive} onEditorReady={handleEditorReady} slashApiRef={slashApiRef} />
-      </MilkdownProvider>
+      <ContextMenu>
+        <ContextMenuTrigger asChild className="select-text">
+          <div
+            className="flex min-h-0 flex-1 flex-col"
+            onContextMenu={prepareContextMenuTarget}
+          >
+            <MilkdownProvider>
+              <MilkdownEditorInner value={value} onChange={onChange} className="pm-editor min-h-0 flex-1" editorLabel={editorLabel} placeholder={placeholder} onActive={handleActive} onEditorReady={handleEditorReady} slashApiRef={slashApiRef} />
+            </MilkdownProvider>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent className="w-56" onCloseAutoFocus={(e) => e.preventDefault()}>
+          <ContextMenuGroup>
+            <ContextMenuLabel>Format</ContextMenuLabel>
+            <ContextMenuCheckboxItem
+              checked={activeKeys.includes("strong")}
+              onSelect={() => runFormatItem(INLINE_FORMAT[0])}
+            >
+              Bold
+              <ContextMenuShortcut>⌘B</ContextMenuShortcut>
+            </ContextMenuCheckboxItem>
+            <ContextMenuCheckboxItem
+              checked={activeKeys.includes("emphasis")}
+              onSelect={() => runFormatItem(INLINE_FORMAT[1])}
+            >
+              Italic
+              <ContextMenuShortcut>⌘I</ContextMenuShortcut>
+            </ContextMenuCheckboxItem>
+            <ContextMenuCheckboxItem
+              checked={activeKeys.includes("inlineCode")}
+              onSelect={() => runFormatItem(INLINE_FORMAT[2])}
+            >
+              Inline code
+            </ContextMenuCheckboxItem>
+            <ContextMenuItem onSelect={openLinkDraft} disabled={!contextHasSelection}>
+              Link…
+            </ContextMenuItem>
+          </ContextMenuGroup>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>Turn into</ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-44">
+              {TURN_INTO_ITEMS.map((t) => {
+                const isActive = t.id === "text"
+                  ? currentIsText
+                  : (t.active ? activeKeys.includes(t.active) : false)
+                return (
+                  <ContextMenuCheckboxItem
+                    key={t.id}
+                    checked={isActive}
+                    onSelect={() => applyTurnInto(t)}
+                  >
+                    {t.label}
+                  </ContextMenuCheckboxItem>
+                )
+              })}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          {aiPopup && (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuGroup>
+                <ContextMenuLabel>AI</ContextMenuLabel>
+                {AI_ACTIONS.map((a) => (
+                  <ContextMenuItem
+                    key={a.id}
+                    disabled={aiStreaming !== null || !contextHasSelection}
+                    onSelect={() => { void runAiEdit(a.id) }}
+                  >
+                    {aiStreaming === a.id ? "Writing…" : a.label}
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuGroup>
+            </>
+          )}
+        </ContextMenuContent>
+      </ContextMenu>
       {slash && (() => {
         const q = slash.query.toLowerCase()
         const items = SLASH_ITEMS.filter((i) => !q || i.keywords.includes(q) || i.label.toLowerCase().includes(q))
