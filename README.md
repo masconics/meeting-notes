@@ -50,13 +50,13 @@ yarn tauri:build
 No Apple Developer Program / notarization required. Users run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/crstnmac/myna-notes/main/scripts/install.sh | bash
 ```
 
 Safer (inspect first):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/crstnmac/myna-notes/main/scripts/install.sh -o install.sh
 less install.sh
 bash install.sh
 ```

@@ -41,7 +41,7 @@ Upload `dist-release/Myna-Notes-macos-arm64.zip` as a **GitHub Release** asset (
 Users install with:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/crstnmac/myna-notes/main/scripts/install.sh | bash
 ```
 
 Overrides:

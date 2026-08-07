@@ -6,10 +6,10 @@
 # install without an Apple Developer Program membership.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/crstnmac/myna-notes/main/scripts/install.sh | bash
 #
 # Safer (inspect first):
-#   curl -fsSL https://raw.githubusercontent.com/masconics/myna-notes/main/scripts/install.sh -o install.sh
+#   curl -fsSL https://raw.githubusercontent.com/crstnmac/myna-notes/main/scripts/install.sh -o install.sh
 #   less install.sh
 #   bash install.sh
 #
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 APP_NAME="Myna Notes"
-REPO="${MYNA_REPO:-masconics/myna-notes}"
+REPO="${MYNA_REPO:-crstnmac/myna-notes}"
 ASSET="${MYNA_ASSET:-Myna-Notes-macos-arm64.zip}"
 INSTALL_DIR="${MYNA_APP_DIR:-/Applications}"
 
