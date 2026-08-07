@@ -7,7 +7,6 @@ import {
   InputGroupButton,
 } from "@/components/ui/input-group"
 import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,7 +33,6 @@ import {
   CheckListIcon,
   CheckmarkCircle02Icon,
   DeleteIcon,
-  FolderOpenIcon,
   MoreHorizontalIcon,
   PencilEdit01Icon,
   RefreshIcon,
